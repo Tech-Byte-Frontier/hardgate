@@ -222,6 +222,15 @@ fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig) {
     if !user.invariants.rules.is_empty() {
         base.invariants.rules = user.invariants.rules;
     }
+    if user.clones.excludes.is_some() {
+        base.clones = user.clones;
+    }
+    if user.coverage.report.is_some() {
+        base.coverage = user.coverage;
+    }
+    if user.mutation.reports.is_some() {
+        base.mutation = user.mutation;
+    }
 }
 
 fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets) {
