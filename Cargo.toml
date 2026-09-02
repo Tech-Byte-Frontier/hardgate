@@ -1,6 +1,6 @@
 [package]
 name = "hardgate"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
 authors = ["Tauan <tauan@loreframe.dev>"]
@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/Tech-Byte-Frontier/hardgate"
 homepage = "https://github.com/Tech-Byte-Frontier/hardgate"
+documentation = "https://docs.rs/hardgate"
 categories = ["development-tools", "command-line-utilities"]
 keywords = ["quality-gate", "ai-agents", "anti-gaming", "code-metrics", "linter"]
 
