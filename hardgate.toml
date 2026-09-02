@@ -1,0 +1,37 @@
+# Hardgate default configuration
+[gate]
+name = "example-project"
+preset = "strict-agent"
+strict = true
+
+[budgets.files]
+max_bytes = 32768
+
+[budgets.files.max_lines]
+rs = 499
+ts = 400
+tsx = 400
+js = 400
+default = 350
+
+[budgets.functions]
+max_cyclomatic = 10
+max_cognitive = 15
+max_halstead_difficulty = 80.0
+max_parameters = 4
+max_lines = 80
+max_nesting_depth = 4
+
+[anti_gaming]
+disallow_suppressions = true
+
+[clones]
+min_lines = 5
+min_tokens = 50
+
+[coverage]
+min_line_percent = 95.0
+max_crap_score = 25.0
+
+[mutation]
+min_score = 85.0

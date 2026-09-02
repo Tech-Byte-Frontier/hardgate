@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+*.swp
+*~
+.DS_Store
+
+# Agent & AI editor files
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+[Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
+.claude/
+.cursor/
+.cursorrules
+.antigravity/
+.gemini/
+.idea/
+.vscode/
