@@ -12,18 +12,19 @@ pub struct BudgetViolation {
     pub message: String,
 }
 
-pub fn check_file_budgets(
-    path: &Path,
-    budgets: &FileBudgets,
-    root: &Path,
-) -> Vec<BudgetViolation> {
+pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Vec<BudgetViolation> {
     let mut violations = Vec::new();
 
     let rel_path = path.strip_prefix(root).unwrap_or(path);
     let rel_str = rel_path.to_string_lossy();
 
     // Check if path is in exclusions
-    if budgets.exclusions.paths.iter().any(|p| p == rel_str.as_ref()) {
+    if budgets
+        .exclusions
+        .paths
+        .iter()
+        .any(|p| p == rel_str.as_ref())
+    {
         return violations;
     }
 

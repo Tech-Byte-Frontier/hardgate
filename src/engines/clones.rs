@@ -69,11 +69,32 @@ impl CloneDetector {
         }
     }
 
-    pub fn detect_clones(
-        &self,
-        files: &[(PathBuf, String)],
+    pub fn excluded_files<'a>(
+        &'a self,
+        files: &'a [(PathBuf, String)],
         root: &Path,
-    ) -> Vec<CloneViolation> {
+    ) -> Vec<&'a PathBuf> {
+        let Some(ref exclude) = self.exclude_glob else {
+            return Vec::new();
+        };
+        files
+            .iter()
+            .filter_map(|(abs_path, _)| {
+                let rel_path = abs_path.strip_prefix(root).unwrap_or(abs_path);
+                if exclude.is_match(rel_path) {
+                    Some(abs_path)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn count_excluded_files(&self, files: &[(PathBuf, String)], root: &Path) -> usize {
+        self.excluded_files(files, root).len()
+    }
+
+    pub fn detect_clones(&self, files: &[(PathBuf, String)], root: &Path) -> Vec<CloneViolation> {
         let mut window_map: HashMap<u64, Vec<TokenLocation>> = HashMap::new();
         let mut raw_matches: Vec<RawCloneMatch> = Vec::new();
 
@@ -95,12 +116,7 @@ impl CloneDetector {
         coalesce_matches(raw_matches, self.min_tokens, self.min_lines)
     }
 
-    fn index_file_windows(
-        &self,
-        content: &str,
-        rel_path: &Path,
-        state: &mut CloneIndexState,
-    ) {
+    fn index_file_windows(&self, content: &str, rel_path: &Path, state: &mut CloneIndexState) {
         let tokens = tokenize(content);
         if tokens.len() < self.min_tokens {
             return;
@@ -193,7 +209,8 @@ fn coalesce_matches(
     }
 
     matches.sort_by(|a, b| {
-        a.file_a.cmp(&b.file_a)
+        a.file_a
+            .cmp(&b.file_a)
             .then(a.file_b.cmp(&b.file_b))
             .then(a.start_a.cmp(&b.start_a))
             .then(a.start_b.cmp(&b.start_b))
@@ -203,8 +220,11 @@ fn coalesce_matches(
     for m in matches {
         let mut merged = false;
         if let Some(last) = coalesced.last_mut() {
-            if last.file_a == m.file_a && last.file_b == m.file_b
-                && m.start_a <= last.end_a + 2 && m.start_b <= last.end_b + 2 {
+            if last.file_a == m.file_a
+                && last.file_b == m.file_b
+                && m.start_a <= last.end_a + 2
+                && m.start_b <= last.end_b + 2
+            {
                 last.end_a = last.end_a.max(m.end_a);
                 last.end_b = last.end_b.max(m.end_b);
                 merged = true;
@@ -215,10 +235,17 @@ fn coalesce_matches(
         }
     }
 
-    coalesced.into_iter().filter_map(|c| build_violation(c, min_tokens, min_lines)).collect()
+    coalesced
+        .into_iter()
+        .filter_map(|c| build_violation(c, min_tokens, min_lines))
+        .collect()
 }
 
-fn build_violation(c: RawCloneMatch, min_tokens: usize, min_lines: usize) -> Option<CloneViolation> {
+fn build_violation(
+    c: RawCloneMatch,
+    min_tokens: usize,
+    min_lines: usize,
+) -> Option<CloneViolation> {
     let span_a = c.end_a.saturating_sub(c.start_a) + 1;
     let span_b = c.end_b.saturating_sub(c.start_b) + 1;
     let span = span_a.min(span_b);
@@ -235,9 +262,20 @@ fn build_violation(c: RawCloneMatch, min_tokens: usize, min_lines: usize) -> Opt
         lines: span,
         message: format!(
             "Duplicate code clone ({} lines, ~{} tokens) between `{}:{}-{}` and `{}:{}-{}`",
-            span, min_tokens, c.file_a.display(), c.start_a, c.end_a, c.file_b.display(), c.start_b, c.end_b
+            span,
+            min_tokens,
+            c.file_a.display(),
+            c.start_a,
+            c.end_a,
+            c.file_b.display(),
+            c.start_b,
+            c.end_b
         ),
-        recommendation: format!("Extract duplicated logic in `{}` and `{}` into a shared helper.", c.file_a.display(), c.file_b.display()),
+        recommendation: format!(
+            "Extract duplicated logic in `{}` and `{}` into a shared helper.",
+            c.file_a.display(),
+            c.file_b.display()
+        ),
     })
 }
 
@@ -286,16 +324,28 @@ fn dispatch_char_lex(
 ) {
     if c.is_ascii_alphabetic() || c == '_' {
         let word = lex_word(chars);
-        tokens.push(Token { kind: word, line: line_num });
+        tokens.push(Token {
+            kind: word,
+            line: line_num,
+        });
     } else if c.is_ascii_digit() {
         lex_number(chars);
-        tokens.push(Token { kind: "_LIT_".to_string(), line: line_num });
+        tokens.push(Token {
+            kind: "_LIT_".to_string(),
+            line: line_num,
+        });
     } else if c == '"' || c == '\'' || c == '`' {
         lex_string(chars, c);
-        tokens.push(Token { kind: "_STR_".to_string(), line: line_num });
+        tokens.push(Token {
+            kind: "_STR_".to_string(),
+            line: line_num,
+        });
     } else {
         chars.next();
-        tokens.push(Token { kind: c.to_string(), line: line_num });
+        tokens.push(Token {
+            kind: c.to_string(),
+            line: line_num,
+        });
     }
 }
 

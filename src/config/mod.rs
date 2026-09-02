@@ -23,6 +23,10 @@ pub struct HardgateConfig {
     pub coverage: CoverageConfig,
     #[serde(default)]
     pub mutation: MutationConfig,
+    #[serde(default)]
+    pub orchestration: OrchestrationConfig,
+    #[serde(default)]
+    pub analysis: AnalysisConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +181,33 @@ pub struct MutationConfig {
     #[serde(default = "default_true")]
     pub reject_timeouts: bool,
     pub reports: Option<Vec<String>>,
+    pub test_cmd: Option<String>,
+    pub timeout_secs: Option<u64>,
+    pub max_mutants: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OrchestrationConfig {
+    pub format_check: Option<String>,
+    pub format: Option<String>,
+    pub lint: Option<String>,
+    pub test_cmd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AnalysisConfig {
+    #[serde(default)]
+    pub dead_code: DeadCodeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeadCodeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub entry_points: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 impl HardgateConfig {
@@ -207,29 +238,54 @@ impl HardgateConfig {
     }
 
     pub fn generate_toml_template(preset: Preset) -> String {
-        let sample = preset.to_default_config();
-        toml::to_string_pretty(&sample).unwrap_or_else(|_| "".to_string())
+        preset.to_clean_toml()
     }
 }
 
 fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig) {
+    merge_static_overrides(base, &user);
+    merge_dynamic_overrides(base, &user);
     base.gate = user.gate;
     merge_file_budgets(&mut base.budgets.files, user.budgets.files);
     merge_func_budgets(&mut base.budgets.functions, user.budgets.functions);
+}
+
+fn merge_static_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
     if !user.anti_gaming.custom_forbidden_tokens.is_empty() {
-        base.anti_gaming.custom_forbidden_tokens = user.anti_gaming.custom_forbidden_tokens;
+        base.anti_gaming.custom_forbidden_tokens = user.anti_gaming.custom_forbidden_tokens.clone();
     }
     if !user.invariants.rules.is_empty() {
-        base.invariants.rules = user.invariants.rules;
+        base.invariants.rules = user.invariants.rules.clone();
     }
     if user.clones.excludes.is_some() {
-        base.clones = user.clones;
+        base.clones = user.clones.clone();
     }
-    if user.coverage.report.is_some() {
-        base.coverage = user.coverage;
+}
+
+fn merge_dynamic_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
+    merge_verification_overrides(base, user);
+    merge_tooling_overrides(base, user);
+}
+
+fn merge_verification_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
+    if user.coverage.report.is_some() || user.coverage.enabled {
+        base.coverage = user.coverage.clone();
     }
-    if user.mutation.reports.is_some() {
-        base.mutation = user.mutation;
+    if user.mutation.reports.is_some() || user.mutation.test_cmd.is_some() || user.mutation.enabled
+    {
+        base.mutation = user.mutation.clone();
+    }
+}
+
+fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
+    if user.orchestration.format_check.is_some()
+        || user.orchestration.format.is_some()
+        || user.orchestration.lint.is_some()
+    {
+        base.orchestration = user.orchestration.clone();
+    }
+    if user.analysis.dead_code.enabled || !user.analysis.dead_code.entry_points.is_empty() {
+        base.analysis = user.analysis.clone();
     }
 }
 
@@ -265,4 +321,3 @@ fn merge_func_budgets(base: &mut FunctionBudgets, user: FunctionBudgets) {
         base.max_nesting_depth = user.max_nesting_depth;
     }
 }
-

@@ -30,11 +30,47 @@ enum Commands {
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
+        /// Run full orchestration (format check + linter) alongside static gates
+        #[arg(short, long)]
+        all: bool,
+        /// Run dead code and unused export analysis
+        #[arg(long)]
+        dead_code: bool,
+        /// Path to coverage report to verify against AST budgets
+        #[arg(long)]
+        coverage_report: Option<String>,
     },
     /// Immediately inspect AST metrics, suppressions, and budgets for a single file
     Scan {
         /// File path to scan
         file: PathBuf,
+        /// Format output (agent | json)
+        #[arg(long)]
+        format: Option<String>,
+    },
+    /// Format code using orchestrated project formatter (e.g. oxfmt)
+    Fmt {
+        /// Check only without writing changes to disk
+        #[arg(long)]
+        check: bool,
+    },
+    /// Run native AST mutation testing against test runner
+    Mutate {
+        /// Mutate only git-modified files
+        #[arg(short, long)]
+        diff: bool,
+        /// Scoped file or directory path to mutate
+        #[arg(short, long)]
+        scoped: Option<PathBuf>,
+        /// Custom test command (e.g. "cargo test {stem}" or "pnpm test {file}")
+        #[arg(long)]
+        test_cmd: Option<String>,
+        /// Timeout in seconds per mutant
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Maximum number of mutants to evaluate
+        #[arg(long)]
+        max_mutants: Option<usize>,
         /// Format output (agent | json)
         #[arg(long)]
         format: Option<String>,
@@ -63,8 +99,36 @@ fn main() -> anyhow::Result<()> {
 fn execute_command(cmd: Commands) -> anyhow::Result<()> {
     match cmd {
         Commands::Init { preset } => commands::cmd_init(&preset),
-        Commands::Check { format, diff } => commands::cmd_check(format.as_deref(), diff),
+        Commands::Check {
+            format,
+            diff,
+            all,
+            dead_code,
+            coverage_report,
+        } => commands::cmd_check(commands::CheckOptions {
+            format,
+            diff,
+            all,
+            dead_code,
+            coverage_report,
+        }),
         Commands::Scan { file, format } => commands::cmd_scan(&file, format.as_deref()),
+        Commands::Fmt { check } => commands::cmd_fmt(check),
+        Commands::Mutate {
+            diff,
+            scoped,
+            test_cmd,
+            timeout,
+            max_mutants,
+            format,
+        } => commands::cmd_mutate(commands::MutateOptions {
+            diff,
+            scoped,
+            test_cmd,
+            timeout_secs: timeout,
+            max_mutants,
+            format,
+        }),
         Commands::Verify {
             coverage_report,
             mutation_report,

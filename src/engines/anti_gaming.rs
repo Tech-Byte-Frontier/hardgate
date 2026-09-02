@@ -99,7 +99,10 @@ fn check_patterns(
                 let msg = if is_custom {
                     format!("Anti-gaming: forbidden token '{}'", mat.as_str())
                 } else {
-                    format!("Anti-gaming: suppression pragma '{}' prohibited", mat.as_str())
+                    format!(
+                        "Anti-gaming: suppression pragma '{}' prohibited",
+                        mat.as_str()
+                    )
                 };
                 violations.push(SuppressionViolation {
                     file: ctx.file.to_path_buf(),
@@ -122,7 +125,8 @@ fn is_valid_suppression_context(line: &str, match_start: usize, token: &str) -> 
         return check_rust_attr_prefix(prefix);
     }
 
-    let in_string = prefix.ends_with("r\"") || (prefix.contains('"') && !prefix.contains("//") && !prefix.contains('#'));
+    let in_string = prefix.ends_with("r\"")
+        || (prefix.contains('"') && !prefix.contains("//") && !prefix.contains('#'));
     if in_string {
         return false;
     }

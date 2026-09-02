@@ -37,7 +37,9 @@ impl SupportedLanguage {
     pub fn is_function_node(&self, kind: &str) -> bool {
         match self {
             SupportedLanguage::Rust => kind == "function_item",
-            SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript => {
+            SupportedLanguage::TypeScript
+            | SupportedLanguage::Tsx
+            | SupportedLanguage::JavaScript => {
                 matches!(
                     kind,
                     "function_declaration"
@@ -49,5 +51,18 @@ impl SupportedLanguage {
             SupportedLanguage::Python => kind == "function_definition",
             SupportedLanguage::Go => matches!(kind, "function_declaration" | "method_declaration"),
         }
+    }
+
+    pub fn parse_tree(&self, content: &str) -> Option<tree_sitter::Tree> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.tree_sitter_language()).ok()?;
+        parser.parse(content, None)
+    }
+
+    pub fn parse_file(path: &std::path::Path, content: &str) -> Option<(Self, tree_sitter::Tree)> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let lang = Self::from_extension(ext)?;
+        let tree = lang.parse_tree(content)?;
+        Some((lang, tree))
     }
 }

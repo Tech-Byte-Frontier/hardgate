@@ -17,16 +17,51 @@ Runs the fast, deterministic static gate. Executes in $< 100\text{ms}$ over thou
 * Anti-gaming zero-suppression scan
 * Architectural invariant boundary checks
 * Token-stream clone detection
+* Technical debt advisory notices (surfaces files excluded from clone detection or file budgets)
 
 ```sh
 # Standard human terminal output
 hardgate check
 
-# Check only staged or modified git files
+# Check only staged or modified git files (~8ms)
 hardgate check --diff
+
+# Run full orchestration (format check + linter) alongside static gates
+hardgate check --all
+
+# Run dead code and unused export analysis
+hardgate check --dead-code
+
+# Verify test coverage and CRAP scores directly
+hardgate check --coverage-report coverage/lcov.info
 
 # Output formatted specifically for an LLM agent context window
 hardgate check --format agent
+```
+
+### `hardgate fmt`
+Formats code using the project's configured formatter in `[orchestration]` (e.g. `oxfmt`, `cargo fmt`, `biome`). Automatically resolves binaries in local `./node_modules/.bin` and global `PATH`.
+
+```sh
+# Format all code
+hardgate fmt
+
+# Check formatting without writing changes to disk
+hardgate fmt --check
+```
+
+### `hardgate mutate`
+Runs native Tree-Sitter AST mutation testing directly against your test suite. Mutates binary operators and boolean literals with targeted execution, per-mutant timeouts, and automatic RAII rollbacks.
+
+```sh
+# Mutate only git-modified files
+hardgate mutate --diff
+
+# Scoped mutation on a specific file or directory
+hardgate mutate --scoped src/services/auth.ts --timeout 5 --max-mutants 20
+
+# Output structured diagnostics for AI agent context
+hardgate mutate --diff --format agent
 ```
 
 ### `hardgate verify`

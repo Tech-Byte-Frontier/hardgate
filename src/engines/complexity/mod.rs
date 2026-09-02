@@ -5,7 +5,8 @@ use crate::config::FunctionBudgets;
 pub use languages::SupportedLanguage;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
+pub use walker::ComplexityContribution;
 use walker::{walk_node, AnalysisState, WalkerContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub struct FunctionMetrics {
     pub halstead_difficulty: f64,
     pub max_nesting_depth: usize,
     pub statements: usize,
+    pub cognitive_breakdown: Vec<ComplexityContribution>,
+    pub cyclomatic_breakdown: Vec<ComplexityContribution>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,13 +34,12 @@ pub struct ComplexityViolation {
     pub metric: String,
     pub actual: f64,
     pub limit: f64,
+    pub breakdown: Vec<ComplexityContribution>,
     pub message: String,
     pub recommendation: String,
 }
 
-pub struct ComplexityAnalyzer {
-    parser: Parser,
-}
+pub struct ComplexityAnalyzer;
 
 struct ParseContext<'a> {
     source: &'a [u8],
@@ -53,9 +55,7 @@ impl Default for ComplexityAnalyzer {
 
 impl ComplexityAnalyzer {
     pub fn new() -> Self {
-        Self {
-            parser: Parser::new(),
-        }
+        Self
     }
 
     pub fn analyze_file(
@@ -64,16 +64,7 @@ impl ComplexityAnalyzer {
         content: &str,
         root: &Path,
     ) -> Vec<FunctionMetrics> {
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let Some(lang) = SupportedLanguage::from_extension(ext) else {
-            return Vec::new();
-        };
-
-        if self.parser.set_language(&lang.tree_sitter_language()).is_err() {
-            return Vec::new();
-        }
-
-        let Some(tree) = self.parser.parse(content, None) else {
+        let Some((lang, tree)) = SupportedLanguage::parse_file(path, content) else {
             return Vec::new();
         };
 
@@ -102,6 +93,14 @@ impl ComplexityAnalyzer {
     }
 }
 
+struct ViolationSpec<'a> {
+    metric: &'a str,
+    actual: f64,
+    limit: f64,
+    breakdown: &'a [ComplexityContribution],
+    recommendation: String,
+}
+
 fn check_control_flow_limits(
     m: &FunctionMetrics,
     budgets: &FunctionBudgets,
@@ -109,32 +108,54 @@ fn check_control_flow_limits(
 ) {
     if let Some(limit) = budgets.max_cyclomatic {
         if m.cyclomatic > limit {
-            violations.push(ComplexityViolation {
-                file: m.file.clone(),
-                function_name: m.name.clone(),
-                line_number: m.start_line,
-                metric: "Cyclomatic Complexity".to_string(),
-                actual: m.cyclomatic as f64,
-                limit: limit as f64,
-                message: format!("Cyclomatic complexity is {} (budget: {})", m.cyclomatic, limit),
-                recommendation: format!("Refactor `{}`: extract decision branches into helper functions.", m.name),
-            });
+            violations.push(create_complexity_violation(
+                m,
+                ViolationSpec {
+                    metric: "Cyclomatic Complexity",
+                    actual: m.cyclomatic as f64,
+                    limit: limit as f64,
+                    breakdown: &m.cyclomatic_breakdown,
+                    recommendation: format!(
+                        "Refactor `{}`: extract decision branches into helper functions.",
+                        m.name
+                    ),
+                },
+            ));
         }
     }
 
     if let Some(limit) = budgets.max_cognitive {
         if m.cognitive > limit {
-            violations.push(ComplexityViolation {
-                file: m.file.clone(),
-                function_name: m.name.clone(),
-                line_number: m.start_line,
-                metric: "Cognitive Complexity".to_string(),
-                actual: m.cognitive as f64,
-                limit: limit as f64,
-                message: format!("Cognitive complexity is {} (budget: {})", m.cognitive, limit),
-                recommendation: format!("Flatten nested control structures in `{}`.", m.name),
-            });
+            violations.push(create_complexity_violation(
+                m,
+                ViolationSpec {
+                    metric: "Cognitive Complexity",
+                    actual: m.cognitive as f64,
+                    limit: limit as f64,
+                    breakdown: &m.cognitive_breakdown,
+                    recommendation: format!("Flatten nested control structures in `{}`.", m.name),
+                },
+            ));
         }
+    }
+}
+
+fn create_complexity_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViolation {
+    let mut top = spec.breakdown.to_vec();
+    top.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.line.cmp(&b.line)));
+    ComplexityViolation {
+        file: m.file.clone(),
+        function_name: m.name.clone(),
+        line_number: m.start_line,
+        metric: spec.metric.to_string(),
+        actual: spec.actual,
+        limit: spec.limit,
+        breakdown: top.into_iter().take(5).collect(),
+        message: format!(
+            "{} is {:.0} (budget: {:.0})",
+            spec.metric, spec.actual, spec.limit
+        ),
+        recommendation: spec.recommendation,
     }
 }
 
@@ -152,8 +173,15 @@ fn check_size_and_param_limits(
                 metric: "Parameter Count".to_string(),
                 actual: m.parameters as f64,
                 limit: limit as f64,
-                message: format!("Function has {} parameters (budget: {})", m.parameters, limit),
-                recommendation: format!("Introduce a config struct or parameter object for `{}`.", m.name),
+                breakdown: Vec::new(),
+                message: format!(
+                    "Function has {} parameters (budget: {})",
+                    m.parameters, limit
+                ),
+                recommendation: format!(
+                    "Introduce a config struct or parameter object for `{}`.",
+                    m.name
+                ),
             });
         }
     }
@@ -167,6 +195,7 @@ fn check_size_and_param_limits(
                 metric: "Function Lines".to_string(),
                 actual: m.lines as f64,
                 limit: limit as f64,
+                breakdown: Vec::new(),
                 message: format!("Function body spans {} lines (budget: {})", m.lines, limit),
                 recommendation: format!("Split `{}` into smaller focused functions.", m.name),
             });
@@ -182,18 +211,21 @@ fn check_size_and_param_limits(
                 metric: "Nesting Depth".to_string(),
                 actual: m.max_nesting_depth as f64,
                 limit: limit as f64,
-                message: format!("Max nesting depth is {} (budget: {})", m.max_nesting_depth, limit),
-                recommendation: format!("Use early returns or guard clauses to reduce nesting depth in `{}`.", m.name),
+                breakdown: Vec::new(),
+                message: format!(
+                    "Max nesting depth is {} (budget: {})",
+                    m.max_nesting_depth, limit
+                ),
+                recommendation: format!(
+                    "Use early returns or guard clauses to reduce nesting depth in `{}`.",
+                    m.name
+                ),
             });
         }
     }
 }
 
-fn collect_functions(
-    node: Node,
-    ctx: &ParseContext,
-    results: &mut Vec<FunctionMetrics>,
-) {
+fn collect_functions(node: Node, ctx: &ParseContext, results: &mut Vec<FunctionMetrics>) {
     if ctx.lang.is_function_node(node.kind()) {
         if let Some(metrics) = analyze_function_node(node, ctx) {
             results.push(metrics);
@@ -206,10 +238,7 @@ fn collect_functions(
     }
 }
 
-fn analyze_function_node(
-    node: Node,
-    ctx: &ParseContext,
-) -> Option<FunctionMetrics> {
+fn analyze_function_node(node: Node, ctx: &ParseContext) -> Option<FunctionMetrics> {
     let name = extract_function_name(node, ctx.source, ctx.lang)?;
     let start_line = node.start_position().row + 1;
     let end_line = node.end_position().row + 1;
@@ -244,6 +273,8 @@ fn analyze_function_node(
         halstead_difficulty,
         max_nesting_depth: state.max_nesting_depth,
         statements: state.statements,
+        cognitive_breakdown: state.cognitive_breakdown,
+        cyclomatic_breakdown: state.cyclomatic_breakdown,
     })
 }
 
@@ -255,7 +286,10 @@ fn extract_function_name(node: Node, source: &[u8], lang: SupportedLanguage) -> 
         }
     }
 
-    if lang == SupportedLanguage::TypeScript || lang == SupportedLanguage::Tsx || lang == SupportedLanguage::JavaScript {
+    if lang == SupportedLanguage::TypeScript
+        || lang == SupportedLanguage::Tsx
+        || lang == SupportedLanguage::JavaScript
+    {
         if let Some(arrow_name) = extract_declarator_name(node, source) {
             return Some(arrow_name);
         }
@@ -280,13 +314,19 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
 fn count_parameters(node: Node, lang: SupportedLanguage) -> usize {
     let param_kind = match lang {
         SupportedLanguage::Rust | SupportedLanguage::Python => "parameters",
-        SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript => "formal_parameters",
+        SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript => {
+            "formal_parameters"
+        }
         SupportedLanguage::Go => "parameter_list",
     };
 
     let Some(child) = (0..node.child_count()).find_map(|i| {
         let c = node.child(i)?;
-        if c.kind() == param_kind { Some(c) } else { None }
+        if c.kind() == param_kind {
+            Some(c)
+        } else {
+            None
+        }
     }) else {
         return 0;
     };

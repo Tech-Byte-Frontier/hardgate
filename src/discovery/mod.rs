@@ -15,14 +15,26 @@ pub struct DiscoverOptions<'a> {
     pub exclusions: &'a [String],
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryResult {
+    pub files: Vec<PathBuf>,
+    pub excluded_files: Vec<PathBuf>,
+}
+
 pub fn discover_files(options: DiscoverOptions) -> Result<Vec<PathBuf>> {
+    discover_files_with_exclusions(options).map(|res| res.files)
+}
+
+pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<DiscoveryResult> {
     let exclusion_glob = build_exclusion_globset(options.exclusions);
+    let has_exclusions = !options.exclusions.is_empty();
 
     if options.diff_only {
-        return discover_git_diff_files(options.root, &exclusion_glob);
+        return discover_git_diff_files(options.root, &exclusion_glob, has_exclusions);
     }
 
     let mut files = Vec::new();
+    let mut excluded_files = Vec::new();
     let walker = WalkBuilder::new(options.root)
         .standard_filters(true)
         .hidden(true)
@@ -39,13 +51,22 @@ pub fn discover_files(options: DiscoverOptions) -> Result<Vec<PathBuf>> {
             continue;
         }
 
-        if is_supported_source_file(path, options.root, &exclusion_glob) {
-            files.push(path.to_path_buf());
+        if is_supported_source_extension(path) {
+            let rel = path.strip_prefix(options.root).unwrap_or(path);
+            if has_exclusions && exclusion_glob.is_match(rel) {
+                excluded_files.push(path.to_path_buf());
+            } else {
+                files.push(path.to_path_buf());
+            }
         }
     }
 
     files.sort();
-    Ok(files)
+    excluded_files.sort();
+    Ok(DiscoveryResult {
+        files,
+        excluded_files,
+    })
 }
 
 fn build_exclusion_globset(exclusions: &[String]) -> GlobSet {
@@ -58,58 +79,92 @@ fn build_exclusion_globset(exclusions: &[String]) -> GlobSet {
     builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
-fn is_supported_source_file(path: &Path, root: &Path, exclusions: &GlobSet) -> bool {
+fn is_supported_source_extension(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
         return false;
     };
-    if !SUPPORTED_EXTENSIONS.contains(&ext) {
-        return false;
-    }
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    !exclusions.is_match(rel)
+    SUPPORTED_EXTENSIONS.contains(&ext)
 }
 
-fn discover_git_diff_files(root: &Path, exclusions: &GlobSet) -> Result<Vec<PathBuf>> {
-    let mut files = HashSet::new();
+fn discover_git_diff_files(
+    root: &Path,
+    exclusions: &GlobSet,
+    has_exclusions: bool,
+) -> Result<DiscoveryResult> {
+    let mut collector = GitDiffCollector::new(root, exclusions, has_exclusions);
+    collector.collect_status();
+    collector.collect_diff();
 
-    collect_status_files(root, exclusions, &mut files);
-    collect_diff_files(root, exclusions, &mut files);
-
-    let mut result: Vec<PathBuf> = files.into_iter().collect();
-    result.sort();
-    Ok(result)
+    let mut files: Vec<PathBuf> = collector.files.into_iter().collect();
+    files.sort();
+    let mut excluded_files: Vec<PathBuf> = collector.excluded.into_iter().collect();
+    excluded_files.sort();
+    Ok(DiscoveryResult {
+        files,
+        excluded_files,
+    })
 }
 
-fn collect_status_files(root: &Path, exclusions: &GlobSet, files: &mut HashSet<PathBuf>) {
-    let Ok(output) = Command::new("git").args(["status", "--porcelain"]).current_dir(root).output() else {
-        return;
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
+struct GitDiffCollector<'a> {
+    root: &'a Path,
+    exclusions: &'a GlobSet,
+    has_exclusions: bool,
+    files: HashSet<PathBuf>,
+    excluded: HashSet<PathBuf>,
+}
 
-    for line in stdout.lines() {
-        if line.len() < 3 || line[0..2].contains('D') {
-            continue;
+impl<'a> GitDiffCollector<'a> {
+    fn new(root: &'a Path, exclusions: &'a GlobSet, has_exclusions: bool) -> Self {
+        Self {
+            root,
+            exclusions,
+            has_exclusions,
+            files: HashSet::new(),
+            excluded: HashSet::new(),
         }
-        let raw = line[3..].trim();
-        let target = raw.split_once(" -> ").map(|(_, new_p)| new_p.trim()).unwrap_or(raw);
-        check_and_add_target(root, target, exclusions, files);
     }
-}
 
-fn collect_diff_files(root: &Path, exclusions: &GlobSet, files: &mut HashSet<PathBuf>) {
-    let Ok(output) = Command::new("git").args(["diff", "--name-only", "HEAD"]).current_dir(root).output() else {
-        return;
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines() {
-        check_and_add_target(root, line.trim(), exclusions, files);
+    fn run_git_lines(&self, args: &[&str]) -> Vec<String> {
+        let Ok(output) = Command::new("git")
+            .args(args)
+            .current_dir(self.root)
+            .output()
+        else {
+            return Vec::new();
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.lines().map(|s| s.to_string()).collect()
     }
-}
 
-fn check_and_add_target(root: &Path, target: &str, exclusions: &GlobSet, files: &mut HashSet<PathBuf>) {
-    let path = root.join(target);
-    if path.is_file() && is_supported_source_file(&path, root, exclusions) {
-        files.insert(path);
+    fn collect_status(&mut self) {
+        for line in self.run_git_lines(&["status", "--porcelain"]) {
+            if line.len() < 3 || line[0..2].contains('D') {
+                continue;
+            }
+            let raw = line[3..].trim();
+            let target = raw
+                .split_once(" -> ")
+                .map(|(_, new_p)| new_p.trim())
+                .unwrap_or(raw);
+            self.add_target(target);
+        }
+    }
+
+    fn collect_diff(&mut self) {
+        for line in self.run_git_lines(&["diff", "--name-only", "HEAD"]) {
+            self.add_target(line.trim());
+        }
+    }
+
+    fn add_target(&mut self, target: &str) {
+        let path = self.root.join(target);
+        if path.is_file() && is_supported_source_extension(&path) {
+            let rel = path.strip_prefix(self.root).unwrap_or(&path);
+            if self.has_exclusions && self.exclusions.is_match(rel) {
+                self.excluded.insert(path);
+            } else {
+                self.files.insert(path);
+            }
+        }
     }
 }

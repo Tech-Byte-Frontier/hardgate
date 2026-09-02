@@ -1,6 +1,6 @@
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{discover_files, DiscoverOptions};
+use crate::discovery::{discover_files_with_exclusions, DiscoverOptions};
 use crate::engines::{
     check_file_budgets, AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker,
 };
@@ -146,18 +146,31 @@ fn handle_tool_call(params: Option<&serde_json::Value>) -> serde_json::Value {
 fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
     let config = HardgateConfig::load_or_default(None).unwrap_or_default();
     let root = Path::new(".");
-    let target_files = if let Some(arr) = args.get("paths").and_then(|p| p.as_array()) {
-        arr.iter().filter_map(|p| p.as_str().map(PathBuf::from)).collect()
-    } else {
-        discover_files(DiscoverOptions {
-            root,
-            diff_only: false,
-            exclusions: &config.budgets.files.exclusions.paths,
-        })
-        .unwrap_or_default()
-    };
+    let (target_files, excluded_count) =
+        if let Some(arr) = args.get("paths").and_then(|p| p.as_array()) {
+            let files = arr
+                .iter()
+                .filter_map(|p| p.as_str().map(PathBuf::from))
+                .collect();
+            (files, 0)
+        } else {
+            let discovery = discover_files_with_exclusions(DiscoverOptions {
+                root,
+                diff_only: false,
+                exclusions: &config.budgets.files.exclusions.paths,
+            })
+            .unwrap_or_default();
+            (discovery.files, discovery.excluded_files.len())
+        };
 
     let mut report = GateReport::new(config.gate.name.clone());
+    if excluded_count > 0 {
+        let noun = if excluded_count == 1 { "file" } else { "files" };
+        report.advisories.push(format!(
+            "{} {} excluded from file budget checks via hardgate.toml.",
+            excluded_count, noun
+        ));
+    }
     let func_count = analyze_file_list(&target_files, &config, root, &mut report);
 
     report.finalize(target_files.len(), func_count, 0);
@@ -199,18 +212,31 @@ fn analyze_file_list(
     let mut func_count = 0;
 
     for path in paths {
-        let Ok(content) = fs::read_to_string(path) else { continue };
-        report.budget_violations.extend(check_file_budgets(path, &config.budgets.files, root));
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        report
+            .budget_violations
+            .extend(check_file_budgets(path, &config.budgets.files, root));
         if config.anti_gaming.disallow_suppressions {
-            report.suppression_violations.extend(anti_gaming.scan_content(path, &content, root));
+            report
+                .suppression_violations
+                .extend(anti_gaming.scan_content(path, &content, root));
         }
         if config.invariants.enforce {
-            report.invariant_violations.extend(invariants.check_file(path, &content, root));
+            report
+                .invariant_violations
+                .extend(invariants.check_file(path, &content, root));
         }
         let mut analyzer = ComplexityAnalyzer::new();
         let funcs = analyzer.analyze_file(path, &content, root);
         func_count += funcs.len();
-        report.complexity_violations.extend(ComplexityAnalyzer::check_violations(&funcs, &config.budgets.functions));
+        report
+            .complexity_violations
+            .extend(ComplexityAnalyzer::check_violations(
+                &funcs,
+                &config.budgets.functions,
+            ));
     }
 
     func_count
@@ -244,8 +270,17 @@ fn tool_error(msg: &str) -> serde_json::Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": msg }] })
 }
 
-fn send_success<W: Write>(out: &mut W, id: serde_json::Value, res: serde_json::Value) -> Result<()> {
-    let resp = JsonRpcResponse { jsonrpc: "2.0".to_string(), id, result: Some(res), error: None };
+fn send_success<W: Write>(
+    out: &mut W,
+    id: serde_json::Value,
+    res: serde_json::Value,
+) -> Result<()> {
+    let resp = JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: Some(res),
+        error: None,
+    };
     writeln!(out, "{}", serde_json::to_string(&resp)?)?;
     out.flush()?;
     Ok(())

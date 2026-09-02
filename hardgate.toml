@@ -1,6 +1,8 @@
-# Hardgate default configuration
+# Hardgate deterministic quality gate configuration
+# Documentation: https://github.com/Tech-Byte-Frontier/hardgate
+
 [gate]
-name = "example-project"
+name = "hardgate"
 preset = "strict-agent"
 strict = true
 
@@ -8,7 +10,9 @@ strict = true
 max_bytes = 32768
 
 [budgets.files.exclusions]
-paths = ["tests/**"]
+paths = [
+  "tests/**",
+]
 
 [budgets.files.max_lines]
 rs = 499
@@ -33,8 +37,25 @@ min_lines = 5
 min_tokens = 50
 
 [coverage]
+enabled = false
+report = "coverage/lcov.info"
 min_line_percent = 95.0
 max_crap_score = 25.0
 
 [mutation]
+enabled = false
 min_score = 85.0
+timeout_secs = 10
+max_mutants = 30
+
+[orchestration]
+format_check = "cargo fmt --check"
+format = "cargo fmt"
+lint = "cargo clippy -- -D warnings"
+
+[analysis.dead_code]
+enabled = false
+entry_points = [
+  "src/main.rs",
+  "src/lib.rs",
+]

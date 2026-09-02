@@ -1,6 +1,6 @@
 [package]
 name = "hardgate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
 authors = ["Tauan <tauan@loreframe.dev>"]

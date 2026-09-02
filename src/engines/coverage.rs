@@ -131,7 +131,10 @@ impl CoverageScorer {
                     metric: "Global Line Coverage".to_string(),
                     actual: line_pct,
                     limit: min_line,
-                    message: format!("Global line coverage {:.1}% is below floor {:.1}%", line_pct, min_line),
+                    message: format!(
+                        "Global line coverage {:.1}% is below floor {:.1}%",
+                        line_pct, min_line
+                    ),
                     recommendation: "Add tests to exercise uncovered lines.".to_string(),
                 });
             }
@@ -146,7 +149,10 @@ impl CoverageScorer {
                     metric: "Global Function Coverage".to_string(),
                     actual: fn_pct,
                     limit: min_fn,
-                    message: format!("Global function coverage {:.1}% is below floor {:.1}%", fn_pct, min_fn),
+                    message: format!(
+                        "Global function coverage {:.1}% is below floor {:.1}%",
+                        fn_pct, min_fn
+                    ),
                     recommendation: "Add tests exercising newly added functions.".to_string(),
                 });
             }
@@ -161,7 +167,10 @@ impl CoverageScorer {
                     metric: "Global Branch Coverage".to_string(),
                     actual: br_pct,
                     limit: min_br,
-                    message: format!("Global branch coverage {:.1}% is below floor {:.1}%", br_pct, min_br),
+                    message: format!(
+                        "Global branch coverage {:.1}% is below floor {:.1}%",
+                        br_pct, min_br
+                    ),
                     recommendation: "Add tests targeting branch conditions.".to_string(),
                 });
             }
@@ -178,11 +187,13 @@ impl CoverageScorer {
 
         for func in functions {
             let cov_opt = coverage_map.iter().find(|(path, _)| {
-                path.to_string_lossy().ends_with(func.file.to_string_lossy().as_ref())
+                path.to_string_lossy()
+                    .ends_with(func.file.to_string_lossy().as_ref())
             });
 
             if let Some((_, cov)) = cov_opt {
-                let cov_ratio = calculate_function_coverage_ratio(cov, func.start_line, func.end_line);
+                let cov_ratio =
+                    calculate_function_coverage_ratio(cov, func.start_line, func.end_line);
                 let comp = func.cyclomatic as f64;
                 let crap_score = comp.powi(2) * (1.0 - cov_ratio).powi(3) + comp;
 
@@ -215,9 +226,9 @@ impl CoverageScorer {
     ) {
         if let Some(ref critical_paths) = self.config.critical_paths {
             for cp in critical_paths {
-                let matching = coverage_map.iter().find(|(p, _)| {
-                    p.to_string_lossy().ends_with(cp.as_str())
-                });
+                let matching = coverage_map
+                    .iter()
+                    .find(|(p, _)| p.to_string_lossy().ends_with(cp.as_str()));
                 if let Some((path, cov)) = matching {
                     let pct = cov.line_coverage_percent();
                     if pct < 100.0 {
@@ -228,8 +239,12 @@ impl CoverageScorer {
                             metric: "Critical Path 100% Coverage".to_string(),
                             actual: pct,
                             limit: 100.0,
-                            message: format!("Critical path `{}` has {:.1}% coverage (requires 100.0%)", cp, pct),
-                            recommendation: "Ensure 100% test coverage for this critical module.".to_string(),
+                            message: format!(
+                                "Critical path `{}` has {:.1}% coverage (requires 100.0%)",
+                                cp, pct
+                            ),
+                            recommendation: "Ensure 100% test coverage for this critical module."
+                                .to_string(),
                         });
                     }
                 }
@@ -247,14 +262,22 @@ fn parse_lcov_metric_line(cov: &mut FileCoverage, line: &str) {
 }
 
 fn parse_da_line(cov: &mut FileCoverage, rest: &str) {
-    let Some((l_str, h_str)) = rest.split_once(',') else { return };
-    let (Ok(line_num), Ok(hits)) = (l_str.parse::<usize>(), h_str.parse::<usize>()) else { return };
+    let Some((l_str, h_str)) = rest.split_once(',') else {
+        return;
+    };
+    let (Ok(line_num), Ok(hits)) = (l_str.parse::<usize>(), h_str.parse::<usize>()) else {
+        return;
+    };
     cov.line_hits.insert(line_num, hits);
 }
 
 fn parse_count_line(cov: &mut FileCoverage, line: &str) {
-    let Some((tag, val_str)) = line.split_once(':') else { return };
-    let Ok(val) = val_str.parse::<usize>() else { return };
+    let Some((tag, val_str)) = line.split_once(':') else {
+        return;
+    };
+    let Ok(val) = val_str.parse::<usize>() else {
+        return;
+    };
     match tag {
         "LF" => cov.lines_found = val,
         "LH" => cov.lines_hit = val,
@@ -266,7 +289,11 @@ fn parse_count_line(cov: &mut FileCoverage, line: &str) {
     }
 }
 
-fn calculate_function_coverage_ratio(cov: &FileCoverage, start_line: usize, end_line: usize) -> f64 {
+fn calculate_function_coverage_ratio(
+    cov: &FileCoverage,
+    start_line: usize,
+    end_line: usize,
+) -> f64 {
     let mut executable = 0;
     let mut hit = 0;
 

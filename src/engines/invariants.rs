@@ -44,7 +44,8 @@ impl InvariantsChecker {
             Regex::new(r#"(?:import|from)\s+['"]([^'"]+)['"]"#).unwrap(),
             Regex::new(r#"(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap(),
             Regex::new(r#"\buse\s+([a-zA-Z0-9_:]+)"#).unwrap(),
-            Regex::new(r#"(?:from\s+([a-zA-Z0-9_\.]+)\s+import|import\s+([a-zA-Z0-9_\.]+))"#).unwrap(),
+            Regex::new(r#"(?:from\s+([a-zA-Z0-9_\.]+)\s+import|import\s+([a-zA-Z0-9_\.]+))"#)
+                .unwrap(),
         ];
 
         Self {
@@ -144,13 +145,19 @@ fn compile_rule(rule: &InvariantRule) -> CompiledInvariantRule {
     });
 
     CompiledInvariantRule {
-        name: rule.name.clone().unwrap_or_else(|| format!("Rule from {}", rule.from)),
+        name: rule
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Rule from {}", rule.from)),
         from_glob,
         exclude_glob,
         disallow_imports,
         disallow_calls,
         disallow_tokens,
-        message: rule.message.clone().unwrap_or_else(|| "Architectural invariant violation".to_string()),
+        message: rule
+            .message
+            .clone()
+            .unwrap_or_else(|| "Architectural invariant violation".to_string()),
     }
 }
 
@@ -165,7 +172,9 @@ fn build_globset(patterns: &[String]) -> GlobSet {
 }
 
 fn check_calls(ctx: &CheckContext, violations: &mut Vec<InvariantViolation>) {
-    let Some(ref call_res) = ctx.rule.disallow_calls else { return };
+    let Some(ref call_res) = ctx.rule.disallow_calls else {
+        return;
+    };
     for re in call_res {
         if let Some(mat) = re.find(ctx.line) {
             let target = mat.as_str().trim_end_matches('(').trim();
@@ -175,7 +184,9 @@ fn check_calls(ctx: &CheckContext, violations: &mut Vec<InvariantViolation>) {
 }
 
 fn check_tokens(ctx: &CheckContext, violations: &mut Vec<InvariantViolation>) {
-    let Some(ref token_res) = ctx.rule.disallow_tokens else { return };
+    let Some(ref token_res) = ctx.rule.disallow_tokens else {
+        return;
+    };
     for re in token_res {
         if let Some(mat) = re.find(ctx.line) {
             violations.push(create_violation(ctx, "Disallowed Token", mat.as_str()));

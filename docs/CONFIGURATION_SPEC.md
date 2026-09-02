@@ -53,6 +53,7 @@ css = 400
 default = 350
 
 # Files excluded from line/byte size budgets (e.g., generated schema types)
+# Note: Excluded files trigger an advisory warning during `hardgate check` to keep technical debt visible.
 [budgets.files.exclusions]
 paths = [
   "src/vite-env.d.ts",
@@ -138,6 +139,7 @@ message = "Unsafe Rust blocks are forbidden in this codebase."
 enabled = true
 min_lines = 5
 min_tokens = 50
+# Excluded paths trigger an advisory warning during `hardgate check` to prevent debt from becoming invisible.
 excludes = [
   "**/tests/**",
   "**/*_test.rs",
@@ -168,7 +170,7 @@ critical_paths = [
 ]
 
 # ==============================================================================
-# 8. MUTATION TESTING FLOOR
+# 8. MUTATION TESTING FLOOR & NATIVE RUNNER
 # ==============================================================================
 [mutation]
 enabled = true
@@ -176,10 +178,45 @@ enabled = true
 min_score = 85.0
 # Reject runs containing timeouts, syntax errors, or unviable baselines
 reject_timeouts = true
-# Scoped and full mutation report locations
+# Timeout in seconds per mutant when running `hardgate mutate`
+timeout_secs = 10
+# Maximum number of mutants evaluated per run
+max_mutants = 30
+# Custom test command for native runner (optional, e.g. "pnpm test {file}")
+test_cmd = "cargo test {stem}"
+# External mutation report locations (optional for `hardgate verify`)
 reports = [
   "reports/stryker-mutation.json",
   "reports/cargo-mutants.json"
+]
+
+# ==============================================================================
+# 9. TOOL ORCHESTRATION & FORMATTING
+# ==============================================================================
+[orchestration]
+# Checks formatting without changing files (used in `hardgate check --all`)
+format_check = "oxfmt --check ."
+# Formats files directly (used in `hardgate fmt`)
+format = "oxfmt ."
+# Runs project linter (used in `hardgate check --all`)
+lint = "oxlint --type-aware ."
+
+# ==============================================================================
+# 10. DEAD CODE & UNREFERENCED EXPORTS
+# ==============================================================================
+[analysis.dead_code]
+enabled = true
+# Entry points that should never be marked as unreferenced
+entry_points = [
+  "src/main.rs",
+  "src/lib.rs",
+  "src/index.ts",
+  "src/index.tsx"
+]
+# Globs to exclude from dead code and unused export scanning
+exclude = [
+  "tests/**",
+  "**/*.test.ts"
 ]
 ```
 
