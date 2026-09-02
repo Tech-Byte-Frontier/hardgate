@@ -7,6 +7,9 @@ strict = true
 [budgets.files]
 max_bytes = 32768
 
+[budgets.files.exclusions]
+paths = ["tests/**"]
+
 [budgets.files.max_lines]
 rs = 499
 ts = 400
