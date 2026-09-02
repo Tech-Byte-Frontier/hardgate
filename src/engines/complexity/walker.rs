@@ -82,7 +82,6 @@ fn check_branch(kind: &str) -> bool {
             | "catch_clause"
             | "ternary_expression"
             | "conditional_expression"
-            | "try_expression"
     )
 }
 
