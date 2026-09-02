@@ -14,3 +14,12 @@
 .gemini/
 .idea/
 .vscode/
+
+# Local drafts, media, and articles
+*[Aa][Rr][Tt][Ii][Cc][Ll][Ee]*
+media/
+scripts/
+*.png
+*.jpg
+*.jpeg
+drafts/
