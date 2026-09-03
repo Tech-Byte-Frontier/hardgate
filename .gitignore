@@ -18,8 +18,16 @@
 # Local drafts, media, and articles
 *[Aa][Rr][Tt][Ii][Cc][Ll][Ee]*
 media/
-scripts/
+scripts/generate_*.py
+scripts/render_cards.py
 *.png
 *.jpg
 *.jpeg
 drafts/
+
+# JS distribution (populated in CI from Release binaries, never committed)
+node_modules/
+npm/*/bin/hardgate
+npm/*/bin/hardgate.exe
+npm/*/node_modules/
+dist/

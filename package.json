@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "name": "hardgate-workspace",
+  "version": "0.3.2",
+  "description": "Dev workspace for hardgate npm wrapper (not published). Single source of truth for versions is Cargo.toml.",
+  "workspaces": [
+    "npm/*"
+  ],
+  "scripts": {
+    "sync-versions": "node scripts/sync-npm-version.mjs",
+    "test:wrapper": "node tests/npm-wrapper.test.mjs"
+  }
+}

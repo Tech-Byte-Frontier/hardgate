@@ -1,0 +1,42 @@
+{
+  "name": "hardgate",
+  "version": "0.3.2",
+  "description": "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era",
+  "license": "MIT OR Apache-2.0",
+  "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tech-Byte-Frontier/hardgate.git"
+  },
+  "bugs": "https://github.com/Tech-Byte-Frontier/hardgate/issues",
+  "keywords": [
+    "quality-gate",
+    "ai-agents",
+    "linter",
+    "code-metrics",
+    "mutation-testing",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "hardgate": "bin/hardgate.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "hardgate-linux-x64": "0.3.2",
+    "hardgate-linux-x64-musl": "0.3.2",
+    "hardgate-linux-arm64": "0.3.2",
+    "hardgate-linux-arm64-musl": "0.3.2",
+    "hardgate-darwin-x64": "0.3.2",
+    "hardgate-darwin-arm64": "0.3.2",
+    "hardgate-win32-x64": "0.3.2"
+  },
+  "scripts": {
+    "test": "node ../../tests/npm-wrapper.test.mjs"
+  }
+}

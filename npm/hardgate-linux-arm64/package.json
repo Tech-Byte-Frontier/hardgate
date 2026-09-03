@@ -1,0 +1,23 @@
+{
+  "name": "hardgate-linux-arm64",
+  "version": "0.3.2",
+  "description": "hardgate prebuilt binary: linux arm64 (glibc)",
+  "license": "MIT OR Apache-2.0",
+  "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tech-Byte-Frontier/hardgate.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "bin/"
+  ]
+}

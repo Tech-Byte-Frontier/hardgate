@@ -100,7 +100,19 @@ Automatically detects local `./node_modules/.bin` and global paths, running form
 ### Installation
 
 ```sh
-# Via Cargo (recommended)
+# Via npm (recommended for JS/TS projects, no Rust toolchain needed)
+npm i -D hardgate
+npx hardgate check
+
+# pnpm / Yarn / Bun (same pattern: devDependency + exec)
+pnpm add -D hardgate
+pnpm exec hardgate check
+
+# Via shell (Linux/macOS) / PowerShell (Windows), no npm needed
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
+irm https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.ps1 | iex
+
+# Via Cargo
 cargo install hardgate
 
 # Or clone and build from source

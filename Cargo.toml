@@ -13,6 +13,39 @@ documentation = "https://docs.rs/hardgate"
 categories = ["development-tools", "command-line-utilities"]
 keywords = ["quality-gate", "ai-agents", "anti-gaming", "code-metrics", "linter"]
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+[profile.dist]
+inherits = "release"
+
+# cargo-dist release config: prebuilt binaries for GitHub Releases,
+# shell/powershell installers and Homebrew.
+# npm distribution is hand-maintained in npm/* (optionalDependencies pattern,
+# pnpm-compatible) and published by .github/workflows/release.yml `publish-npm`
+# job from the same Release binaries. Single source of truth for versions is
+# `package.version` above. npm/* versions are synced from here via
+# `node scripts/sync-npm-version.mjs`.
+[package.metadata.dist]
+cargo-dist-version = "0.28.0"
+ci = "github"
+pr-run-mode = "plan"
+installers = ["shell", "powershell", "homebrew"]
+tap = "Tech-Byte-Frontier/homebrew-hardgate"
+install-path = "CARGO_HOME"
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+include = ["README.md", "LICENSE-MIT", "LICENSE-APACHE", "hardgate.toml"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }

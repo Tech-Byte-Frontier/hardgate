@@ -1,0 +1,23 @@
+{
+  "name": "hardgate-linux-x64-musl",
+  "version": "0.3.2",
+  "description": "hardgate prebuilt binary: linux x64 (musl, static — Alpine/Docker)",
+  "license": "MIT OR Apache-2.0",
+  "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tech-Byte-Frontier/hardgate.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "musl"
+  ],
+  "files": [
+    "bin/"
+  ]
+}
