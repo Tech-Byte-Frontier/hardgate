@@ -10,9 +10,7 @@ strict = true
 max_bytes = 32768
 
 [budgets.files.exclusions]
-paths = [
-  "tests/**",
-]
+paths = []
 
 [budgets.files.max_lines]
 rs = 499
