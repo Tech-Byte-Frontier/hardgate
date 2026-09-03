@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 pub use walker::ComplexityContribution;
-use walker::{walk_node, AnalysisState, WalkerContext};
+use walker::{AnalysisState, WalkerContext, walk_node};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionMetrics {

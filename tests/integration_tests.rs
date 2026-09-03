@@ -220,9 +220,11 @@ fn test_crap_score_calculation() {
     }];
 
     let violations = scorer.evaluate(&cov_map, &funcs, Path::new("."));
-    assert!(violations
-        .iter()
-        .any(|v| v.metric == "CRAP Score" && v.actual > 25.0));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "CRAP Score" && v.actual > 25.0)
+    );
 }
 
 #[test]
@@ -362,9 +364,12 @@ fn test_dead_code_analyzer() {
         |v| v.file == Path::new("src/dead_file.ts") && v.violation_type == "Unreferenced File"
     ));
     // Should catch unusedFunc in used_service.ts as unused export
-    assert!(violations
-        .iter()
-        .any(|v| v.symbol.as_deref() == Some("unusedFunc") && v.violation_type == "Unused Export"));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.symbol.as_deref() == Some("unusedFunc")
+                && v.violation_type == "Unused Export")
+    );
 }
 
 #[test]
@@ -384,21 +389,29 @@ fn test_ast_mutation_generator() {
     assert!(!mutants.is_empty());
 
     // Should generate == -> !=
-    assert!(mutants
-        .iter()
-        .any(|m| m.original == "==" && m.replacement == "!="));
+    assert!(
+        mutants
+            .iter()
+            .any(|m| m.original == "==" && m.replacement == "!=")
+    );
     // Should generate && -> ||
-    assert!(mutants
-        .iter()
-        .any(|m| m.original == "&&" && m.replacement == "||"));
+    assert!(
+        mutants
+            .iter()
+            .any(|m| m.original == "&&" && m.replacement == "||")
+    );
     // Should generate > -> <=
-    assert!(mutants
-        .iter()
-        .any(|m| m.original == ">" && m.replacement == "<="));
+    assert!(
+        mutants
+            .iter()
+            .any(|m| m.original == ">" && m.replacement == "<=")
+    );
     // Should generate true -> false
-    assert!(mutants
-        .iter()
-        .any(|m| m.original == "true" && m.replacement == "false"));
+    assert!(
+        mutants
+            .iter()
+            .any(|m| m.original == "true" && m.replacement == "false")
+    );
 }
 
 #[test]
@@ -464,7 +477,7 @@ fn test_clone_detector_excludes_advisory() {
 
 #[test]
 fn test_discover_files_with_exclusions() {
-    use hardgate::discovery::{discover_files_with_exclusions, DiscoverOptions};
+    use hardgate::discovery::{DiscoverOptions, discover_files_with_exclusions};
 
     let result = discover_files_with_exclusions(DiscoverOptions {
         root: Path::new("."),
@@ -475,10 +488,12 @@ fn test_discover_files_with_exclusions() {
 
     assert!(!result.files.is_empty());
     assert!(!result.excluded_files.is_empty());
-    assert!(result
-        .excluded_files
-        .iter()
-        .any(|f| f.ends_with("integration_tests.rs")));
+    assert!(
+        result
+            .excluded_files
+            .iter()
+            .any(|f| f.ends_with("integration_tests.rs"))
+    );
 }
 
 #[test]
@@ -503,10 +518,16 @@ fn test_gate_report_advisories_rendering() {
     assert!(term.contains("PASS (All gates satisfied)"));
 
     let agent = report.render_agent();
-    assert!(agent
-        .contains("> ⚠️ **Advisory**: 25 files excluded from clone detection via hardgate.toml."));
-    assert!(agent
-        .contains("> ⚠️ **Advisory**: 1 file excluded from file budget checks via hardgate.toml."));
+    assert!(
+        agent.contains(
+            "> ⚠️ **Advisory**: 25 files excluded from clone detection via hardgate.toml."
+        )
+    );
+    assert!(
+        agent.contains(
+            "> ⚠️ **Advisory**: 1 file excluded from file budget checks via hardgate.toml."
+        )
+    );
     assert!(agent.contains("✅ **Hardgate Passed**"));
 
     let json_str = report.render_json();

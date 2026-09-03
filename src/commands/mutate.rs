@@ -1,5 +1,5 @@
 use crate::config::HardgateConfig;
-use crate::discovery::{discover_files, DiscoverOptions};
+use crate::discovery::{DiscoverOptions, discover_files};
 use crate::engines::{
     AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
     NativeMutationRunner,
@@ -218,7 +218,13 @@ fn render_mutation_output(ctx: &MutationSummaryContext, format: Option<&str>) {
 fn render_agent_output(ctx: &MutationSummaryContext) {
     let mut out = format!(
         "### 🧬 Native AST Mutation Results ({}ms)\n- Evaluated: {}\n- Killed: {}\n- Survived: {}\n- Timed Out: {}\n- Mutation Score: {:.1}% (Floor: {:.1}%)\n- Verdict: {}\n\n",
-        ctx.elapsed, ctx.stats.total, ctx.stats.killed, ctx.stats.survived, ctx.stats.timeout, ctx.score, ctx.min_score,
+        ctx.elapsed,
+        ctx.stats.total,
+        ctx.stats.killed,
+        ctx.stats.survived,
+        ctx.stats.timeout,
+        ctx.score,
+        ctx.min_score,
         if ctx.passed { "PASSED" } else { "FAILED" }
     );
     for res in ctx

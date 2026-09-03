@@ -1,10 +1,10 @@
 use super::verify::verify_coverage;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{discover_files_with_exclusions, DiscoverOptions};
+use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
 use crate::engines::{
-    check_file_budgets, AntiGamingScanner, CloneDetector, ComplexityAnalyzer, DeadCodeAnalyzer,
-    FunctionMetrics, InvariantsChecker, OrchestrationEngine,
+    AntiGamingScanner, CloneDetector, ComplexityAnalyzer, DeadCodeAnalyzer, FunctionMetrics,
+    InvariantsChecker, OrchestrationEngine, check_file_budgets,
 };
 use anyhow::Result;
 use colored::*;

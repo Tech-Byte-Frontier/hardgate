@@ -5,9 +5,9 @@ pub mod mutate;
 pub mod scan;
 pub mod verify;
 
-pub use check::{cmd_check, CheckOptions};
+pub use check::{CheckOptions, cmd_check};
 pub use fmt::cmd_fmt;
 pub use init::cmd_init;
-pub use mutate::{cmd_mutate, MutateOptions};
+pub use mutate::{MutateOptions, cmd_mutate};
 pub use scan::cmd_scan;
 pub use verify::cmd_verify;

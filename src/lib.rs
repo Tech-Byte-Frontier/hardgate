@@ -58,5 +58,5 @@ pub mod mcp;
 pub use config::{HardgateConfig, Preset};
 pub use diagnostics::GateReport;
 pub use discovery::{
-    discover_files, discover_files_with_exclusions, DiscoverOptions, DiscoveryResult,
+    DiscoverOptions, DiscoveryResult, discover_files, discover_files_with_exclusions,
 };

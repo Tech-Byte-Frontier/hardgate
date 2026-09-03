@@ -2,7 +2,7 @@ use super::check::output_report;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{
-    check_file_budgets, AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker,
+    AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker, check_file_budgets,
 };
 use anyhow::{Context, Result};
 use std::fs;
