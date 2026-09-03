@@ -17,9 +17,11 @@ use trees::{has_suffix, write_tree};
 
 /// Temp project with a real source file plus vendored trees per language
 /// (JS `node_modules`/`dist`/`build`, Rust `target`, Go `vendor`,
-/// Python venvs), including a nested skip dir under `src/`.
-fn dep_tree() -> PathBuf {
-    let tmp = tempdir("depskip");
+/// Python venvs), including a nested skip dir under `src/`. `tag` must be
+/// unique per test: temp dirs are PID-scoped and tests in one binary run in
+/// parallel threads sharing the dir.
+fn dep_tree(tag: &str) -> PathBuf {
+    let tmp = tempdir(tag);
     write_tree(
         &tmp,
         &[
@@ -40,7 +42,7 @@ fn dep_tree() -> PathBuf {
 
 #[test]
 fn test_dependency_dirs_skipped_without_config() {
-    let tmp = dep_tree();
+    let tmp = dep_tree("depskip");
     let result = discover_files_with_exclusions(DiscoverOptions {
         root: &tmp,
         diff_only: false,
@@ -106,7 +108,7 @@ fn test_skip_matches_exact_dir_names_only() {
 fn test_explicit_scope_still_reaches_vendored_file() {
     // Escape hatch: explicitly scoped files (and `hardgate scan <file>`,
     // which bypasses discovery) still inspect vendored code on purpose.
-    let tmp = dep_tree();
+    let tmp = dep_tree("depskip-explicit");
     let discovered = discover_files_with_exclusions(DiscoverOptions {
         root: &tmp,
         diff_only: false,
