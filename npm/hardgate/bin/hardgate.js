@@ -55,7 +55,6 @@ const PLATFORM_TABLE = [
   ["linux", "arm64", true, "hardgate-linux-arm64-musl"],
   ["darwin", "x64", null, "hardgate-darwin-x64"],
   ["darwin", "arm64", null, "hardgate-darwin-arm64"],
-  ["win32", "x64", null, "hardgate-win32-x64"],
 ];
 
 function resolvePlatform(platform, arch, musl) {
@@ -82,10 +81,6 @@ function fallbackPackages(primary) {
   if (primary === "hardgate-linux-arm64") return ["hardgate-linux-arm64-musl"];
   if (primary === "hardgate-linux-arm64-musl") return ["hardgate-linux-arm64"];
   return [];
-}
-
-function binaryName(pkg) {
-  return pkg === "hardgate-win32-x64" ? "hardgate.exe" : "hardgate";
 }
 
 // Guard against wrapper scripts: only accept real machine binaries
@@ -190,7 +185,7 @@ function resolveViaSiblings(pkg, bin) {
 }
 
 function tryResolve(pkg) {
-  const bin = binaryName(pkg);
+  const bin = "hardgate";
   // NOTE: there is deliberately no argv[1]-based lookup. Node resolves the
   // entry-point path (symlinks + `..`) before user code runs, so argv[1]
   // always shows the content-addressed store path under pnpm -- never the

@@ -6,7 +6,7 @@ name: Release
 #   git tag v0.4.2 && git push origin v0.4.2
 #
 # produces, in order:
-#   1. prebuilt binaries on GitHub Releases (+ shell/powershell/homebrew
+#   1. prebuilt binaries on GitHub Releases (+ shell/homebrew
 #      installers via `cargo dist build` for local repro -- see Cargo.toml
 #      [package.metadata.dist]),
 #   2. `cargo publish` to crates.io,
@@ -94,10 +94,6 @@ jobs:
             target: aarch64-apple-darwin
             npm_pkg: hardgate-darwin-arm64
             ext: ""
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-            npm_pkg: hardgate-win32-x64
-            ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -196,16 +192,12 @@ jobs:
       - name: populate platform binaries
         run: |
           node scripts/sync-npm-version.mjs
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
+          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             mkdir -p "npm/$pkg/bin"
             rm -f "npm/$pkg/bin/.gitkeep"
             tar xzf "/tmp/hg-dist/$pkg.tar.gz" -C /tmp/hg-dist
-            if [ "$pkg" = "hardgate-win32-x64" ]; then
-              cp "/tmp/hg-dist/$pkg/hardgate.exe" "npm/$pkg/bin/hardgate.exe"
-            else
-              cp "/tmp/hg-dist/$pkg/hardgate" "npm/$pkg/bin/hardgate"
-              chmod +x "npm/$pkg/bin/hardgate"
-            fi
+            cp "/tmp/hg-dist/$pkg/hardgate" "npm/$pkg/bin/hardgate"
+            chmod +x "npm/$pkg/bin/hardgate"
             # Registry quality: every tarball ships README + both licenses.
             # Platform READMEs are committed stubs; licenses are copied here
             # so the repo keeps a single copy at the root.
@@ -220,11 +212,10 @@ jobs:
       # NOTE: the "./" prefix is load-bearing: a bare `npm/<pkg>` arg is
       # parsed as a GitHub `owner/repo` shorthand (git ls-remote failure),
       # not as a local path.
-      # NOTE: this step is deliberately tolerant: one blocked platform
-      # (e.g. `hardgate-win32-x64`, which npm's spam detection rejects --
-      # see https://npmjs.com/support) must not sink the whole release.
-      # Failures are recorded and reported by the final report step, after
-      # the main wrapper has been published.
+      # NOTE: this step is deliberately tolerant: one failed platform
+      # must not sink the whole release. Failures are recorded and
+      # reported by the final report step, after the main wrapper
+      # has been published.
       - name: publish platform packages (skip versions already live)
         run: |
           FAIL=/tmp/hg-npm-failures.txt
@@ -232,7 +223,7 @@ jobs:
           publish_one() {
             npm publish --provenance --access public "./npm/$1"
           }
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
+          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             WANT=$(node -p "require('./npm/$pkg/package.json').version")
             HAVE=$(npm view "$pkg" version 2>/dev/null || echo none)
             if [ "$HAVE" = "$WANT" ]; then

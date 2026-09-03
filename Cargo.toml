@@ -22,7 +22,7 @@ codegen-units = 1
 inherits = "release"
 
 # cargo-dist release config: prebuilt binaries for GitHub Releases,
-# shell/powershell installers and Homebrew.
+# shell and Homebrew installers.
 # npm distribution is hand-maintained in npm/* (optionalDependencies pattern,
 # pnpm-compatible) and published by .github/workflows/release.yml `publish-npm`
 # job from the same Release binaries. Single source of truth for versions is
@@ -32,7 +32,7 @@ inherits = "release"
 cargo-dist-version = "0.28.0"
 ci = "github"
 pr-run-mode = "plan"
-installers = ["shell", "powershell", "homebrew"]
+installers = ["shell", "homebrew"]
 tap = "Tech-Byte-Frontier/homebrew-hardgate"
 install-path = "CARGO_HOME"
 targets = [
@@ -42,7 +42,6 @@ targets = [
   "aarch64-unknown-linux-musl",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
-  "x86_64-pc-windows-msvc",
 ]
 include = ["README.md", "LICENSE-MIT", "LICENSE-APACHE", "hardgate.toml"]
 

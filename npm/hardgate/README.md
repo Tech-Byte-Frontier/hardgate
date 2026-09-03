@@ -10,7 +10,7 @@ npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 ```
 
-Install as a devDependency, then run via `npx`, `pnpm exec`, `yarn dlx`, `bunx`, or a `package.json` script. Platform binaries are delivered via `optionalDependencies` (`hardgate-linux-*`, `hardgate-darwin-*`, `hardgate-win32-*`), so installs stay offline-friendly with no postinstall downloads.
+Install as a devDependency, then run via `npx`, `pnpm exec`, `yarn dlx`, `bunx`, or a `package.json` script. Platform binaries are delivered via `optionalDependencies` (`hardgate-linux-*`, `hardgate-darwin-*`), so installs stay offline-friendly with no postinstall downloads. Linux/macOS only — Windows is not supported.
 
 ```sh
 pnpm add -D @tech-byte-frontier/hardgate

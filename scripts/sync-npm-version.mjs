@@ -23,7 +23,6 @@ const platformPkgs = [
   "hardgate-linux-arm64-musl",
   "hardgate-darwin-x64",
   "hardgate-darwin-arm64",
-  "hardgate-win32-x64",
 ];
 
 // Canonical npm metadata. Single source of truth for versions is Cargo.toml;
@@ -74,6 +73,13 @@ syncJson(path.join(root, "npm/hardgate/package.json"), (j) => {
   j.files = ["bin/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"];
   j.optionalDependencies ??= {};
   for (const p of platformPkgs) j.optionalDependencies[p] = version;
+  // Prune entries for dropped platforms (e.g. win32) so the manifest
+  // never references packages that no longer exist.
+  for (const key of Object.keys(j.optionalDependencies)) {
+    if (key.startsWith("hardgate-") && !platformPkgs.includes(key)) {
+      delete j.optionalDependencies[key];
+    }
+  }
 });
 for (const p of platformPkgs) {
   syncJson(path.join(root, `npm/${p}/package.json`), (j) => {

@@ -108,9 +108,8 @@ npx hardgate check
 pnpm add -D @tech-byte-frontier/hardgate
 pnpm exec hardgate check
 
-# Via shell (Linux/macOS) / PowerShell (Windows), no npm needed
+# Via shell (Linux/macOS), no npm needed
 curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
-irm https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.ps1 | iex
 
 # Via Cargo
 cargo install hardgate

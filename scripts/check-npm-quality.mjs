@@ -24,7 +24,6 @@ const platformPkgs = [
   "hardgate-linux-arm64-musl",
   "hardgate-darwin-x64",
   "hardgate-darwin-arm64",
-  "hardgate-win32-x64",
 ];
 
 let failures = 0;

@@ -246,7 +246,7 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
     ["darwin", "x64", null, "hardgate-darwin-x64"],
     ["darwin", "x64", false, "hardgate-darwin-x64"],
     ["darwin", "arm64", null, "hardgate-darwin-arm64"],
-    ["win32", "x64", null, "hardgate-win32-x64"],
+    ["win32", "x64", null, null],
     ["win32", "arm64", null, null],
     ["linux", "s390x", false, null],
     ["freebsd", "x64", null, null],
@@ -268,7 +268,6 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
     "hardgate-linux-arm64-musl",
   ]);
   assert.deepEqual(fallbackPackages("hardgate-darwin-arm64"), []);
-  assert.deepEqual(fallbackPackages("hardgate-win32-x64"), []);
   console.log("G: platform matrix + musl fallbacks pinned -- OK");
 }
 
