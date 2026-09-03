@@ -62,11 +62,11 @@ impl Preset {
     }
 
     pub fn to_clean_toml(self) -> String {
-        let (preset_str, b) = self.preset_toml_context();
-        format_toml_template(preset_str, &b)
+        let (preset_str, b, exclusions) = self.preset_toml_context();
+        format_toml_template(preset_str, &b, exclusions)
     }
 
-    fn preset_toml_context(self) -> (&'static str, PresetBudgetContext) {
+    fn preset_toml_context(self) -> (&'static str, PresetBudgetContext, &'static str) {
         let preset_str = match self {
             Preset::StrictAgent => "strict-agent",
             Preset::Balanced => "balanced",
@@ -104,7 +104,20 @@ impl Preset {
             }
         };
 
-        (preset_str, b)
+        (preset_str, b, file_exclusions(self))
+    }
+}
+
+/// Default `[budgets.files.exclusions]` body per preset. Strict-agent gates
+/// `tests/` like any other code: agent-written tests obey the same budgets
+/// (vacuous tests, suppressions, and copy-pasted fixtures are gaming
+/// vectors, not free passes). Softer presets keep the historical
+/// `tests/**` carve-out for teams burning down debt elsewhere.
+fn file_exclusions(preset: Preset) -> &'static str {
+    if preset == Preset::StrictAgent {
+        "# tests/ are intentionally gated: agent-written tests obey the same budgets.\n# Add globs here to buy down debt loudly: excluded files surface as\n# advisories on every run.\npaths = []"
+    } else {
+        "paths = [\n  \"tests/**\",\n]"
     }
 }
 
@@ -122,7 +135,7 @@ struct PresetBudgetContext {
     mut_min: f64,
 }
 
-fn format_toml_template(preset_str: &str, b: &PresetBudgetContext) -> String {
+fn format_toml_template(preset_str: &str, b: &PresetBudgetContext, exclusions: &str) -> String {
     format!(
         r#"# Hardgate deterministic quality gate configuration
 # Documentation: https://github.com/Tech-Byte-Frontier/hardgate
@@ -136,9 +149,7 @@ strict = true
 max_bytes = {max_bytes}
 
 [budgets.files.exclusions]
-paths = [
-  "tests/**",
-]
+{exclusions}
 
 [budgets.files.max_lines]
 rs = 499
@@ -189,6 +200,7 @@ entry_points = [
 ]
 "#,
         max_bytes = b.max_bytes,
+        exclusions = exclusions,
         cyclo = b.cyclo,
         cogn = b.cogn,
         halstead = b.halstead,

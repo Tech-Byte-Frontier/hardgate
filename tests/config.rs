@@ -34,6 +34,30 @@ fn test_clean_toml_formatting() {
 }
 
 #[test]
+fn test_strict_template_gates_tests_others_carve_out() {
+    // Strict-agent holds tests to the same budgets (agent-written tests are
+    // a gaming vector, not a free pass); softer presets keep `tests/**`.
+    let strict = hardgate::config::HardgateConfig::generate_toml_template(
+        hardgate::config::Preset::StrictAgent,
+    );
+    assert!(
+        !strict.contains("tests/**"),
+        "strict-agent template must not exclude tests"
+    );
+    let strict_cfg: hardgate::config::HardgateConfig = toml::from_str(&strict).unwrap();
+    assert!(strict_cfg.budgets.files.exclusions.paths.is_empty());
+
+    for preset in [
+        hardgate::config::Preset::Balanced,
+        hardgate::config::Preset::LegacyMigration,
+    ] {
+        let other = hardgate::config::HardgateConfig::generate_toml_template(preset);
+        let other_cfg: hardgate::config::HardgateConfig = toml::from_str(&other).unwrap();
+        assert_eq!(other_cfg.budgets.files.exclusions.paths, vec!["tests/**"]);
+    }
+}
+
+#[test]
 fn test_config_merge_preserves_user_sections() {
     use hardgate::config::HardgateConfig;
 
