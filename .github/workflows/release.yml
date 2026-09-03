@@ -149,7 +149,7 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS.txt
 
-  # -- crates.io --
+  # -- crates.io (idempotent: skips when the version is already live) --
   publish-crates:
     needs: [version-check, build]
     runs-on: ubuntu-22.04
@@ -158,7 +158,15 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --locked
+      - name: publish crate unless already live
+        run: |
+          WANT=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+          HAVE=$(cargo search hardgate --limit 1 2>/dev/null | grep -oE 'hardgate = "[0-9.]+"' | grep -oE '[0-9.]+' || true)
+          if [ "$HAVE" = "$WANT" ]; then
+            echo "hardgate $WANT already on crates.io; skipping publish."
+          else
+            cargo publish --locked
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -193,14 +201,30 @@ jobs:
             ls -lh "npm/$pkg/bin/"
           done
           node tests/npm-wrapper.test.mjs
-      - name: publish platform packages
+      # NOTE: the "./" prefix is load-bearing: a bare `npm/<pkg>` arg is
+      # parsed as a GitHub `owner/repo` shorthand (git ls-remote failure),
+      # not as a local path.
+      - name: publish platform packages (skip versions already live)
         run: |
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
-            npm publish --provenance --access public "npm/$pkg"
+            WANT=$(node -p "require('./npm/$pkg/package.json').version")
+            HAVE=$(npm view "$pkg" version 2>/dev/null || echo none)
+            if [ "$HAVE" = "$WANT" ]; then
+              echo "$pkg $WANT already on npm; skipping."
+            else
+              npm publish --provenance --access public "./npm/$pkg"
+            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: publish main wrapper
-        run: npm publish --provenance --access public npm/hardgate
+      - name: publish main wrapper (skip version already live)
+        run: |
+          WANT=$(node -p "require('./npm/hardgate/package.json').version")
+          HAVE=$(npm view hardgate version 2>/dev/null || echo none)
+          if [ "$HAVE" = "$WANT" ]; then
+            echo "hardgate $WANT already on npm; skipping."
+          else
+            npm publish --provenance --access public ./npm/hardgate
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
