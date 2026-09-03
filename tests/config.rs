@@ -1,12 +1,16 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "support/trees.rs"]
+mod trees;
 
 use fs::tempdir;
 use hardgate::config::{ExclusionConfig, FileBudgets};
-use hardgate::discovery::{DiscoverOptions, discover_files_with_exclusions};
+use hardgate::discovery::{DiscoverOptions, DiscoveryResult, discover_files_with_exclusions};
 use hardgate::engines::check_file_budgets;
 use std::collections::HashMap;
 use std::path::Path;
+use std::process::Command;
+use trees::{has_suffix, write_tree};
 
 #[test]
 fn test_clean_toml_formatting() {
@@ -238,4 +242,132 @@ fn test_gate_report_advisories_rendering() {
     let json_str = report.render_json();
     assert!(json_str.contains("\"advisories\": ["));
     assert!(json_str.contains("25 files excluded from clone detection via hardgate.toml."));
+}
+
+fn discover_all(root: &Path) -> DiscoveryResult {
+    let no_exclusions: &[String] = &[];
+    discover_files_with_exclusions(DiscoverOptions {
+        root,
+        diff_only: false,
+        exclusions: no_exclusions,
+    })
+    .expect("discovery should succeed")
+}
+
+#[test]
+fn test_discovery_applies_standard_filters() {
+    let tmp = tempdir("disc-standard");
+    write_tree(&tmp, &["keep.rs", ".hidden.rs", "skip.gen.rs", "Makefile"]);
+    std::fs::write(tmp.join(".ignore"), "*.gen.rs\n").unwrap();
+
+    let result = discover_all(&tmp);
+    assert!(has_suffix(&result.files, "keep.rs"));
+    // Hidden files, .ignore rules, and extensionless files must all be out.
+    for gone in [".hidden.rs", "skip.gen.rs", "Makefile"] {
+        assert!(
+            !has_suffix(&result.files, gone),
+            "{gone} should be filtered"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_discovery_reads_parent_ignore_files() {
+    let tmp = tempdir("disc-parents");
+    write_tree(&tmp, &["inner/keep.rs", "inner/skipme.rs"]);
+    std::fs::write(tmp.join(".ignore"), "skipme.rs\n").unwrap();
+
+    let files = discover_all(&tmp.join("inner")).files;
+    assert_eq!(files.len(), 1);
+    assert!(files[0].ends_with("keep.rs"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_discovery_respects_git_ignore_and_exclude() {
+    let tmp = tempdir("disc-git");
+    // A bare `.git` dir marks a repo root for the walker; no git binary needed.
+    write_tree(
+        &tmp,
+        &["keep.rs", "skip.gen.rs", "skip.exc.rs", ".git/info/exclude"],
+    );
+    std::fs::write(tmp.join(".gitignore"), "*.gen.rs\n").unwrap();
+    std::fs::write(tmp.join(".git/info/exclude"), "*.exc.rs\n").unwrap();
+
+    let found = discover_all(&tmp).files;
+    assert_eq!(found.len(), 1, "only keep.rs should survive, got {found:?}");
+    assert!(found[0].ends_with("keep.rs"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_discovery_respects_global_git_excludes() {
+    let tmp = tempdir("disc-global");
+    write_tree(&tmp, &["keep.rs", "skip.hgglobal.rs"]);
+    std::fs::create_dir_all(tmp.join(".git")).unwrap();
+    let excludes = tmp.join("global-excludes");
+    std::fs::write(&excludes, "*.hgglobal.rs\n").unwrap();
+    let gitconfig = tmp.join("test.gitconfig");
+    std::fs::write(
+        &gitconfig,
+        format!("[core]\n\texcludesFile = {}\n", excludes.display()),
+    )
+    .unwrap();
+
+    // Hermetic: GIT_CONFIG_GLOBAL replaces $HOME/.gitconfig for this lookup.
+    // The pattern is unique to this fixture, so parallel tests are unaffected.
+    // SAFETY: edition 2024 marks env mutation unsafe; the var is removed
+    // immediately after discovery and matches no other test's files.
+    let key = "GIT_CONFIG_GLOBAL";
+    unsafe { std::env::set_var(key, &gitconfig) };
+    let result = discover_all(&tmp);
+    unsafe { std::env::remove_var(key) };
+
+    assert!(has_suffix(&result.files, "keep.rs"));
+    assert!(!has_suffix(&result.files, "skip.hgglobal.rs"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+fn git_in(repo: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .expect("git binary must be available for diff tests")
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+#[test]
+fn test_diff_discovery_tracks_modified_and_untracked() {
+    let tmp = tempdir("disc-diff");
+    write_tree(&tmp, &["src/keep.rs", "gen/skip.rs"]);
+    git_in(&tmp, &["init", "-q"]);
+    git_in(&tmp, &["config", "user.email", "t@t.t"]);
+    git_in(&tmp, &["config", "user.name", "t"]);
+    git_in(&tmp, &["config", "commit.gpgsign", "false"]);
+    git_in(&tmp, &["add", "-A"]);
+    git_in(&tmp, &["commit", "-qm", "base"]);
+
+    std::fs::write(tmp.join("src/keep.rs"), "// changed\n").unwrap();
+    std::fs::write(tmp.join("gen/skip.rs"), "// changed\n").unwrap();
+    write_tree(&tmp, &["new.rs", "weird.rs/inner.rs"]);
+
+    let diffed = discover_files_with_exclusions(DiscoverOptions {
+        root: &tmp,
+        diff_only: true,
+        exclusions: &["gen/**".to_string()],
+    })
+    .expect("diff discovery should succeed");
+
+    assert!(has_suffix(&diffed.files, "src/keep.rs"));
+    assert!(has_suffix(&diffed.files, "new.rs"));
+    assert!(
+        diffed.files.iter().all(|f| f.is_file()),
+        "directories must never be listed, got {:?}",
+        diffed.files
+    );
+    assert!(has_suffix(&diffed.excluded_files, "gen/skip.rs"));
+    let _ = std::fs::remove_dir_all(&tmp);
 }

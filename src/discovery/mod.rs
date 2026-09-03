@@ -227,10 +227,15 @@ impl<'a> GitDiffCollector<'a> {
 
     fn collect_status(&mut self) {
         for line in self.run_git_lines(&["status", "--porcelain"]) {
-            if line.len() < 3 || line[0..2].contains('D') {
+            // Safe slicing: porcelain rows are always `XY␣path`, but short or
+            // corrupt lines must be skipped, never allowed to panic indexing.
+            let Some(marker) = line.get(..2) else {
+                continue;
+            };
+            if marker.contains('D') {
                 continue;
             }
-            let raw = line[3..].trim();
+            let raw = line.get(3..).map(str::trim).unwrap_or_default();
             let target = raw
                 .split_once(" -> ")
                 .map(|(_, new_p)| new_p.trim())
