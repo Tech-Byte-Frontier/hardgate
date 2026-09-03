@@ -197,6 +197,7 @@ jobs:
           node scripts/sync-npm-version.mjs
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
             mkdir -p "npm/$pkg/bin"
+            rm -f "npm/$pkg/bin/.gitkeep"
             tar xzf "/tmp/hg-dist/$pkg.tar.gz" -C /tmp/hg-dist
             if [ "$pkg" = "hardgate-win32-x64" ]; then
               cp "/tmp/hg-dist/$pkg/hardgate.exe" "npm/$pkg/bin/hardgate.exe"
@@ -204,8 +205,16 @@ jobs:
               cp "/tmp/hg-dist/$pkg/hardgate" "npm/$pkg/bin/hardgate"
               chmod +x "npm/$pkg/bin/hardgate"
             fi
+            # Registry quality: every tarball ships README + both licenses.
+            # Platform READMEs are committed stubs; licenses are copied here
+            # so the repo keeps a single copy at the root.
+            cp README.md LICENSE-MIT LICENSE-APACHE "npm/$pkg/"
             ls -lh "npm/$pkg/bin/"
+            (cd "npm/$pkg" && npm pack --dry-run 2>&1 | tail -12)
           done
+          # Main wrapper ships its own npm README; licenses come from root.
+          cp LICENSE-MIT LICENSE-APACHE npm/hardgate/
+          (cd npm/hardgate && npm pack --dry-run 2>&1 | tail -12)
           node tests/npm-wrapper.test.mjs
       # NOTE: the "./" prefix is load-bearing: a bare `npm/<pkg>` arg is
       # parsed as a GitHub `owner/repo` shorthand (git ls-remote failure),

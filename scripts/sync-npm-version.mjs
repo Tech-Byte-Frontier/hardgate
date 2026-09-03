@@ -26,6 +26,35 @@ const platformPkgs = [
   "hardgate-win32-x64",
 ];
 
+// Canonical npm metadata. Single source of truth for versions is Cargo.toml;
+// the fields below keep `npm/*` aligned with npm registry quality standards
+// (readme + license files present, SPDX dual-license, public provenance).
+// `files` entries may not exist in git (LICENSE/README are copied into
+// `npm/<pkg>/` by the release workflow before `npm publish`); npm ignores
+// missing `files` entries on pack, so listing them here is safe locally.
+const META = {
+  license: "(MIT OR Apache-2.0)",
+  author: "Tauan BF <contact@techbytefrontier.com>",
+  homepage: "https://github.com/Tech-Byte-Frontier/hardgate",
+  repository: {
+    type: "git",
+    url: "git+https://github.com/Tech-Byte-Frontier/hardgate.git",
+  },
+  bugs: "https://github.com/Tech-Byte-Frontier/hardgate/issues",
+  publishConfig: { access: "public", provenance: true },
+  type: "commonjs",
+};
+
+function applyCommon(j) {
+  j.license = META.license;
+  j.author = META.author;
+  j.homepage = META.homepage;
+  j.repository = { ...META.repository };
+  j.bugs = META.bugs;
+  j.publishConfig = { ...META.publishConfig };
+  j.type = META.type;
+}
+
 let dirty = false;
 function syncJson(file, mutate) {
   const before = fs.readFileSync(file, "utf8");
@@ -41,12 +70,16 @@ function syncJson(file, mutate) {
 
 syncJson(path.join(root, "npm/hardgate/package.json"), (j) => {
   j.version = version;
+  applyCommon(j);
+  j.files = ["bin/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"];
   j.optionalDependencies ??= {};
   for (const p of platformPkgs) j.optionalDependencies[p] = version;
 });
 for (const p of platformPkgs) {
   syncJson(path.join(root, `npm/${p}/package.json`), (j) => {
     j.version = version;
+    applyCommon(j);
+    j.files = ["bin/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"];
   });
 }
 

@@ -32,5 +32,6 @@ jobs:
           node-version: 20
       - run: cargo build --locked
       - run: node scripts/sync-npm-version.mjs --check
+      - run: node scripts/check-npm-quality.mjs
       - run: node npm/hardgate/bin/hardgate.js --version
       - run: node tests/npm-wrapper.test.mjs
