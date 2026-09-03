@@ -102,21 +102,23 @@ impl OrchestrationEngine {
         let mut results = Vec::new();
         let mut violations = Vec::new();
 
-        if let Some(res) = self.run_format_check(root) {
-            match res {
-                Ok(ok) => results.push(ok),
-                Err(err) => violations.push(err),
-            }
-        }
-
-        if let Some(res) = self.run_lint(root) {
-            match res {
-                Ok(ok) => results.push(ok),
-                Err(err) => violations.push(err),
-            }
-        }
+        self.collect_step(self.run_format_check(root), &mut results, &mut violations);
+        self.collect_step(self.run_lint(root), &mut results, &mut violations);
 
         (results, violations)
+    }
+
+    fn collect_step(
+        &self,
+        res: Option<Result<OrchestrationResult, OrchestrationViolation>>,
+        results: &mut Vec<OrchestrationResult>,
+        violations: &mut Vec<OrchestrationViolation>,
+    ) {
+        let Some(res) = res else { return };
+        match res {
+            Ok(ok) => results.push(ok),
+            Err(err) => violations.push(err),
+        }
     }
 
     fn execute_step(
@@ -127,78 +129,173 @@ impl OrchestrationEngine {
         let start = Instant::now();
         let tokens = shell_words_split(spec.cmd_str);
         if tokens.is_empty() {
-            return Err(OrchestrationViolation {
-                step: spec.step.to_string(),
-                command: spec.cmd_str.to_string(),
-                exit_code: Some(1),
-                output: "Empty command string".to_string(),
-                recommendation: spec.recommendation.to_string(),
-            });
+            return Err(empty_command_violation(&spec));
         }
 
-        let program = &tokens[0];
-        let args = &tokens[1..];
-
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        cmd.current_dir(root);
-
-        // Prepend ./node_modules/.bin to PATH for local project binaries (e.g. oxfmt, oxlint, biome, prettier)
-        let current_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths = std::env::split_paths(&current_path).collect::<Vec<_>>();
-        let local_bin = root.join("node_modules").join(".bin");
-        if local_bin.exists() {
-            paths.insert(0, local_bin);
-        }
-        if let Ok(new_path) = std::env::join_paths(paths) {
-            cmd.env("PATH", new_path);
-        }
+        let mut cmd = build_command(&tokens, root);
 
         match cmd.output() {
-            Ok(output) => {
-                let duration_ms = start.elapsed().as_millis();
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let combined = if stderr.is_empty() {
-                    stdout
-                } else if stdout.is_empty() {
-                    stderr
-                } else {
-                    format!("{}\n{}", stdout, stderr)
-                };
-
-                if output.status.success() {
-                    Ok(OrchestrationResult {
-                        step: spec.step.to_string(),
-                        command: spec.cmd_str.to_string(),
-                        success: true,
-                        duration_ms,
-                        output: combined.trim().to_string(),
-                    })
-                } else {
-                    Err(OrchestrationViolation {
-                        step: spec.step.to_string(),
-                        command: spec.cmd_str.to_string(),
-                        exit_code: output.status.code(),
-                        output: combined.trim().to_string(),
-                        recommendation: spec.recommendation.to_string(),
-                    })
-                }
-            }
-            Err(e) => Err(OrchestrationViolation {
-                step: spec.step.to_string(),
-                command: spec.cmd_str.to_string(),
-                exit_code: None,
-                output: format!("Failed to execute '{}': {}", program, e),
-                recommendation: format!(
-                    "Ensure '{}' is installed in project dependencies (e.g., package.json) or global PATH.",
-                    program
-                ),
-            }),
+            Ok(output) => finish_output(output, &spec, start),
+            Err(e) => Err(spawn_failure_violation(&spec, &tokens[0], &e)),
         }
     }
 }
 
-fn shell_words_split(cmd: &str) -> Vec<String> {
-    cmd.split_whitespace().map(|s| s.to_string()).collect()
+fn empty_command_violation(spec: &StepSpec) -> OrchestrationViolation {
+    OrchestrationViolation {
+        step: spec.step.to_string(),
+        command: spec.cmd_str.to_string(),
+        exit_code: Some(1),
+        output: "Empty command string".to_string(),
+        recommendation: spec.recommendation.to_string(),
+    }
+}
+
+fn build_command(tokens: &[String], root: &Path) -> Command {
+    let mut cmd = Command::new(&tokens[0]);
+    cmd.args(&tokens[1..]);
+    cmd.current_dir(root);
+    prepend_local_bin(&mut cmd, root);
+    cmd
+}
+
+fn prepend_local_bin(cmd: &mut Command, root: &Path) {
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = std::env::split_paths(&current_path).collect::<Vec<_>>();
+    let local_bin = root.join("node_modules").join(".bin");
+    if local_bin.exists() {
+        paths.insert(0, local_bin);
+    }
+    if let Ok(new_path) = std::env::join_paths(paths) {
+        cmd.env("PATH", new_path);
+    }
+}
+
+fn finish_output(
+    output: std::process::Output,
+    spec: &StepSpec,
+    start: Instant,
+) -> Result<OrchestrationResult, OrchestrationViolation> {
+    let duration_ms = start.elapsed().as_millis();
+    let combined = combine_output(&output);
+    if output.status.success() {
+        Ok(OrchestrationResult {
+            step: spec.step.to_string(),
+            command: spec.cmd_str.to_string(),
+            success: true,
+            duration_ms,
+            output: combined,
+        })
+    } else {
+        Err(OrchestrationViolation {
+            step: spec.step.to_string(),
+            command: spec.cmd_str.to_string(),
+            exit_code: output.status.code(),
+            output: combined,
+            recommendation: spec.recommendation.to_string(),
+        })
+    }
+}
+
+fn combine_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = if stderr.is_empty() {
+        stdout
+    } else if stdout.is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stdout, stderr)
+    };
+    combined.trim().to_string()
+}
+
+fn spawn_failure_violation(
+    spec: &StepSpec,
+    program: &str,
+    e: &std::io::Error,
+) -> OrchestrationViolation {
+    OrchestrationViolation {
+        step: spec.step.to_string(),
+        command: spec.cmd_str.to_string(),
+        exit_code: None,
+        output: format!("Failed to execute '{}': {}", program, e),
+        recommendation: format!(
+            "Ensure '{}' is installed in project dependencies (e.g., package.json) or global PATH.",
+            program
+        ),
+    }
+}
+
+pub fn shell_words_split(cmd: &str) -> Vec<String> {
+    // Quote-aware split so `--exact "my test"` and spaced paths survive.
+    let mut lex = ShellLexer::default();
+    for c in cmd.chars() {
+        lex.feed(c);
+    }
+    lex.finish()
+}
+
+#[derive(Default)]
+struct ShellLexer {
+    out: Vec<String>,
+    cur: String,
+    single: bool,
+    double: bool,
+    escaped: bool,
+    has_token: bool,
+}
+
+impl ShellLexer {
+    fn feed(&mut self, c: char) {
+        if self.escaped {
+            self.push_char(c);
+            self.escaped = false;
+            return;
+        }
+        if c == '\\' && !self.single {
+            self.escaped = true;
+            return;
+        }
+        if self.handle_quote(c) {
+            return;
+        }
+        if c.is_whitespace() && !self.single && !self.double {
+            self.flush_token();
+        } else {
+            self.push_char(c);
+        }
+    }
+
+    /// Returns true if `c` was a quote toggle.
+    fn handle_quote(&mut self, c: char) -> bool {
+        if c == '\'' && !self.double {
+            self.single = !self.single;
+            self.has_token = true;
+            true
+        } else if c == '"' && !self.single {
+            self.double = !self.double;
+            self.has_token = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn push_char(&mut self, c: char) {
+        self.cur.push(c);
+        self.has_token = true;
+    }
+
+    fn flush_token(&mut self) {
+        if self.has_token {
+            self.out.push(std::mem::take(&mut self.cur));
+            self.has_token = false;
+        }
+    }
+
+    fn finish(mut self) -> Vec<String> {
+        self.flush_token();
+        self.out
+    }
 }

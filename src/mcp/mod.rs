@@ -1,9 +1,8 @@
+use crate::commands::check::{AnalyzeInput, analyze_file_content};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
-use crate::engines::{
-    AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker, check_file_budgets,
-};
+use crate::engines::{AntiGamingScanner, CloneDetector, ComplexityAnalyzer, InvariantsChecker};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -31,17 +30,56 @@ struct JsonRpcResponse {
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
     let mut stdout = io::stdout();
 
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        let trimmed = line.trim();
+    // Support both newline-delimited JSON-RPC (simple clients) and
+    // LSP-style `Content-Length: N` framing (VS Code / strict clients).
+    loop {
+        let Some(message) = read_mcp_message(&mut stdin_lock)? else {
+            break;
+        };
+        let trimmed = message.trim();
         if !trimmed.is_empty() {
             process_mcp_line(trimmed, &mut stdout)?;
         }
     }
 
     Ok(())
+}
+
+fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
+    let mut first = String::new();
+    let n = reader.read_line(&mut first)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    // LSP framing: `Content-Length: <bytes>\r\n\r\n<json>`
+    if let Some(len) = parse_content_length(&first) {
+        // Consume remaining header lines until blank.
+        loop {
+            let mut hdr = String::new();
+            reader.read_line(&mut hdr)?;
+            if hdr.trim().is_empty() {
+                break;
+            }
+            // Allow re-specification (last wins) — uncommon but harmless.
+            if let Some(l) = parse_content_length(&hdr) {
+                let _ = l;
+            }
+        }
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        let s = String::from_utf8_lossy(&buf).to_string();
+        return Ok(Some(s));
+    }
+    Ok(Some(first))
+}
+
+fn parse_content_length(line: &str) -> Option<usize> {
+    let lower = line.to_ascii_lowercase();
+    let rest = lower.strip_prefix("content-length:")?;
+    rest.trim().parse::<usize>().ok()
 }
 
 fn process_mcp_line<W: Write>(line: &str, out: &mut W) -> Result<()> {
@@ -144,26 +182,88 @@ fn handle_tool_call(params: Option<&serde_json::Value>) -> serde_json::Value {
 }
 
 fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
-    let config = HardgateConfig::load_or_default(None).unwrap_or_default();
+    let config = match HardgateConfig::load_or_default(None) {
+        Ok(c) => c,
+        Err(e) => return tool_error(&format!("Failed to load hardgate.toml: {}", e)),
+    };
     let root = Path::new(".");
-    let (target_files, excluded_count) =
-        if let Some(arr) = args.get("paths").and_then(|p| p.as_array()) {
-            let files = arr
-                .iter()
-                .filter_map(|p| p.as_str().map(PathBuf::from))
-                .collect();
-            (files, 0)
-        } else {
-            let discovery = discover_files_with_exclusions(DiscoverOptions {
-                root,
-                diff_only: false,
-                exclusions: &config.budgets.files.exclusions.paths,
-            })
-            .unwrap_or_default();
-            (discovery.files, discovery.excluded_files.len())
-        };
+    if let Some(arr) = args.get("paths").and_then(|p| p.as_array()) {
+        return execute_scoped_check(arr, &config, root);
+    }
 
+    let discovery = discover_files_with_exclusions(DiscoverOptions {
+        root,
+        diff_only: false,
+        exclusions: &config.budgets.files.exclusions.paths,
+    })
+    .unwrap_or_default();
+    finish_check_response(CheckResponseInput {
+        target_files: &discovery.files,
+        excluded_count: discovery.excluded_files.len(),
+        config: &config,
+        root,
+        extra_advisories: Vec::new(),
+    })
+}
+
+fn execute_scoped_check(
+    arr: &[serde_json::Value],
+    config: &HardgateConfig,
+    root: &Path,
+) -> serde_json::Value {
+    let (files, missing) = partition_existing_paths(arr);
+    if files.is_empty() && !missing.is_empty() {
+        return tool_error(&format!("Files not found: {}", missing.join(", ")));
+    }
+    let mut skipped = Vec::new();
+    if !missing.is_empty() {
+        skipped.push(format!(
+            "Skipped {} missing path(s): {}.",
+            missing.len(),
+            missing.join(", ")
+        ));
+    }
+    finish_check_response(CheckResponseInput {
+        target_files: &files,
+        excluded_count: 0,
+        config,
+        root,
+        extra_advisories: skipped,
+    })
+}
+
+fn partition_existing_paths(arr: &[serde_json::Value]) -> (Vec<PathBuf>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut missing = Vec::new();
+    for p in arr.iter().filter_map(|p| p.as_str()) {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            files.push(pb);
+        } else {
+            missing.push(p.to_string());
+        }
+    }
+    (files, missing)
+}
+
+struct CheckResponseInput<'a> {
+    target_files: &'a [PathBuf],
+    excluded_count: usize,
+    config: &'a HardgateConfig,
+    root: &'a Path,
+    extra_advisories: Vec<String>,
+}
+
+fn finish_check_response(input: CheckResponseInput) -> serde_json::Value {
+    let CheckResponseInput {
+        target_files,
+        excluded_count,
+        config,
+        root,
+        mut extra_advisories,
+    } = input;
     let mut report = GateReport::new(config.gate.name.clone());
+    report.advisories.append(&mut extra_advisories);
     if excluded_count > 0 {
         let noun = if excluded_count == 1 { "file" } else { "files" };
         report.advisories.push(format!(
@@ -171,10 +271,34 @@ fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
             excluded_count, noun
         ));
     }
-    let func_count = analyze_file_list(&target_files, &config, root, &mut report);
+    let read_results = read_files_content(target_files);
+    let func_count = analyze_file_list(target_files, config, root, &mut report);
+    append_clone_results(&read_results, config, root, &mut report);
 
     report.finalize(target_files.len(), func_count, 0);
     json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
+}
+
+fn read_files_content(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    paths
+        .iter()
+        .filter_map(|p| fs::read_to_string(p).ok().map(|c| (p.clone(), c)))
+        .collect()
+}
+
+fn append_clone_results(
+    files: &[(PathBuf, String)],
+    config: &HardgateConfig,
+    root: &Path,
+    report: &mut GateReport,
+) {
+    if !config.clones.enabled || files.len() < 2 {
+        return;
+    }
+    let detector = CloneDetector::new(&config.clones);
+    report
+        .clone_violations
+        .extend(detector.detect_clones(files, root));
 }
 
 fn get_str_arg<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, serde_json::Value> {
@@ -193,7 +317,10 @@ fn execute_scan_tool(args: &serde_json::Value) -> serde_json::Value {
         return tool_error(&format!("File not found: {}", path_str));
     }
 
-    let config = HardgateConfig::load_or_default(None).unwrap_or_default();
+    let config = match HardgateConfig::load_or_default(None) {
+        Ok(c) => c,
+        Err(e) => return tool_error(&format!("Failed to load hardgate.toml: {}", e)),
+    };
     let mut report = GateReport::new(config.gate.name.clone());
     let func_count = analyze_file_list(&[path.to_path_buf()], &config, Path::new("."), &mut report);
 
@@ -213,30 +340,23 @@ fn analyze_file_list(
 
     for path in paths {
         let Ok(content) = fs::read_to_string(path) else {
+            report
+                .advisories
+                .push(format!("Skipped unreadable file `{}`.", path.display()));
             continue;
         };
-        report
-            .budget_violations
-            .extend(check_file_budgets(path, &config.budgets.files, root));
-        if config.anti_gaming.disallow_suppressions {
-            report
-                .suppression_violations
-                .extend(anti_gaming.scan_content(path, &content, root));
-        }
-        if config.invariants.enforce {
-            report
-                .invariant_violations
-                .extend(invariants.check_file(path, &content, root));
-        }
-        let mut analyzer = ComplexityAnalyzer::new();
-        let funcs = analyzer.analyze_file(path, &content, root);
+        let funcs = analyze_file_content(
+            AnalyzeInput {
+                path,
+                content: &content,
+                config,
+                root,
+                anti_gaming: &anti_gaming,
+                invariants: &invariants,
+            },
+            report,
+        );
         func_count += funcs.len();
-        report
-            .complexity_violations
-            .extend(ComplexityAnalyzer::check_violations(
-                &funcs,
-                &config.budgets.functions,
-            ));
     }
 
     func_count

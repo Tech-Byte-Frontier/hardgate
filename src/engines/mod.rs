@@ -7,6 +7,7 @@ pub mod dead_code;
 pub mod invariants;
 pub mod mutation;
 pub mod orchestration;
+pub mod util;
 
 pub use anti_gaming::{AntiGamingScanner, SuppressionViolation};
 pub use budgets::{BudgetViolation, check_file_budgets};

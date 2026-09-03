@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeadCodeViolation {
@@ -193,16 +194,50 @@ fn build_exclude_globs(user_excludes: &[String]) -> GlobSet {
     builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
+fn import_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?:import|from|require)\s*\(?['"]([^'"]+)['"]"#).expect("valid import regex")
+    })
+}
+
+fn rust_mod_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"\bmod\s+([a-zA-Z0-9_]+);"#).expect("valid mod regex"))
+}
+
+fn rust_use_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"\buse\s+(?:crate::|super::)?([a-zA-Z0-9_]+)"#).expect("valid use regex")
+    })
+}
+
+fn export_fn_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"export\s+(?:async\s+)?function\s+([a-zA-Z0-9_]+)"#)
+            .expect("valid export fn regex")
+    })
+}
+
+fn export_const_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"export\s+const\s+([a-zA-Z0-9_]+)"#).expect("valid export const regex")
+    })
+}
+
 fn collect_referenced_stems(file_contents: &[(PathBuf, String)]) -> HashSet<String> {
     let mut stems = HashSet::new();
-    let import_re = Regex::new(r#"(?:import|from|require)\s*\(?['"]([^'"]+)['"]"#).unwrap();
-    let rust_mod_re = Regex::new(r#"\bmod\s+([a-zA-Z0-9_]+);"#).unwrap();
-    let rust_use_re = Regex::new(r#"\buse\s+(?:crate::|super::)?([a-zA-Z0-9_]+)"#).unwrap();
+    let import_re = import_regex();
+    let rust_mod_re = rust_mod_regex();
+    let rust_use_re = rust_use_regex();
 
     for (_, content) in file_contents {
-        scan_import_stems(content, &import_re, &mut stems);
-        scan_rust_stems(content, &rust_mod_re, &mut stems);
-        scan_rust_stems(content, &rust_use_re, &mut stems);
+        scan_import_stems(content, import_re, &mut stems);
+        scan_rust_stems(content, rust_mod_re, &mut stems);
+        scan_rust_stems(content, rust_use_re, &mut stems);
     }
     stems
 }
@@ -242,8 +277,8 @@ fn is_js_or_ts_file(path: &Path) -> bool {
 }
 
 fn find_declared_exports(content: &str) -> Vec<(usize, String)> {
-    let export_fn_re = Regex::new(r#"export\s+(?:async\s+)?function\s+([a-zA-Z0-9_]+)"#).unwrap();
-    let export_const_re = Regex::new(r#"export\s+const\s+([a-zA-Z0-9_]+)"#).unwrap();
+    let export_fn_re = export_fn_regex();
+    let export_const_re = export_const_regex();
     let mut exports = Vec::new();
 
     for (idx, line) in content.lines().enumerate() {
@@ -269,8 +304,13 @@ fn is_symbol_referenced(
     if symbol == "default" || symbol.starts_with('_') {
         return true;
     }
+    // Word-boundary search: `used` must not match `unusedFunc`.
+    let pattern = format!(r"\b{}\b", regex::escape(symbol));
+    let Ok(re) = Regex::new(&pattern) else {
+        return true;
+    };
     for (other_path, other_content) in file_contents {
-        if other_path != current_file && other_content.contains(symbol) {
+        if other_path != current_file && re.is_match(other_content) {
             return true;
         }
     }

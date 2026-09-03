@@ -312,7 +312,13 @@ struct RollbackGuard<'a> {
 
 impl<'a> Drop for RollbackGuard<'a> {
     fn drop(&mut self) {
-        let _ = fs::write(self.file_path, self.original_bytes);
+        if let Err(e) = fs::write(self.file_path, self.original_bytes) {
+            eprintln!(
+                "hardgate: failed to restore {} after mutation: {}",
+                self.file_path.display(),
+                e
+            );
+        }
     }
 }
 
@@ -404,47 +410,109 @@ impl NativeMutationRunner {
     }
 
     fn execute_test_with_timeout(&self, cmd_str: &str, root: &Path) -> MutantOutcome {
-        let tokens: Vec<&str> = cmd_str.split_whitespace().collect();
+        let tokens = crate::engines::orchestration::shell_words_split(cmd_str);
         if tokens.is_empty() {
             return MutantOutcome::Error;
         }
 
-        let program = tokens[0];
-        let args = &tokens[1..];
-
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        cmd.current_dir(root);
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        let Ok(mut child) = cmd.spawn() else {
+        let Ok(mut child) = spawn_quiet(&tokens, root) else {
             return MutantOutcome::Error;
         };
 
-        let start = Instant::now();
-        let max_duration = Duration::from_secs(self.timeout_secs);
+        wait_for_child(&mut child, Duration::from_secs(self.timeout_secs))
+    }
+}
 
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    return if status.success() {
-                        MutantOutcome::Survived
-                    } else {
-                        MutantOutcome::Killed
-                    };
-                }
-                Ok(None) => {
-                    if start.elapsed() > max_duration {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return MutantOutcome::Timeout;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(_) => return MutantOutcome::Error,
-            }
+fn spawn_quiet(tokens: &[String], root: &Path) -> std::io::Result<std::process::Child> {
+    let mut cmd = Command::new(&tokens[0]);
+    cmd.args(&tokens[1..]);
+    cmd.current_dir(root);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.spawn()
+}
+
+fn wait_for_child(child: &mut std::process::Child, max_duration: Duration) -> MutantOutcome {
+    let start = Instant::now();
+    loop {
+        if let Some(outcome) = poll_child_once(child, start, max_duration) {
+            return outcome;
         }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+enum PollAction {
+    Done(MutantOutcome),
+    Waiting,
+}
+
+fn poll_child_once(
+    child: &mut std::process::Child,
+    start: Instant,
+    max_duration: Duration,
+) -> Option<MutantOutcome> {
+    match poll_action(child, start, max_duration) {
+        PollAction::Done(outcome) => Some(outcome),
+        PollAction::Waiting => None,
+    }
+}
+
+fn poll_action(
+    child: &mut std::process::Child,
+    start: Instant,
+    max_duration: Duration,
+) -> PollAction {
+    let waited = child.try_wait();
+    map_wait_result(waited, child, start, max_duration)
+}
+
+fn map_wait_result(
+    waited: std::io::Result<Option<std::process::ExitStatus>>,
+    child: &mut std::process::Child,
+    start: Instant,
+    max_duration: Duration,
+) -> PollAction {
+    let Ok(opt) = waited else {
+        return PollAction::Done(MutantOutcome::Error);
+    };
+    let Some(status) = opt else {
+        return map_pending(child, start, max_duration);
+    };
+    PollAction::Done(outcome_from_status(&status))
+}
+
+fn map_pending(
+    child: &mut std::process::Child,
+    start: Instant,
+    max_duration: Duration,
+) -> PollAction {
+    if let Some(outcome) = check_timeout(child, start, max_duration) {
+        PollAction::Done(outcome)
+    } else {
+        PollAction::Waiting
+    }
+}
+
+fn check_timeout(
+    child: &mut std::process::Child,
+    start: Instant,
+    max_duration: Duration,
+) -> Option<MutantOutcome> {
+    if start.elapsed() > max_duration {
+        let _ = child.kill();
+        let _ = child.wait();
+        Some(MutantOutcome::Timeout)
+    } else {
+        None
+    }
+}
+
+fn outcome_from_status(status: &std::process::ExitStatus) -> MutantOutcome {
+    if status.success() {
+        MutantOutcome::Survived
+    } else {
+        MutantOutcome::Killed
     }
 }
 

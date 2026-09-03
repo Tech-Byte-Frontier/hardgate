@@ -44,12 +44,24 @@ pub fn verify_coverage(
     let Some(ref path_str) = cov_path else { return };
     let p = Path::new(path_str);
     if !p.exists() {
+        report.advisories.push(format!(
+            "Coverage report `{}` not found; skipping coverage gate.",
+            path_str
+        ));
         return;
     }
     let scorer = CoverageScorer::new(&config.coverage);
-    if let Ok(cov_map) = scorer.parse_lcov(p) {
-        let cov_violations = scorer.evaluate(&cov_map, functions, Path::new("."));
-        report.coverage_violations.extend(cov_violations);
+    match scorer.parse_lcov(p) {
+        Ok(cov_map) => {
+            let cov_violations = scorer.evaluate(&cov_map, functions, Path::new("."));
+            report.coverage_violations.extend(cov_violations);
+        }
+        Err(e) => {
+            report.advisories.push(format!(
+                "Failed to parse coverage report `{}`: {}; skipping coverage gate.",
+                path_str, e
+            ));
+        }
     }
 }
 
@@ -66,9 +78,19 @@ pub fn verify_mutation(
     let gatekeeper = MutationGatekeeper::new(&config.mutation);
     for r_str in reports {
         let p = Path::new(&r_str);
-        if p.exists() {
-            if let Ok(m_violations) = gatekeeper.evaluate_report(p) {
-                report.mutation_violations.extend(m_violations);
+        if !p.exists() {
+            report
+                .advisories
+                .push(format!("Mutation report `{}` not found; skipping.", r_str));
+            continue;
+        }
+        match gatekeeper.evaluate_report(p) {
+            Ok(m_violations) => report.mutation_violations.extend(m_violations),
+            Err(e) => {
+                report.advisories.push(format!(
+                    "Failed to parse mutation report `{}`: {}; skipping.",
+                    r_str, e
+                ));
             }
         }
     }

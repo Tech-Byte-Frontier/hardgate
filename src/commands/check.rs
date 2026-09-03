@@ -3,8 +3,9 @@ use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
 use crate::engines::{
-    AntiGamingScanner, CloneDetector, ComplexityAnalyzer, DeadCodeAnalyzer, FunctionMetrics,
-    InvariantsChecker, OrchestrationEngine, check_file_budgets,
+    AntiGamingScanner, BudgetViolation, CloneDetector, ComplexityAnalyzer, ComplexityViolation,
+    DeadCodeAnalyzer, FunctionMetrics, InvariantViolation, InvariantsChecker, OrchestrationEngine,
+    SuppressionViolation, check_file_budgets,
 };
 use anyhow::Result;
 use colored::*;
@@ -156,33 +157,44 @@ fn run_file_analysis(
         })
         .collect();
 
+    // Parallelize per-file analysis (budgets + suppressions + invariants +
+    // complexity) — previously serial. Collect then merge serially into report
+    // to avoid lock contention.
+    type FileAnalysis = (
+        Vec<BudgetViolation>,
+        Vec<SuppressionViolation>,
+        Vec<InvariantViolation>,
+        Vec<FunctionMetrics>,
+        Vec<ComplexityViolation>,
+    );
+    let analyzed: Vec<FileAnalysis> = read_results
+        .par_iter()
+        .map(|(path, content)| {
+            let budgets = check_file_budgets(path, &config.budgets.files, root);
+            let suppressions = if config.anti_gaming.disallow_suppressions {
+                anti_gaming.scan_content(path, content, root)
+            } else {
+                Vec::new()
+            };
+            let inv = if config.invariants.enforce {
+                invariants.check_file(path, content, root)
+            } else {
+                Vec::new()
+            };
+            let mut analyzer = ComplexityAnalyzer::new();
+            let functions = analyzer.analyze_file(path, content, root);
+            let violations =
+                ComplexityAnalyzer::check_violations(&functions, &config.budgets.functions);
+            (budgets, suppressions, inv, functions, violations)
+        })
+        .collect();
+
     let mut all_functions = Vec::new();
-
-    for (path, content) in &read_results {
-        report
-            .budget_violations
-            .extend(check_file_budgets(path, &config.budgets.files, root));
-
-        if config.anti_gaming.disallow_suppressions {
-            report
-                .suppression_violations
-                .extend(anti_gaming.scan_content(path, content, root));
-        }
-
-        if config.invariants.enforce {
-            report
-                .invariant_violations
-                .extend(invariants.check_file(path, content, root));
-        }
-
-        let mut analyzer = ComplexityAnalyzer::new();
-        let functions = analyzer.analyze_file(path, content, root);
-        report
-            .complexity_violations
-            .extend(ComplexityAnalyzer::check_violations(
-                &functions,
-                &config.budgets.functions,
-            ));
+    for (budgets, suppressions, inv, functions, violations) in analyzed {
+        report.budget_violations.extend(budgets);
+        report.suppression_violations.extend(suppressions);
+        report.invariant_violations.extend(inv);
+        report.complexity_violations.extend(violations);
         all_functions.extend(functions);
     }
 
@@ -206,4 +218,51 @@ pub fn output_report(report: &GateReport, format: Option<&str>) {
         Some("json") => println!("{}", report.render_json()),
         _ => print!("{}", report.render_terminal()),
     }
+}
+
+/// Shared single-file analysis used by `check`, `scan`, and the MCP server.
+/// Runs budgets + suppressions + invariants + complexity and appends to `report`.
+pub struct AnalyzeInput<'a> {
+    pub path: &'a Path,
+    pub content: &'a str,
+    pub config: &'a HardgateConfig,
+    pub root: &'a Path,
+    pub anti_gaming: &'a AntiGamingScanner,
+    pub invariants: &'a InvariantsChecker,
+}
+
+pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec<FunctionMetrics> {
+    let AnalyzeInput {
+        path,
+        content,
+        config,
+        root,
+        anti_gaming,
+        invariants,
+    } = input;
+    report
+        .budget_violations
+        .extend(check_file_budgets(path, &config.budgets.files, root));
+
+    if config.anti_gaming.disallow_suppressions {
+        report
+            .suppression_violations
+            .extend(anti_gaming.scan_content(path, content, root));
+    }
+
+    if config.invariants.enforce {
+        report
+            .invariant_violations
+            .extend(invariants.check_file(path, content, root));
+    }
+
+    let mut analyzer = ComplexityAnalyzer::new();
+    let functions = analyzer.analyze_file(path, content, root);
+    report
+        .complexity_violations
+        .extend(ComplexityAnalyzer::check_violations(
+            &functions,
+            &config.budgets.functions,
+        ));
+    functions
 }

@@ -18,6 +18,9 @@ pub struct AnalysisState {
     pub cognitive: u32,
     pub max_nesting_depth: usize,
     pub statements: usize,
+    pub assignments: usize,
+    pub branches: usize,
+    pub calls: usize,
     pub operators: HashSet<String>,
     pub operands: HashSet<String>,
     pub total_operators: usize,
@@ -81,6 +84,7 @@ pub fn walk_node(
     check_boolean_operator(node, ctx.source, kind, state);
     check_statement(kind, state);
     check_halstead(node, ctx.source, kind, state);
+    check_abc(kind, state);
 
     let next_nesting = if is_branch {
         let new_depth = current_nesting + 1;
@@ -106,53 +110,94 @@ fn check_branch(kind: &str) -> bool {
         kind,
         "if_expression"
             | "if_statement"
+            | "elif_clause"
+            | "else_if_clause"
             | "while_expression"
             | "while_statement"
             | "for_expression"
             | "for_statement"
             | "for_in_statement"
+            | "for_clause"
             | "loop_expression"
+            | "match_expression"
             | "match_arm"
+            | "switch_statement"
             | "switch_case"
             | "expression_case"
             | "catch_clause"
+            | "except_clause"
+            | "exception_handler"
             | "ternary_expression"
             | "conditional_expression"
     )
 }
 
 fn human_readable_branch(kind: &str) -> &'static str {
-    match kind {
-        "if_expression" | "if_statement" => "conditional branch (`if`)",
-        "while_expression" | "while_statement" => "loop (`while`)",
-        "for_expression" | "for_statement" | "for_in_statement" => "loop (`for`)",
-        "loop_expression" => "infinite loop (`loop`)",
-        "match_arm" => "pattern match arm (`match`)",
-        "switch_case" | "expression_case" => "switch case",
-        "catch_clause" => "exception handler (`catch`)",
-        "ternary_expression" | "conditional_expression" => "ternary operator (`? :`)",
-        _ => "branching construct",
+    // Table lookup keeps cyclomatic low despite many node kinds.
+    const TABLE: &[(&[&str], &str)] = &[
+        (
+            &["if_expression", "if_statement"],
+            "conditional branch (`if`)",
+        ),
+        (
+            &["elif_clause", "else_if_clause"],
+            "conditional branch (`elif`)",
+        ),
+        (&["while_expression", "while_statement"], "loop (`while`)"),
+        (
+            &[
+                "for_expression",
+                "for_statement",
+                "for_in_statement",
+                "for_clause",
+            ],
+            "loop (`for`)",
+        ),
+        (&["loop_expression"], "infinite loop (`loop`)"),
+        (&["match_expression"], "pattern match (`match`)"),
+        (&["match_arm"], "pattern match arm (`match`)"),
+        (&["switch_statement"], "switch (`switch`)"),
+        (&["switch_case", "expression_case"], "switch case"),
+        (
+            &["catch_clause", "except_clause", "exception_handler"],
+            "exception handler (`catch`)",
+        ),
+        (
+            &["ternary_expression", "conditional_expression"],
+            "ternary operator (`? :`)",
+        ),
+    ];
+    for (kinds, desc) in TABLE {
+        if kinds.contains(&kind) {
+            return desc;
+        }
     }
+    "branching construct"
 }
 
 fn check_boolean_operator(node: Node, source: &[u8], kind: &str, state: &mut AnalysisState) {
     if kind != "binary_expression" && kind != "boolean_operator" {
         return;
     }
-    let Ok(text) = node.utf8_text(source) else {
-        return;
-    };
-    let op_label = if text.contains("&&") {
-        Some("&&")
-    } else if text.contains("||") {
-        Some("||")
-    } else if text.contains(" and ") {
-        Some("and")
-    } else if text.contains(" or ") {
-        Some("or")
-    } else {
-        None
-    };
+    // Prefer the direct operator token over whole-subtree text so nested
+    // `a && b || c` counts each operator once instead of double-counting
+    // the outer node (whose text contains both operators).
+    let op_label = direct_boolean_operator(node, source).or_else(|| {
+        let Ok(text) = node.utf8_text(source) else {
+            return None;
+        };
+        if text.contains("&&") {
+            Some("&&")
+        } else if text.contains("||") {
+            Some("||")
+        } else if text.contains(" and ") {
+            Some("and")
+        } else if text.contains(" or ") {
+            Some("or")
+        } else {
+            None
+        }
+    });
 
     if let Some(op) = op_label {
         let line = node.start_position().row + 1;
@@ -179,10 +224,64 @@ fn check_boolean_operator(node: Node, source: &[u8], kind: &str, state: &mut Ana
     }
 }
 
+fn direct_boolean_operator(node: Node, source: &[u8]) -> Option<&'static str> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(op) = classify_operator_token(child.kind()) {
+            return Some(op);
+        }
+        if child.child_count() == 0 {
+            if let Ok(t) = child.utf8_text(source) {
+                if let Some(op) = classify_operator_token(t) {
+                    return Some(op);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn classify_operator_token(token: &str) -> Option<&'static str> {
+    // Single table keeps branch count low.
+    const OPS: &[(&str, &str)] = &[("&&", "&&"), ("||", "||"), ("and", "and"), ("or", "or")];
+    for (k, v) in OPS {
+        if *k == token {
+            return Some(v);
+        }
+    }
+    None
+}
+
 fn check_statement(kind: &str, state: &mut AnalysisState) {
-    if kind.ends_with("_statement") || kind.ends_with("_expression") {
+    // Count statements, not every sub-expression. The old
+    // `ends_with("_expression")` inflated counts ~3x (every `a + b`,
+    // call arg, etc.), making `max_statements = 30` fail on ordinary code.
+    if kind.ends_with("_statement")
+        || kind.ends_with("_declaration")
+        || kind.ends_with("_definition")
+    {
         state.statements += 1;
     }
+}
+
+fn check_abc(kind: &str, state: &mut AnalysisState) {
+    // ABC metric: Assignments, Branches, Calls.
+    match kind {
+        "assignment_expression" | "augmented_assignment_expression" | "assignment" => {
+            state.assignments += 1;
+        }
+        "call_expression" | "call" | "method_call" => {
+            state.calls += 1;
+        }
+        _ => {}
+    }
+    if check_branch(kind) {
+        state.branches += 1;
+    }
+}
+
+pub fn abc_score(assignments: usize, branches: usize, calls: usize) -> f64 {
+    ((assignments * assignments + branches * branches + calls * calls) as f64).sqrt()
 }
 
 fn check_halstead(node: Node, source: &[u8], kind: &str, state: &mut AnalysisState) {

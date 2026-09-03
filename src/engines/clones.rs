@@ -1,4 +1,5 @@
 use crate::config::CloneConfig;
+use crate::engines::util::strip_slash_comment;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,6 +22,8 @@ struct TokenLocation {
     file: PathBuf,
     start_line: usize,
     end_line: usize,
+    start_idx: usize,
+    end_idx: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -34,9 +37,13 @@ struct RawCloneMatch {
     file_a: PathBuf,
     start_a: usize,
     end_a: usize,
+    start_idx_a: usize,
+    end_idx_a: usize,
     file_b: PathBuf,
     start_b: usize,
     end_b: usize,
+    start_idx_b: usize,
+    end_idx_b: usize,
 }
 
 struct CloneIndexState<'a> {
@@ -137,6 +144,8 @@ impl CloneDetector {
                     file: rel_path.to_path_buf(),
                     start_line,
                     end_line,
+                    start_idx: i,
+                    end_idx: i + self.min_tokens - 1,
                 };
                 check_and_record_window(&loc, rolling_hash, self.min_lines, state);
             }
@@ -187,9 +196,13 @@ fn check_and_record_window(
                     file_a: prev.file.clone(),
                     start_a: prev.start_line,
                     end_a: prev.end_line,
+                    start_idx_a: prev.start_idx,
+                    end_idx_a: prev.end_idx,
                     file_b: loc.file.clone(),
                     start_b: loc.start_line,
                     end_b: loc.end_line,
+                    start_idx_b: loc.start_idx,
+                    end_idx_b: loc.end_idx,
                 });
             }
         }
@@ -227,6 +240,10 @@ fn coalesce_matches(
             {
                 last.end_a = last.end_a.max(m.end_a);
                 last.end_b = last.end_b.max(m.end_b);
+                last.end_idx_a = last.end_idx_a.max(m.end_idx_a);
+                last.end_idx_b = last.end_idx_b.max(m.end_idx_b);
+                last.start_idx_a = last.start_idx_a.min(m.start_idx_a);
+                last.start_idx_b = last.start_idx_b.min(m.start_idx_b);
                 merged = true;
             }
         }
@@ -252,18 +269,26 @@ fn build_violation(
     if span < min_lines {
         return None;
     }
+    // Actual token span of the merged clone (windows overlap by min_tokens-1,
+    // so merged length = max_end - min_start + 1), not the config threshold.
+    let tokens_a = c.end_idx_a.saturating_sub(c.start_idx_a) + 1;
+    let tokens_b = c.end_idx_b.saturating_sub(c.start_idx_b) + 1;
+    let actual_tokens = tokens_a.max(tokens_b);
+    if actual_tokens < min_tokens {
+        return None;
+    }
 
     Some(CloneViolation {
         file_a: c.file_a.clone(),
         lines_a: (c.start_a, c.end_a),
         file_b: c.file_b.clone(),
         lines_b: (c.start_b, c.end_b),
-        tokens: min_tokens,
+        tokens: actual_tokens,
         lines: span,
         message: format!(
             "Duplicate code clone ({} lines, ~{} tokens) between `{}:{}-{}` and `{}:{}-{}`",
             span,
-            min_tokens,
+            actual_tokens,
             c.file_a.display(),
             c.start_a,
             c.end_a,
@@ -296,7 +321,10 @@ fn tokenize(content: &str) -> Vec<Token> {
         if trimmed.is_empty() || is_comment_start(trimmed) {
             continue;
         }
-        tokenize_line(line, line_num, &mut tokens);
+        // Strip trailing `//` comments outside string literals so inline
+        // comments don't pollute the rolling hash.
+        let code = strip_slash_comment(line);
+        tokenize_line(&code, line_num, &mut tokens);
     }
     tokens
 }

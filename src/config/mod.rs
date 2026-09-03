@@ -227,10 +227,14 @@ impl HardgateConfig {
         let mut config: HardgateConfig = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file at {:?}", config_path))?;
 
-        // Apply preset base defaults if preset is not custom
+        // Apply preset base defaults if preset is not custom.
+        // Merge is presence-based: only sections/keys present in the user's
+        // TOML override the preset base, so explicit `enabled = false` is
+        // honored while omitted sections keep preset scaling (e.g. balanced).
         if config.gate.preset != Preset::Custom {
+            let raw_table: toml::Table = toml::from_str(&content).unwrap_or_default();
             let mut base = config.gate.preset.to_default_config();
-            merge_overrides(&mut base, config);
+            merge_overrides(&mut base, config, &raw_table);
             config = base;
         }
 
@@ -242,54 +246,87 @@ impl HardgateConfig {
     }
 }
 
-fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig) {
-    merge_static_overrides(base, &user);
-    merge_dynamic_overrides(base, &user);
-    base.gate = user.gate;
-    merge_file_budgets(&mut base.budgets.files, user.budgets.files);
-    merge_func_budgets(&mut base.budgets.functions, user.budgets.functions);
+fn lookup_table<'a>(root: &'a toml::Table, path: &[&str]) -> Option<&'a toml::Table> {
+    let mut cur = root;
+    for key in path {
+        let v = cur.get(*key)?;
+        cur = v.as_table()?;
+    }
+    Some(cur)
 }
 
-fn merge_static_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
-    if !user.anti_gaming.custom_forbidden_tokens.is_empty() {
+fn has_section(root: &toml::Table, path: &[&str]) -> bool {
+    lookup_table(root, path).is_some()
+}
+
+fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig, raw: &toml::Table) {
+    merge_static_overrides(base, &user, raw);
+    merge_dynamic_overrides(base, &user, raw);
+    if has_section(raw, &["gate"]) {
+        base.gate = user.gate;
+    }
+    merge_file_budgets(&mut base.budgets.files, user.budgets.files, raw);
+    merge_func_budgets(&mut base.budgets.functions, user.budgets.functions, raw);
+}
+
+fn merge_static_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
+    if has_section(raw, &["anti_gaming"]) {
+        base.anti_gaming = user.anti_gaming.clone();
+    } else if !user.anti_gaming.custom_forbidden_tokens.is_empty() {
         base.anti_gaming.custom_forbidden_tokens = user.anti_gaming.custom_forbidden_tokens.clone();
     }
-    if !user.invariants.rules.is_empty() {
-        base.invariants.rules = user.invariants.rules.clone();
+    if has_section(raw, &["invariants"]) || !user.invariants.rules.is_empty() {
+        // Presence wins; fallback preserves pre-presence partial files.
+        if has_section(raw, &["invariants"]) {
+            base.invariants = user.invariants.clone();
+        } else {
+            base.invariants.rules = user.invariants.rules.clone();
+        }
     }
-    if user.clones.excludes.is_some() {
+    if has_section(raw, &["clones"]) || user.clones.excludes.is_some() {
         base.clones = user.clones.clone();
     }
 }
 
-fn merge_dynamic_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
-    merge_verification_overrides(base, user);
-    merge_tooling_overrides(base, user);
+fn merge_dynamic_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
+    merge_verification_overrides(base, user, raw);
+    merge_tooling_overrides(base, user, raw);
 }
 
-fn merge_verification_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
-    if user.coverage.report.is_some() || user.coverage.enabled {
+fn merge_verification_overrides(
+    base: &mut HardgateConfig,
+    user: &HardgateConfig,
+    raw: &toml::Table,
+) {
+    if has_section(raw, &["coverage"]) || user.coverage.report.is_some() || user.coverage.enabled {
         base.coverage = user.coverage.clone();
     }
-    if user.mutation.reports.is_some() || user.mutation.test_cmd.is_some() || user.mutation.enabled
+    if has_section(raw, &["mutation"])
+        || user.mutation.reports.is_some()
+        || user.mutation.test_cmd.is_some()
+        || user.mutation.enabled
     {
         base.mutation = user.mutation.clone();
     }
 }
 
-fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig) {
-    if user.orchestration.format_check.is_some()
+fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
+    if has_section(raw, &["orchestration"])
+        || user.orchestration.format_check.is_some()
         || user.orchestration.format.is_some()
         || user.orchestration.lint.is_some()
     {
         base.orchestration = user.orchestration.clone();
     }
-    if user.analysis.dead_code.enabled || !user.analysis.dead_code.entry_points.is_empty() {
+    if has_section(raw, &["analysis", "dead_code"])
+        || user.analysis.dead_code.enabled
+        || !user.analysis.dead_code.entry_points.is_empty()
+    {
         base.analysis = user.analysis.clone();
     }
 }
 
-fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets) {
+fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets, _raw: &toml::Table) {
     if user.max_bytes.is_some() {
         base.max_bytes = user.max_bytes;
     }
@@ -301,7 +338,10 @@ fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets) {
     }
 }
 
-fn merge_func_budgets(base: &mut FunctionBudgets, user: FunctionBudgets) {
+fn merge_func_budgets(base: &mut FunctionBudgets, user: FunctionBudgets, _raw: &toml::Table) {
+    // All fields are `Option`: omitted keys deserialize to `None`, so
+    // `is_some` alone distinguishes explicit user values from absent ones.
+    // This also adds the previously missing `max_abc` / `max_statements`.
     if user.max_cyclomatic.is_some() {
         base.max_cyclomatic = user.max_cyclomatic;
     }
@@ -311,11 +351,17 @@ fn merge_func_budgets(base: &mut FunctionBudgets, user: FunctionBudgets) {
     if user.max_halstead_difficulty.is_some() {
         base.max_halstead_difficulty = user.max_halstead_difficulty;
     }
+    if user.max_abc.is_some() {
+        base.max_abc = user.max_abc;
+    }
     if user.max_parameters.is_some() {
         base.max_parameters = user.max_parameters;
     }
     if user.max_lines.is_some() {
         base.max_lines = user.max_lines;
+    }
+    if user.max_statements.is_some() {
+        base.max_statements = user.max_statements;
     }
     if user.max_nesting_depth.is_some() {
         base.max_nesting_depth = user.max_nesting_depth;

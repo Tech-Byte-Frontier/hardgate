@@ -186,10 +186,9 @@ impl CoverageScorer {
         let max_crap = self.config.max_crap_score.unwrap_or(25.0);
 
         for func in functions {
-            let cov_opt = coverage_map.iter().find(|(path, _)| {
-                path.to_string_lossy()
-                    .ends_with(func.file.to_string_lossy().as_ref())
-            });
+            let cov_opt = coverage_map
+                .iter()
+                .find(|(path, _)| coverage_path_matches(path, &func.file));
 
             if let Some((_, cov)) = cov_opt {
                 let cov_ratio =
@@ -226,9 +225,10 @@ impl CoverageScorer {
     ) {
         if let Some(ref critical_paths) = self.config.critical_paths {
             for cp in critical_paths {
+                let cp_path = Path::new(cp);
                 let matching = coverage_map
                     .iter()
-                    .find(|(p, _)| p.to_string_lossy().ends_with(cp.as_str()));
+                    .find(|(p, _)| coverage_path_matches(p, cp_path));
                 if let Some((path, cov)) = matching {
                     let pct = cov.line_coverage_percent();
                     if pct < 100.0 {
@@ -262,7 +262,9 @@ fn parse_lcov_metric_line(cov: &mut FileCoverage, line: &str) {
 }
 
 fn parse_da_line(cov: &mut FileCoverage, rest: &str) {
-    let Some((l_str, h_str)) = rest.split_once(',') else {
+    // DA:<line>,<hits>[,<checksum>] — checksum is optional (lcov --checksum).
+    let mut parts = rest.split(',');
+    let (Some(l_str), Some(h_str)) = (parts.next(), parts.next()) else {
         return;
     };
     let (Ok(line_num), Ok(hits)) = (l_str.parse::<usize>(), h_str.parse::<usize>()) else {
@@ -309,8 +311,26 @@ fn calculate_function_coverage_ratio(
     if executable > 0 {
         hit as f64 / executable as f64
     } else {
-        1.0
+        // File is in the report but has no executable lines in this range:
+        // treat as uncovered (0.0) instead of hiding it as 1.0.
+        0.0
     }
+}
+
+fn normalize_cov_path(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s.strip_prefix("./").unwrap_or(&s);
+    // Strip common absolute prefixes so `/repo/src/foo.rs` matches `src/foo.rs`.
+    s.to_string()
+}
+
+fn coverage_path_matches(report_path: &Path, func_path: &Path) -> bool {
+    let a = normalize_cov_path(report_path);
+    let b = normalize_cov_path(func_path);
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a == b || a.ends_with(b.as_str()) || b.ends_with(a.as_str())
 }
 
 fn calc_pct(hit: usize, found: usize) -> f64 {

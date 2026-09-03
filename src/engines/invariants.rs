@@ -1,4 +1,5 @@
 use crate::config::InvariantRule;
+use crate::engines::util::{is_offset_inside_string, strip_line_comment};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,8 @@ impl InvariantsChecker {
         let import_regexes = vec![
             Regex::new(r#"(?:import|from)\s+['"]([^'"]+)['"]"#).unwrap(),
             Regex::new(r#"(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap(),
-            Regex::new(r#"\buse\s+([a-zA-Z0-9_:]+)"#).unwrap(),
+            // Rust: `use crate::db::pool;`, `use self::x::{A, B};`, `use super::y::*;`
+            Regex::new(r#"\buse\s+([^;]+);"#).unwrap(),
             Regex::new(r#"(?:from\s+([a-zA-Z0-9_\.]+)\s+import|import\s+([a-zA-Z0-9_\.]+))"#)
                 .unwrap(),
         ];
@@ -82,9 +84,13 @@ impl InvariantsChecker {
     ) {
         for (idx, line) in file.1.lines().enumerate() {
             let line_number = idx + 1;
-            let trimmed = line.trim();
+            // Strip inline `//` comments (outside strings) so `// use evil`
+            // doesn't flag, but real imports still do. String literals are
+            // preserved to avoid false positives from `"use evil"` data.
+            let code = strip_line_comment(line);
+            let trimmed = code.trim();
 
-            if is_comment_line(trimmed) {
+            if trimmed.is_empty() || is_comment_line(trimmed) {
                 continue;
             }
 
@@ -102,22 +108,56 @@ impl InvariantsChecker {
     }
 
     fn check_imports(&self, ctx: &CheckContext, violations: &mut Vec<InvariantViolation>) {
-        let Some(ref imp_globs) = ctx.rule.disallow_imports else {
+        let Some(ref _imp) = ctx.rule.disallow_imports else {
             return;
         };
 
         for re in &self.import_regexes {
             for cap in re.captures_iter(ctx.line) {
-                for i in 1..cap.len() {
-                    let Some(m) = cap.get(i) else { continue };
-                    let import_str = m.as_str();
-                    if imp_globs.is_match(import_str) {
-                        violations.push(create_violation(ctx, "Disallowed Import", import_str));
-                    }
-                }
+                self.check_single_import_match(&cap, ctx, violations);
             }
         }
     }
+
+    fn check_single_import_match(
+        &self,
+        cap: &regex::Captures,
+        ctx: &CheckContext,
+        violations: &mut Vec<InvariantViolation>,
+    ) {
+        let Some(ref imp_globs) = ctx.rule.disallow_imports else {
+            return;
+        };
+        let whole = cap.get(0).map(|m| m.start()).unwrap_or(0);
+        // Skip keywords inside string literals (data, not imports).
+        if is_offset_inside_string(ctx.line, whole) {
+            return;
+        }
+        for i in 1..cap.len() {
+            let Some(m) = cap.get(i) else { continue };
+            let import_str = m.as_str().trim();
+            if import_str.is_empty() {
+                continue;
+            }
+            if check_candidate_blocked(import_str, imp_globs) {
+                let candidate = expand_import_candidates(import_str)
+                    .into_iter()
+                    .find(|c| {
+                        imp_globs.is_match(c)
+                            || imp_globs.is_match(normalize_rust_import(c).as_str())
+                    })
+                    .unwrap_or_else(|| import_str.to_string());
+                violations.push(create_violation(ctx, "Disallowed Import", &candidate));
+                break;
+            }
+        }
+    }
+}
+
+fn check_candidate_blocked(import_str: &str, imp_globs: &GlobSet) -> bool {
+    expand_import_candidates(import_str)
+        .iter()
+        .any(|c| imp_globs.is_match(c) || imp_globs.is_match(normalize_rust_import(c).as_str()))
 }
 
 fn compile_rule(rule: &InvariantRule) -> CompiledInvariantRule {
@@ -208,4 +248,55 @@ fn create_violation(ctx: &CheckContext, vtype: &str, target: &str) -> InvariantV
 
 fn is_comment_line(trimmed: &str) -> bool {
     trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("/*")
+}
+
+fn expand_import_candidates(import: &str) -> Vec<String> {
+    let base = import.trim().trim_end_matches(',').trim().to_string();
+    if base.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![base.clone()];
+    push_brace_expansions(&base, &mut out);
+    push_comma_expansions(&base, &mut out);
+    out
+}
+
+fn push_brace_expansions(base: &str, out: &mut Vec<String>) {
+    let Some((head, tail)) = base.split_once('{') else {
+        return;
+    };
+    for part in tail.trim_end_matches('}').split(',') {
+        let p = part
+            .trim()
+            .trim_matches(|c| c == ' ' || c == '\'' || c == '"');
+        if !p.is_empty() {
+            out.push(format!("{}{}", head.trim(), p));
+        }
+    }
+}
+
+fn push_comma_expansions(base: &str, out: &mut Vec<String>) {
+    if base.contains('{') || !base.contains(',') {
+        return;
+    }
+    for part in base.split(',') {
+        let p = part.trim().to_string();
+        if !p.is_empty() && p != base {
+            out.push(p);
+        }
+    }
+}
+
+fn normalize_rust_import(import: &str) -> String {
+    // `crate::db::pool` -> `db/pool`, `super::x` -> `x`, `self::y` -> `y`,
+    // `a::B` -> `a/B` so glob `src/db/**` and `*db*` both have a chance.
+    let mut s = import.trim().to_string();
+    for prefix in ["crate::", "self::", "super::"] {
+        while let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.to_string();
+        }
+    }
+    s = s.replace("::", "/");
+    s = s.replace(['{', '}', '*', ' ', '\'', '"'], "");
+    s
 }

@@ -1,4 +1,5 @@
 use crate::config::FileBudgets;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,13 +19,8 @@ pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Ve
     let rel_path = path.strip_prefix(root).unwrap_or(path);
     let rel_str = rel_path.to_string_lossy();
 
-    // Check if path is in exclusions
-    if budgets
-        .exclusions
-        .paths
-        .iter()
-        .any(|p| p == rel_str.as_ref())
-    {
+    // Check if path is in exclusions (exact match for back-compat + glob for patterns like src/generated/**)
+    if is_budget_excluded(rel_path, &rel_str, &budgets.exclusions.paths) {
         return violations;
     }
 
@@ -76,4 +72,27 @@ pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Ve
     }
 
     violations
+}
+
+fn is_budget_excluded(rel_path: &Path, rel_str: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    // Fast path: exact match (back-compat with existing configs/tests).
+    if patterns.iter().any(|p| p == rel_str) {
+        return true;
+    }
+    let mut builder = GlobSetBuilder::new();
+    let mut has_glob = false;
+    for p in patterns {
+        if let Ok(g) = Glob::new(p) {
+            builder.add(g);
+            has_glob = true;
+        }
+    }
+    if !has_glob {
+        return false;
+    }
+    let set = builder.build().unwrap_or_else(|_| GlobSet::empty());
+    set.is_match(rel_path) || set.is_match(rel_str)
 }

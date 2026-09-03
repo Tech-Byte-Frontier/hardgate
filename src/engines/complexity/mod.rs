@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 pub use walker::ComplexityContribution;
-use walker::{AnalysisState, WalkerContext, walk_node};
+use walker::{AnalysisState, WalkerContext, abc_score, walk_node};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionMetrics {
@@ -22,6 +22,8 @@ pub struct FunctionMetrics {
     pub halstead_difficulty: f64,
     pub max_nesting_depth: usize,
     pub statements: usize,
+    #[serde(default)]
+    pub abc_score: f64,
     pub cognitive_breakdown: Vec<ComplexityContribution>,
     pub cyclomatic_breakdown: Vec<ComplexityContribution>,
 }
@@ -88,6 +90,7 @@ impl ComplexityAnalyzer {
         for m in metrics {
             check_control_flow_limits(m, budgets, &mut violations);
             check_size_and_param_limits(m, budgets, &mut violations);
+            check_advanced_limits(m, budgets, &mut violations);
         }
         violations
     }
@@ -225,6 +228,72 @@ fn check_size_and_param_limits(
     }
 }
 
+fn check_advanced_limits(
+    m: &FunctionMetrics,
+    budgets: &FunctionBudgets,
+    violations: &mut Vec<ComplexityViolation>,
+) {
+    if let Some(limit) = budgets.max_halstead_difficulty {
+        if m.halstead_difficulty > limit {
+            violations.push(ComplexityViolation {
+                file: m.file.clone(),
+                function_name: m.name.clone(),
+                line_number: m.start_line,
+                metric: "Halstead Difficulty".to_string(),
+                actual: m.halstead_difficulty,
+                limit,
+                breakdown: Vec::new(),
+                message: format!(
+                    "Halstead difficulty is {:.1} (budget: {:.1})",
+                    m.halstead_difficulty, limit
+                ),
+                recommendation: format!(
+                    "Simplify operators/operands in `{}`: extract helpers, reduce distinct operators.",
+                    m.name
+                ),
+            });
+        }
+    }
+
+    if let Some(limit) = budgets.max_statements {
+        if m.statements > limit {
+            violations.push(ComplexityViolation {
+                file: m.file.clone(),
+                function_name: m.name.clone(),
+                line_number: m.start_line,
+                metric: "Statement Count".to_string(),
+                actual: m.statements as f64,
+                limit: limit as f64,
+                breakdown: Vec::new(),
+                message: format!(
+                    "Function has {} statements (budget: {})",
+                    m.statements, limit
+                ),
+                recommendation: format!("Split `{}` into smaller focused functions.", m.name),
+            });
+        }
+    }
+
+    if let Some(limit) = budgets.max_abc {
+        if m.abc_score > limit {
+            violations.push(ComplexityViolation {
+                file: m.file.clone(),
+                function_name: m.name.clone(),
+                line_number: m.start_line,
+                metric: "ABC Score".to_string(),
+                actual: m.abc_score,
+                limit,
+                breakdown: Vec::new(),
+                message: format!("ABC score is {:.1} (budget: {:.1})", m.abc_score, limit),
+                recommendation: format!(
+                    "Reduce assignments/branches/calls in `{}` by extracting helpers.",
+                    m.name
+                ),
+            });
+        }
+    }
+}
+
 fn collect_functions(node: Node, ctx: &ParseContext, results: &mut Vec<FunctionMetrics>) {
     if ctx.lang.is_function_node(node.kind()) {
         if let Some(metrics) = analyze_function_node(node, ctx) {
@@ -273,6 +342,7 @@ fn analyze_function_node(node: Node, ctx: &ParseContext) -> Option<FunctionMetri
         halstead_difficulty,
         max_nesting_depth: state.max_nesting_depth,
         statements: state.statements,
+        abc_score: abc_score(state.assignments, state.branches, state.calls),
         cognitive_breakdown: state.cognitive_breakdown,
         cyclomatic_breakdown: state.cyclomatic_breakdown,
     })

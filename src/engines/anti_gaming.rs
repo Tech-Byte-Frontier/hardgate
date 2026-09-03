@@ -1,4 +1,5 @@
 use crate::config::AntiGamingConfig;
+use crate::engines::util::is_inside_string;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -27,9 +28,12 @@ impl AntiGamingScanner {
     pub fn new(config: &AntiGamingConfig) -> Self {
         let standard_patterns = vec![
             r"@ts-ignore",
+            r"@ts-expect-error",
             r"@ts-nocheck",
             r"eslint-disable",
+            r"eslint-next-line",
             r"oxlint-disable",
+            r"biome-ignore",
             r"prettier-ignore",
             r"#\[allow\(",
             r"#\[expect\(",
@@ -38,10 +42,14 @@ impl AntiGamingScanner {
             r"coverage\(off\)",
             r"#\s*type:\s*ignore",
             r"#\s*noqa",
+            r"ruff:\s*noqa",
             r"#\s*pragma:\s*no\s*cover",
             r"c8\s+ignore",
             r"istanbul\s+ignore",
             r"v8\s+ignore",
+            r"istanbul\s+ignore\s+(next|if|else)",
+            r"sonarlint-disable",
+            r"nosonar",
         ];
 
         let patterns = standard_patterns
@@ -125,19 +133,40 @@ fn is_valid_suppression_context(line: &str, match_start: usize, token: &str) -> 
         return check_rust_attr_prefix(prefix);
     }
 
-    let in_string = prefix.ends_with("r\"")
-        || (prefix.contains('"') && !prefix.contains("//") && !prefix.contains('#'));
-    if in_string {
+    // Skip occurrences inside string literals (data, not pragmas).
+    if is_inside_string(prefix) {
         return false;
     }
 
     if token.starts_with('#') {
+        // Hash-directives live in comments by definition, including trailing
+        // code-plus-comment lines, so flag them once strings are excluded.
         return true;
     }
 
-    prefix.contains("//") || prefix.contains("/*") || prefix.trim_start().starts_with('*')
+    is_comment_context(line, prefix)
+}
+
+fn is_comment_context(line: &str, prefix: &str) -> bool {
+    let trimmed_prefix = prefix.trim_start();
+    let trimmed_line = line.trim_start();
+    prefix.contains("//")
+        || prefix.contains("/*")
+        || prefix.contains('#')
+        || line.contains("/*")
+        || trimmed_prefix.starts_with('*')
+        || trimmed_line.starts_with("//")
+        || trimmed_line.starts_with("/*")
+        || trimmed_line.starts_with('*')
 }
 
 fn check_rust_attr_prefix(prefix: &str) -> bool {
-    prefix.trim().is_empty() || prefix.trim_end().ends_with(';') || prefix.contains("//")
+    let t = prefix.trim();
+    t.is_empty()
+        || t.ends_with(';')
+        || t.ends_with('{')
+        || t.ends_with('}')
+        || prefix.contains("//")
+        // Stacked attributes on one line (cfg plus allow).
+        || prefix.contains("#[")
 }

@@ -1,9 +1,7 @@
-use super::check::output_report;
+use super::check::{AnalyzeInput, analyze_file_content, output_report};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::engines::{
-    AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker, check_file_budgets,
-};
+use crate::engines::{AntiGamingScanner, InvariantsChecker};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
@@ -22,32 +20,19 @@ pub fn cmd_scan(file_path: &Path, format: Option<&str>) -> Result<()> {
         .with_context(|| format!("Failed to read file: {:?}", file_path))?;
 
     let mut report = GateReport::new(config.gate.name.clone());
-    report
-        .budget_violations
-        .extend(check_file_budgets(file_path, &config.budgets.files, root));
-
-    if config.anti_gaming.disallow_suppressions {
-        let scanner = AntiGamingScanner::new(&config.anti_gaming);
-        report
-            .suppression_violations
-            .extend(scanner.scan_content(file_path, &content, root));
-    }
-
-    if config.invariants.enforce {
-        let invariants = InvariantsChecker::new(&config.invariants.rules);
-        report
-            .invariant_violations
-            .extend(invariants.check_file(file_path, &content, root));
-    }
-
-    let mut analyzer = ComplexityAnalyzer::new();
-    let functions = analyzer.analyze_file(file_path, &content, root);
-    report
-        .complexity_violations
-        .extend(ComplexityAnalyzer::check_violations(
-            &functions,
-            &config.budgets.functions,
-        ));
+    let scanner = AntiGamingScanner::new(&config.anti_gaming);
+    let invariants = InvariantsChecker::new(&config.invariants.rules);
+    let functions = analyze_file_content(
+        AnalyzeInput {
+            path: file_path,
+            content: &content,
+            config: &config,
+            root,
+            anti_gaming: &scanner,
+            invariants: &invariants,
+        },
+        &mut report,
+    );
 
     let elapsed = start_time.elapsed().as_millis();
     report.finalize(1, functions.len(), elapsed);
