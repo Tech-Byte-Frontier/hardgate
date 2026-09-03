@@ -2,11 +2,11 @@
   "name": "hardgate-linux-x64",
   "version": "0.3.3",
   "description": "hardgate prebuilt binary: linux x64 (glibc)",
-  "license": "MIT OR Apache-2.0",
+  "license": "(MIT OR Apache-2.0)",
   "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Tech-Byte-Frontier/hardgate.git"
+    "url": "git+https://github.com/Tech-Byte-Frontier/hardgate.git"
   },
   "os": [
     "linux"
@@ -18,6 +18,16 @@
     "glibc"
   ],
   "files": [
-    "bin/"
-  ]
+    "bin/",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "author": "Tauan BF <contact@techbytefrontier.com>",
+  "bugs": "https://github.com/Tech-Byte-Frontier/hardgate/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "commonjs"
 }

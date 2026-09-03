@@ -1,0 +1,16 @@
+# hardgate-linux-x64
+
+hardgate prebuilt binary: linux x64 (glibc).
+
+This is a platform-specific package. Install the main wrapper instead:
+
+```sh
+npm i -D hardgate
+npx hardgate check
+```
+
+Binaries are delivered via `optionalDependencies`, no postinstall downloads.
+
+Full docs: https://github.com/Tech-Byte-Frontier/hardgate
+
+License: MIT OR Apache-2.0.
