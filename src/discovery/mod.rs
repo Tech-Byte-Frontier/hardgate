@@ -1,6 +1,6 @@
 use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,6 +9,43 @@ use std::process::Command;
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "py", "go", "c", "cpp", "cc", "h", "hpp", "css",
 ];
+
+/// Dependency and build-output directories that are never project code to
+/// gate (eslint/Biome precedent: `node_modules` is ignored out of the box).
+/// Applies with or without `hardgate.toml`, so a fresh `npx hardgate check`
+/// never flags vendored code even when it is not gitignored. Unlike user
+/// `exclusions` (which surface advisories), this skip is silent like hidden
+/// files: dependency trees are not technical debt. `hardgate scan <file>`
+/// and explicit `--scoped` paths still inspect such files on purpose.
+pub const SKIPPED_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+
+/// True when `entry` is a skipped dependency dir: prunes the whole subtree
+/// so vendored trees are never descended into. The walker root (depth 0) is
+/// always kept so running inside a directory named e.g. `build` still works.
+fn is_skipped_dir(entry: &DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_some_and(|t| t.is_dir())
+        && SKIPPED_DIRS.contains(&entry.file_name().to_str().unwrap_or_default())
+}
+
+/// True when a diff-reported `target` path lives under a skipped
+/// dependency dir (mirrors [`is_skipped_dir`] for the git-diff path, where
+/// committed-but-vendored files could otherwise slip through).
+fn in_skipped_dir(target: &str) -> bool {
+    Path::new(target)
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .any(|part| SKIPPED_DIRS.contains(&part))
+}
 
 /// Inputs for file discovery: walk `root` (or git diffs with `diff_only`),
 /// skipping `exclusions` glob patterns.
@@ -138,6 +175,7 @@ pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<Discov
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .filter_entry(|e| !is_skipped_dir(e))
         .build();
 
     for result in walker {
@@ -258,6 +296,9 @@ impl<'a> GitDiffCollector<'a> {
     }
 
     fn add_target(&mut self, target: &str) {
+        if in_skipped_dir(target) {
+            return;
+        }
         let path = self.root.join(target);
         if path.is_file() && is_supported_source_extension(&path) {
             let rel = path.strip_prefix(self.root).unwrap_or(&path);
