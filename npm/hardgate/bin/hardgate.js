@@ -28,15 +28,16 @@ function readGlibcVersion() {
 }
 
 function hasAlpineRelease() {
-  try {
-    return fs.existsSync("/etc/alpine-release");
-  } catch {
-    return false;
-  }
+  // fs.existsSync never throws for a constant valid path (it returns false
+  // on error by contract), so no defensive catch here: dead catches generate
+  // equivalent mutants no honest test can kill.
+  return fs.existsSync("/etc/alpine-release");
 }
 
 function isMusl() {
-  if (process.platform !== "linux") return false;
+  // No platform guard here: detectMusl already returns false for non-linux
+  // (pinned by its truth table), so a wrapper-level guard would be dead code
+  // with an equivalent mutant. Single delegation keeps one testable owner.
   return detectMusl(
     process.platform,
     readGlibcVersion(),
@@ -251,6 +252,20 @@ function launcherDepth() {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+// Spawn contract in one place so stdio inheritance, Windows window hiding,
+// and fuse depth propagation are unit-assertable on every platform without
+// spawning anything.
+function spawnOptions() {
+  return {
+    stdio: "inherit",
+    windowsHide: true,
+    env: {
+      ...process.env,
+      HARDGATE_LAUNCHER_DEPTH: String(launcherDepth() + 1),
+    },
+  };
+}
+
 function main() {
   if (launcherDepth() > 5) {
     console.error(
@@ -271,14 +286,7 @@ function main() {
     process.exit(1);
   }
   const args = process.argv.slice(2);
-  const res = spawnSync(bin, args, {
-    stdio: "inherit",
-    windowsHide: true,
-    env: {
-      ...process.env,
-      HARDGATE_LAUNCHER_DEPTH: String(launcherDepth() + 1),
-    },
-  });
+  const res = spawnSync(bin, args, spawnOptions());
   if (res.error) {
     if (res.error.code === "ENOENT") {
       console.error(`[hardgate] Binary not executable: ${bin}`);
@@ -299,4 +307,5 @@ module.exports = {
   isRealBinary,
   isSelf,
   launcherDepth,
+  spawnOptions,
 };

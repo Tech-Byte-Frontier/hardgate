@@ -8,6 +8,24 @@
 // a recursion fuse aborts nesting, and argv[1]-logical resolution finds
 // platform packages across pnpm-style symlinked layouts.
 //
+// Mutation oracle: run
+//   hardgate mutate --scoped npm/hardgate/bin/hardgate.js \
+//     --test-cmd "node tests/npm-wrapper-regression.test.mjs"
+// (the default `pnpm test` has no script and is a vacuous oracle).
+// Accepted survivors, each verified by mutant-vs-test battery, not by
+// reasoning alone:
+//   - `acceptCandidate` `||` -> `&&`: equivalent on all 8 input classes
+//     (missing/self/symlink-self/real-binary/text/dir/dangling). Self paths
+//     are always JS text so the downstream magic-byte gate rejects them
+//     anyway; the `||` is defense-in-depth short-circuiting. Deliberately
+//     NOT covered by a test: a test passing under both versions is theater.
+//   - `acceptCandidate` catch `return false`: needs fault injection
+//     (TOCTOU/EACCES race between existsSync and statSync) to trigger;
+//     testing it would mean mocking fs or racy chmod games.
+//   - fuse-breaking mutants hang until timeout: that IS the fail-closed
+//     signal (`reject_timeouts` keeps the gate red), so they are recorded
+//     as timeouts, not clean kills.
+//
 // Run: node tests/npm-wrapper-regression.test.mjs
 "use strict";
 import assert from "node:assert/strict";
@@ -98,13 +116,31 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
     `shim-on-PATH must exit 1, got ${res.status}: ${res.stderr}`,
   );
   assert.match(res.stderr, /No prebuilt binary found/);
+  // The message must name the expected optional dep: pins the
+  // `platformPackage() || "<unknown-platform>"` branch (serving
+  // "<unknown-platform>" on a supported platform is a user-facing lie).
+  {
+    const { createRequire: createRequireA } = await import("node:module");
+    const { platformPackage: platformPackageA } = createRequireA(
+      import.meta.url,
+    )(launcherCopy);
+    assert.ok(
+      res.stderr.includes(`expected optional dep '${platformPackageA()}'`),
+      `stderr must name expected dep, got: ${res.stderr}`,
+    );
+  }
   console.log("A: shim-on-PATH degrades to clean exit 1 -- OK");
 }
 
 // --- B. recursion fuse: HARDGATE_BINARY pointing at the launcher itself ---
+// Bound at 8s: the fuse trips in ~1s on good code (6 nested spawns), and a
+// tight bound keeps this test a fast failure rather than a hang when the
+// depth logic is broken. Must stay below the mutation per-mutant timeout
+// (10s) so fuse-breaking mutants report as killed, not timeouts.
 {
   const res = runLauncher(["--version"], {
     env: { HARDGATE_BINARY: launcher, PATH: scrubbedPath() },
+    timeout: 8000,
   });
   // Either the fuse trips (depth already >5? no, depth 0 here) -- the
   // launcher execs itself with depth+1 until the fuse trips at depth 6.
@@ -152,6 +188,16 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
     `dlx-without-binary must exit 1 (not loop), got ${res.status}`,
   );
   assert.match(res.stderr, /No prebuilt binary found/);
+  {
+    const { createRequire: createRequireD } = await import("node:module");
+    const { platformPackage: platformPackageD } = createRequireD(
+      import.meta.url,
+    )(path.join(mainDir, "hardgate.js"));
+    assert.ok(
+      res.stderr.includes(`expected optional dep '${platformPackageD()}'`),
+      `stderr must name expected dep, got: ${res.stderr}`,
+    );
+  }
   console.log("D: dlx-without-binary exits 1 without recursion -- OK");
 }
 
@@ -263,6 +309,12 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
     ["elf", Buffer.from([0x7f, 0x45, 0x4c, 0x46]), true],
     ["elf-truncated", Buffer.from([0x7f, 0x45]), false],
     ["elf-lookalike", Buffer.from([0x7f, 0x4f, 0x4f, 0x4f]), false],
+    // Partial ELF magic must NOT pass: every `&&` in the header chain is
+    // load-bearing (a widened `||` would let a script masquerade as a
+    // machine binary and get executed). These two rows kill the `&&`->`||`
+    // mutants on the middle and tail of the chain.
+    ["elf-first-two", Buffer.from([0x7f, 0x45, 0x00, 0x00]), false],
+    ["elf-first-three", Buffer.from([0x7f, 0x45, 0x4c, 0x00]), false],
     ["mz", Buffer.from([0x4d, 0x5a, 0x90, 0x00]), true],
     ["mz-lookalike", Buffer.from([0x4d, 0x00, 0x00, 0x00]), false],
     ["macho-le64", Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), true],
@@ -318,6 +370,62 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
   assert.equal(res.status, 0, `dir on PATH must be skipped: ${res.stderr}`);
   assert.equal(res.stdout.trim(), expectedVersion);
   console.log("J: directory named hardgate skipped -- OK");
+}
+
+// --- K. launcherDepth sanitizes tampered depth (fuse input contract) ---
+// No mocks: the function reads only process.env, so rows set it directly.
+// The "-1" row kills the `&&` -> `||` mutant (it would return -1 and weaken
+// the fuse); the "3" rows kill the `||` -> `&&` and `>=` -> `<` mutants,
+// which otherwise hang the self-exec test until timeout.
+{
+  const { createRequire } = await import("node:module");
+  const requireK = createRequire(import.meta.url);
+  const { launcherDepth } = requireK("../npm/hardgate/bin/hardgate.js");
+  const saved = process.env.HARDGATE_LAUNCHER_DEPTH;
+  try {
+    const cases = [
+      [undefined, 0],
+      ["0", 0],
+      ["3", 3],
+      ["-1", 0],
+      ["abc", 0],
+      ["", 0],
+    ];
+    for (const [val, expected] of cases) {
+      if (val === undefined) delete process.env.HARDGATE_LAUNCHER_DEPTH;
+      else process.env.HARDGATE_LAUNCHER_DEPTH = val;
+      assert.equal(launcherDepth(), expected, `launcherDepth(${val})`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.HARDGATE_LAUNCHER_DEPTH;
+    else process.env.HARDGATE_LAUNCHER_DEPTH = saved;
+  }
+  console.log("K: launcherDepth sanitization -- OK");
+}
+
+// --- L. spawn contract: stdio, window hiding, depth propagation ---
+// Asserts the child-spawn shape without spawning anything, so it holds on
+// every platform. Kills the `windowsHide` true->false mutant and the depth
+// `+` -> `-` mutant (tampered propagation would silently break the fuse).
+{
+  const { createRequire } = await import("node:module");
+  const requireL = createRequire(import.meta.url);
+  const { spawnOptions, launcherDepth: depthOf } = requireL(
+    "../npm/hardgate/bin/hardgate.js",
+  );
+  const saved = process.env.HARDGATE_LAUNCHER_DEPTH;
+  try {
+    process.env.HARDGATE_LAUNCHER_DEPTH = "3";
+    const opts = spawnOptions();
+    assert.equal(opts.stdio, "inherit");
+    assert.equal(opts.windowsHide, true);
+    assert.equal(opts.env.HARDGATE_LAUNCHER_DEPTH, "4");
+    assert.equal(opts.env.HARDGATE_LAUNCHER_DEPTH, String(depthOf() + 1));
+  } finally {
+    if (saved === undefined) delete process.env.HARDGATE_LAUNCHER_DEPTH;
+    else process.env.HARDGATE_LAUNCHER_DEPTH = saved;
+  }
+  console.log("L: spawn contract -- OK");
 }
 
 console.log("npm-wrapper-regression.test: OK");
