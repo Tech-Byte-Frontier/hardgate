@@ -86,10 +86,12 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         report.orchestration_violations.extend(violations);
     }
 
-    // `check` is static-only and never executes mutants. Nudge humans/LLM
-    // agents toward the opt-in next step so test strength gets verified.
+    // `check` is static-only by design (sub-second): it never executes
+    // mutants, dead-code graphs, or external formatters/linters. One
+    // advisory names the full gate so green is never mistaken for fully
+    // gated; humans and LLM agents get the exact next commands.
     report.advisories.push(
-        "Static check excludes live mutation testing. Consider running `hardgate mutate --diff` or `hardgate verify --mutation-report <report>` to verify test strength."
+        "Static check excludes live mutation testing, dead-code analysis, and formatter/linter orchestration. Full gate: `hardgate check --all --dead-code` plus `hardgate mutate --diff`."
             .to_string(),
     );
 
