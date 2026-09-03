@@ -1,9 +1,9 @@
 name: Release
 
 # Tag-driven releases. Single source of truth for the version is
-# `Cargo.toml [package] version` (currently 0.3.3).
+# `Cargo.toml [package] version` (currently 0.4.0).
 #
-#   git tag v0.3.3 && git push origin v0.3.3
+#   git tag v0.4.0 && git push origin v0.4.0
 #
 # produces, in order:
 #   1. prebuilt binaries on GitHub Releases (+ shell/powershell/homebrew
@@ -34,7 +34,7 @@ env:
   CARGO_TERM_COLOR: always
   APP_NAME: hardgate
   # Must match Cargo.toml [package] version. Bumped via `cargo set-version`.
-  APP_VERSION: "0.3.3"
+  APP_VERSION: "0.4.0"
 
 jobs:
   # -- tag guard: refuse to publish if Cargo.toml version != tag version --
