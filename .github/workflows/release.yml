@@ -159,13 +159,19 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: publish crate unless already live
+        # Attempt-first: `cargo search` output is version-format fragile, so
+        # publish and tolerate only the known already-live error loudly.
         run: |
-          WANT=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(json.load(sys.stdin)['packages'][0]['version'])")
-          HAVE=$(cargo search hardgate --limit 1 2>/dev/null | grep -oE 'hardgate = "[0-9.]+"' | grep -oE '[0-9.]+' || true)
-          if [ "$HAVE" = "$WANT" ]; then
-            echo "hardgate $WANT already on crates.io; skipping publish."
-          else
-            cargo publish --locked
+          set +e
+          OUT=$(cargo publish --locked 2>&1)
+          RC=$?
+          echo "$OUT" | tail -5
+          if [ $RC -ne 0 ]; then
+            if echo "$OUT" | grep -qE "already exists on crates.io|already uploaded"; then
+              echo "hardgate already live on crates.io; skipping."
+            else
+              exit $RC
+            fi
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
