@@ -87,13 +87,13 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     Ok(())
 }
 
-struct MutationSummaryContext<'a> {
-    stats: &'a MutationStats,
-    results: &'a [MutantExecutionResult],
-    score: f64,
-    min_score: f64,
-    passed: bool,
-    elapsed: u128,
+pub struct MutationSummaryContext<'a> {
+    pub stats: &'a MutationStats,
+    pub results: &'a [MutantExecutionResult],
+    pub score: f64,
+    pub min_score: f64,
+    pub passed: bool,
+    pub elapsed: u128,
 }
 
 fn discover_targets(
@@ -241,33 +241,44 @@ fn render_agent_output(ctx: &MutationSummaryContext) {
 }
 
 fn render_terminal_output(ctx: &MutationSummaryContext) {
-    println!("\n{}", "-".repeat(70).dimmed());
-    println!("{}", "mutation summary:".bold());
-    println!("  mutants tested:  {}", ctx.stats.total.to_string().cyan());
-    println!(
-        "  killed:          {}",
+    print!("{}", format_mutation_terminal(ctx));
+}
+
+/// Terminal rendering of a mutation run as a plain string (testable).
+/// The verdict repeats at the end so `tail`-only readers (humans and
+/// agents) see the outcome without scrolling past the survivors list.
+pub fn format_mutation_terminal(ctx: &MutationSummaryContext) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("\n{}\n", "-".repeat(70).dimmed()));
+    out.push_str(&format!("{}\n", "mutation summary:".bold()));
+    out.push_str(&format!(
+        "  mutants tested:  {}\n",
+        ctx.stats.total.to_string().cyan()
+    ));
+    out.push_str(&format!(
+        "  killed:          {}\n",
         ctx.stats.killed.to_string().green()
-    );
-    println!(
-        "  survived:        {}",
+    ));
+    out.push_str(&format!(
+        "  survived:        {}\n",
         ctx.stats.survived.to_string().red()
-    );
-    println!(
-        "  timed out:       {}",
+    ));
+    out.push_str(&format!(
+        "  timed out:       {}\n",
         ctx.stats.timeout.to_string().yellow()
-    );
-    println!(
-        "  score:           {:.1}% (threshold: {:.1}%)",
+    ));
+    out.push_str(&format!(
+        "  score:           {:.1}% (threshold: {:.1}%)\n",
         ctx.score, ctx.min_score
-    );
-    println!(
-        "  result:          {}",
+    ));
+    out.push_str(&format!(
+        "  result:          {}\n",
         if ctx.passed {
             "pass".bold().green()
         } else {
             "fail".bold().red()
         }
-    );
+    ));
 
     let survivors: Vec<_> = ctx
         .results
@@ -275,13 +286,13 @@ fn render_terminal_output(ctx: &MutationSummaryContext) {
         .filter(|r| r.outcome == MutantOutcome::Survived)
         .collect();
     if !survivors.is_empty() {
-        println!(
-            "\n{} {}",
+        out.push_str(&format!(
+            "\n{} {}\n",
             "warning:".yellow().bold(),
             format!("survived mutants ({})", survivors.len()).bold()
-        );
+        ));
         for res in survivors {
-            println!(
+            out.push_str(&format!(
                 "  --> {}:{}: {}\n       original: `{}` mutated: `{}`\n       {} add a test asserting behavior for this code branch.\n",
                 res.mutant.file.display().to_string().bold(),
                 res.mutant.line.to_string().yellow(),
@@ -289,7 +300,24 @@ fn render_terminal_output(ctx: &MutationSummaryContext) {
                 res.mutant.original.red(),
                 res.mutant.replacement.green(),
                 "help:".dimmed(),
-            );
+            ));
         }
     }
+
+    let verdict = if ctx.passed {
+        "pass".bold().green()
+    } else {
+        "fail".bold().red()
+    };
+    out.push_str(&format!(
+        "{}\nresult: {} · score {:.1}% (threshold: {:.1}%) · {} killed, {} survived, {} timed out\n",
+        "-".repeat(70).dimmed(),
+        verdict,
+        ctx.score,
+        ctx.min_score,
+        ctx.stats.killed,
+        ctx.stats.survived,
+        ctx.stats.timeout
+    ));
+    out
 }
