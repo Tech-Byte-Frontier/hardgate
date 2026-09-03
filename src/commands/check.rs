@@ -1,7 +1,7 @@
 use super::verify::verify_coverage;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
+use crate::discovery::{DiscoverOptions, discover_files_with_exclusions, filter_files_by_paths};
 use crate::engines::{
     AntiGamingScanner, BudgetViolation, CloneDetector, ComplexityAnalyzer, ComplexityViolation,
     DeadCodeAnalyzer, FunctionMetrics, InvariantViolation, InvariantsChecker, OrchestrationEngine,
@@ -21,6 +21,33 @@ pub struct CheckOptions {
     pub all: bool,
     pub dead_code: bool,
     pub coverage_report: Option<String>,
+    pub json: bool,
+    pub compact: bool,
+    pub no_snippets: bool,
+    pub summary: bool,
+    pub paths: Vec<PathBuf>,
+}
+
+/// Resolved output mode shared by `check`, `scan`, and `verify`.
+#[derive(Debug, Clone, Default)]
+pub struct OutputOptions {
+    pub format: Option<String>,
+    pub json: bool,
+    pub compact: bool,
+    pub no_snippets: bool,
+    pub summary: bool,
+}
+
+impl OutputOptions {
+    pub fn is_json(&self) -> bool {
+        self.json || matches!(self.format.as_deref(), Some("json"))
+    }
+    pub fn is_summary(&self) -> bool {
+        self.summary || matches!(self.format.as_deref(), Some("summary"))
+    }
+    pub fn is_compact(&self) -> bool {
+        self.compact || self.no_snippets || matches!(self.format.as_deref(), Some("compact"))
+    }
 }
 
 pub fn cmd_check(opts: CheckOptions) -> Result<()> {
@@ -28,9 +55,10 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     let root = Path::new(".");
     let config = HardgateConfig::load_or_default(None)?;
 
-    let Some((mut report, files, read_results, functions)) = run_static_gate(&config, opts.diff)?
+    let Some((mut report, files, read_results, functions)) =
+        run_static_gate_scoped(&config, opts.diff, &opts.paths)?
     else {
-        print_empty_discovery(opts.diff);
+        print_empty_discovery(opts.diff, !opts.paths.is_empty());
         return Ok(());
     };
 
@@ -59,12 +87,21 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     );
 
     let elapsed = start_time.elapsed().as_millis();
-    report.finalize(read_results.len(), functions.len(), elapsed);
-
-    output_report(&report, opts.format.as_deref());
-    if !report.passed {
-        std::process::exit(1);
-    }
+    emit_gate_report(
+        &mut report,
+        Emission {
+            read_len: read_results.len(),
+            fn_len: functions.len(),
+            elapsed,
+            opts: &OutputOptions {
+                format: opts.format,
+                json: opts.json,
+                compact: opts.compact,
+                no_snippets: opts.no_snippets,
+                summary: opts.summary,
+            },
+        },
+    );
     Ok(())
 }
 
@@ -98,6 +135,14 @@ pub type StaticGateOutcome = Option<(
 )>;
 
 pub fn run_static_gate(config: &HardgateConfig, diff: bool) -> Result<StaticGateOutcome> {
+    run_static_gate_scoped(config, diff, &[])
+}
+
+pub fn run_static_gate_scoped(
+    config: &HardgateConfig,
+    diff: bool,
+    paths: &[PathBuf],
+) -> Result<StaticGateOutcome> {
     let root = Path::new(".");
     let discovery = discover_files_with_exclusions(DiscoverOptions {
         root,
@@ -105,7 +150,7 @@ pub fn run_static_gate(config: &HardgateConfig, diff: bool) -> Result<StaticGate
         exclusions: &config.budgets.files.exclusions.paths,
     })?;
 
-    let files = discovery.files;
+    let files = filter_files_by_paths(discovery.files, paths, root)?;
     let excluded_files = discovery.excluded_files;
 
     if files.is_empty() {
@@ -208,8 +253,13 @@ fn run_file_analysis(
     (read_results, all_functions)
 }
 
-fn print_empty_discovery(diff: bool) {
-    if diff {
+pub fn print_empty_discovery(diff: bool, scoped: bool) {
+    if scoped {
+        println!(
+            "{} no matching source files detected for the given path(s).",
+            "warning:".yellow().bold()
+        );
+    } else if diff {
         println!(
             "{} no git-modified source files detected to check.",
             "note:".green().bold()
@@ -223,10 +273,50 @@ fn print_empty_discovery(diff: bool) {
 }
 
 pub fn output_report(report: &GateReport, format: Option<&str>) {
-    match format {
+    output_report_with_opts(
+        report,
+        &OutputOptions {
+            format: format.map(|s| s.to_string()),
+            json: false,
+            compact: false,
+            no_snippets: false,
+            summary: false,
+        },
+    );
+}
+
+pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) {
+    if opts.is_json() {
+        if opts.is_summary() {
+            println!("{}", report.render_summary_json());
+        } else {
+            println!("{}", report.render_json());
+        }
+        return;
+    }
+    match opts.format.as_deref() {
         Some("agent") => print!("{}", report.render_agent()),
-        Some("json") => println!("{}", report.render_json()),
+        _ if opts.is_summary() => print!("{}", report.render_summary()),
+        _ if opts.is_compact() => print!("{}", report.render_compact()),
         _ => print!("{}", report.render_terminal()),
+    }
+}
+
+/// Finalize counts, render via [`OutputOptions`], and exit non-zero on
+/// failure. Shared by `check`, `scan`, and `verify` so the tail of every
+/// gate command stays a single call instead of a duplicated clone block.
+pub struct Emission<'a> {
+    pub read_len: usize,
+    pub fn_len: usize,
+    pub elapsed: u128,
+    pub opts: &'a OutputOptions,
+}
+
+pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
+    report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
+    output_report_with_opts(report, emission.opts);
+    if !report.passed {
+        std::process::exit(1);
     }
 }
 

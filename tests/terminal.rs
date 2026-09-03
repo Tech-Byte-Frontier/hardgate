@@ -1,33 +1,11 @@
+#[path = "support/reports.rs"]
+mod reports;
+
 use hardgate::GateReport;
 use hardgate::commands::{MutationSummaryContext, format_mutation_terminal};
-use hardgate::engines::{
-    AstMutant, BudgetViolation, ComplexityViolation, MutantExecutionResult, MutantOutcome,
-    MutationStats,
-};
+use hardgate::engines::{AstMutant, MutantExecutionResult, MutantOutcome, MutationStats};
+use reports::failing_report;
 use std::path::PathBuf;
-
-fn failing_report() -> GateReport {
-    let mut report = GateReport::new("demo".to_string());
-    report.complexity_violations.push(ComplexityViolation {
-        file: PathBuf::from("src/main.rs"),
-        function_name: "login".to_string(),
-        line_number: 1,
-        metric: "Cyclomatic Complexity".to_string(),
-        actual: 18.0,
-        limit: 10.0,
-        breakdown: vec![],
-        message: "too complex".to_string(),
-        recommendation: "Split `login` into helpers.".to_string(),
-    });
-    report.budget_violations.push(BudgetViolation {
-        file: PathBuf::from("src/big.rs"),
-        metric: "max_lines".to_string(),
-        actual: 600,
-        limit: 400,
-        message: "file too large".to_string(),
-    });
-    report
-}
 
 fn tally(killed: usize, survived: usize) -> MutationStats {
     MutationStats {

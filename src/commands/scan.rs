@@ -1,14 +1,13 @@
-use super::check::{AnalyzeInput, analyze_file_content, output_report};
+use super::check::{AnalyzeInput, Emission, OutputOptions, analyze_file_content, emit_gate_report};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{AntiGamingScanner, InvariantsChecker};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
-use std::time::Instant;
 
-pub fn cmd_scan(file_path: &Path, format: Option<&str>) -> Result<()> {
-    let start_time = Instant::now();
+pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
+    let start_time = std::time::Instant::now();
     let root = Path::new(".");
     let config = HardgateConfig::load_or_default(None)?;
 
@@ -34,12 +33,25 @@ pub fn cmd_scan(file_path: &Path, format: Option<&str>) -> Result<()> {
         &mut report,
     );
 
-    let elapsed = start_time.elapsed().as_millis();
-    report.finalize(1, functions.len(), elapsed);
-
-    output_report(&report, format);
-    if !report.passed {
-        std::process::exit(1);
-    }
+    emit_gate_report(
+        &mut report,
+        Emission {
+            read_len: 1,
+            fn_len: functions.len(),
+            elapsed: start_time.elapsed().as_millis(),
+            opts: &opts,
+        },
+    );
     Ok(())
+}
+
+/// Backwards-compatible helper for callers passing `format: Option<&str>`.
+pub fn cmd_scan_with_format(file_path: &Path, format: Option<&str>) -> Result<()> {
+    cmd_scan(
+        file_path,
+        OutputOptions {
+            format: format.map(|s| s.to_string()),
+            ..Default::default()
+        },
+    )
 }

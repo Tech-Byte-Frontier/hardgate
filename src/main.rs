@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use hardgate::commands;
 use hardgate::mcp;
 use std::path::PathBuf;
@@ -15,6 +15,42 @@ struct Cli {
     command: Commands,
 }
 
+/// Shared machine-consumable output flags for gate commands.
+///
+/// `--json` is shorthand for `--format json`, `--compact`/`--no-snippets`
+/// collapse each violation to one line, and `--summary` prints totals plus
+/// top offending files.
+#[derive(Args, Debug, Clone, Default)]
+struct OutputArgs {
+    /// Format output (terminal | agent | json | compact | summary)
+    #[arg(long)]
+    format: Option<String>,
+    /// Shorthand for --format json (machine-readable, jq-friendly)
+    #[arg(long)]
+    json: bool,
+    /// Compact one-line-per-violation output without snippets or details
+    #[arg(long)]
+    compact: bool,
+    /// Alias for --compact (no source snippets or breakdowns)
+    #[arg(long = "no-snippets")]
+    no_snippets: bool,
+    /// Print concise summary only (totals + top files)
+    #[arg(long)]
+    summary: bool,
+}
+
+impl OutputArgs {
+    fn output_options(&self) -> commands::OutputOptions {
+        commands::OutputOptions {
+            format: self.format.clone(),
+            json: self.json,
+            compact: self.compact,
+            no_snippets: self.no_snippets,
+            summary: self.summary,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize hardgate.toml in the current repository
@@ -24,9 +60,8 @@ enum Commands {
     },
     /// Run fast deterministic static gate checks
     Check {
-        /// Format output (agent | json)
-        #[arg(long)]
-        format: Option<String>,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
@@ -39,14 +74,16 @@ enum Commands {
         /// Path to coverage report to verify against AST budgets
         #[arg(long)]
         coverage_report: Option<String>,
+        /// Optional path filter(s): only check files under these paths
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
     },
     /// Immediately inspect AST metrics, suppressions, and budgets for a single file
     Scan {
         /// File path to scan
         file: PathBuf,
-        /// Format output (agent | json)
-        #[arg(long)]
-        format: Option<String>,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Format code using orchestrated project formatter (e.g. oxfmt)
     Fmt {
@@ -71,9 +108,12 @@ enum Commands {
         /// Maximum number of mutants to evaluate
         #[arg(long)]
         max_mutants: Option<usize>,
-        /// Format output (agent | json)
+        /// Format output (terminal | agent | json)
         #[arg(long)]
         format: Option<String>,
+        /// Shorthand for --format json
+        #[arg(long)]
+        json: bool,
     },
     /// Run complete verification including coverage and mutation
     Verify {
@@ -83,9 +123,11 @@ enum Commands {
         /// Path to mutation report (e.g., mutants.json or stryker-mutation.json)
         #[arg(long)]
         mutation_report: Option<String>,
-        /// Format output (agent | json)
-        #[arg(long)]
-        format: Option<String>,
+        #[command(flatten)]
+        output: OutputArgs,
+        /// Optional path filter(s): only verify files under these paths
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
     },
     /// Launch as a Model Context Protocol (MCP) server over stdio
     Mcp,
@@ -99,21 +141,37 @@ fn main() -> anyhow::Result<()> {
 fn execute_command(cmd: Commands) -> anyhow::Result<()> {
     match cmd {
         Commands::Init { preset } => commands::cmd_init(&preset),
-        Commands::Check {
-            format,
-            diff,
-            all,
-            dead_code,
-            coverage_report,
-        } => commands::cmd_check(commands::CheckOptions {
-            format,
-            diff,
-            all,
-            dead_code,
-            coverage_report,
-        }),
-        Commands::Scan { file, format } => commands::cmd_scan(&file, format.as_deref()),
         Commands::Fmt { check } => commands::cmd_fmt(check),
+        Commands::Mcp => mcp::run_mcp_server(),
+        gate => execute_gate_command(gate),
+    }
+}
+
+fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
+    match cmd {
+        Commands::Check {
+            output,
+            diff,
+            all,
+            dead_code,
+            coverage_report,
+            paths,
+        } => {
+            let opts = output.output_options();
+            commands::cmd_check(commands::CheckOptions {
+                format: opts.format,
+                diff,
+                all,
+                dead_code,
+                coverage_report,
+                json: opts.json,
+                compact: opts.compact,
+                no_snippets: opts.no_snippets,
+                summary: opts.summary,
+                paths,
+            })
+        }
+        Commands::Scan { file, output } => commands::cmd_scan(&file, output.output_options()),
         Commands::Mutate {
             diff,
             scoped,
@@ -121,19 +179,40 @@ fn execute_command(cmd: Commands) -> anyhow::Result<()> {
             timeout,
             max_mutants,
             format,
+            json,
         } => commands::cmd_mutate(commands::MutateOptions {
             diff,
             scoped,
             test_cmd,
             timeout_secs: timeout,
             max_mutants,
-            format,
+            format: resolve_mutate_format(format, json),
         }),
         Commands::Verify {
             coverage_report,
             mutation_report,
-            format,
-        } => commands::cmd_verify(coverage_report, mutation_report, format.as_deref()),
-        Commands::Mcp => mcp::run_mcp_server(),
+            output,
+            paths,
+        } => {
+            let opts = output.output_options();
+            commands::cmd_verify(commands::VerifyOptions {
+                coverage_report,
+                mutation_report,
+                format: opts.format,
+                json: opts.json,
+                compact: opts.compact,
+                no_snippets: opts.no_snippets,
+                summary: opts.summary,
+                paths,
+            })
+        }
+        other => execute_command(other),
     }
+}
+
+fn resolve_mutate_format(format: Option<String>, json: bool) -> Option<String> {
+    if json && format.is_none() {
+        return Some("json".to_string());
+    }
+    format
 }

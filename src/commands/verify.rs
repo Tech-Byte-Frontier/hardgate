@@ -1,40 +1,75 @@
-use super::check::{output_report, run_static_gate};
+use super::check::{
+    Emission, OutputOptions, emit_gate_report, print_empty_discovery, run_static_gate_scoped,
+};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
 use anyhow::Result;
-use colored::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-pub fn cmd_verify(
+#[derive(Debug, Clone, Default)]
+pub struct VerifyOptions {
+    pub coverage_report: Option<String>,
+    pub mutation_report: Option<String>,
+    pub format: Option<String>,
+    pub json: bool,
+    pub compact: bool,
+    pub no_snippets: bool,
+    pub summary: bool,
+    pub paths: Vec<PathBuf>,
+}
+
+pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
+    let start_time = Instant::now();
+    let config = HardgateConfig::load_or_default(None)?;
+    let scoped = !opts.paths.is_empty();
+
+    let Some((mut report, _files, read_results, functions)) =
+        run_static_gate_scoped(&config, false, &opts.paths)?
+    else {
+        print_empty_discovery(false, scoped);
+        return Ok(());
+    };
+
+    verify_coverage(
+        &config,
+        opts.coverage_report.clone(),
+        &functions,
+        &mut report,
+    );
+    verify_mutation(&config, opts.mutation_report.clone(), &mut report);
+
+    emit_gate_report(
+        &mut report,
+        Emission {
+            read_len: read_results.len(),
+            fn_len: functions.len(),
+            elapsed: start_time.elapsed().as_millis(),
+            opts: &OutputOptions {
+                format: opts.format.clone(),
+                json: opts.json,
+                compact: opts.compact,
+                no_snippets: opts.no_snippets,
+                summary: opts.summary,
+            },
+        },
+    );
+    Ok(())
+}
+
+/// Backwards-compatible shim for callers using the pre-struct signature.
+pub fn cmd_verify_legacy(
     coverage_report: Option<String>,
     mutation_report: Option<String>,
     format: Option<&str>,
 ) -> Result<()> {
-    let start_time = Instant::now();
-    let config = HardgateConfig::load_or_default(None)?;
-
-    let Some((mut report, _files, read_results, functions)) = run_static_gate(&config, false)?
-    else {
-        println!(
-            "{} no matching source files detected.",
-            "warning:".yellow().bold()
-        );
-        return Ok(());
-    };
-
-    verify_coverage(&config, coverage_report, &functions, &mut report);
-    verify_mutation(&config, mutation_report, &mut report);
-
-    let elapsed = start_time.elapsed().as_millis();
-    report.finalize(read_results.len(), functions.len(), elapsed);
-
-    output_report(&report, format);
-    if !report.passed {
-        std::process::exit(1);
-    }
-    Ok(())
+    cmd_verify(VerifyOptions {
+        coverage_report,
+        mutation_report,
+        format: format.map(|s| s.to_string()),
+        ..Default::default()
+    })
 }
 
 pub fn verify_coverage(

@@ -37,6 +37,33 @@ hardgate check --coverage-report coverage/lcov.info
 
 # Output formatted specifically for an LLM agent context window
 hardgate check --format agent
+
+# Machine-readable JSON (same flags as --format json; pipe into jq)
+hardgate check --json
+hardgate check --format json | jq '.summary'
+
+# Compact one-line-per-violation output (no snippets or breakdowns)
+hardgate check --compact
+hardgate check --no-snippets   # alias for --compact
+
+# Summary only: totals per category plus top offending files
+hardgate check --summary
+hardgate check --json --summary  # lean JSON: summary + top files, no payloads
+
+# Scoped checking: only files under the given path(s)
+hardgate check packages/backend
+hardgate check src/routes/revenue.ts src/routes/expenses.ts
+```
+
+Output modes compose: `--json`, `--compact`/`--no-snippets`, and `--summary`
+are accepted by `check`, `scan`, and `verify` (plus `--json` on `mutate`).
+`--format` also accepts `compact` and `summary` (`terminal` is the default).
+Path filters may be files or directories; missing paths fail loudly instead
+of silently passing the gate. `scan` accepts the same output flags:
+
+```sh
+hardgate scan --compact src/services/auth.ts
+hardgate scan --json --summary src/services/auth.ts
 ```
 
 ### `hardgate fmt`
@@ -70,6 +97,10 @@ Runs the complete everyday quality gate, incorporating test coverage ingestion, 
 ```sh
 hardgate verify
 hardgate verify --coverage-report coverage/lcov.info --mutation-report mutants.json
+
+# Same output modes and path scoping as `check`
+hardgate verify --summary packages/backend
+hardgate verify --json --summary | jq '.summary'
 ```
 
 ### `hardgate scan <file>`

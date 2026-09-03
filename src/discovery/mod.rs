@@ -25,6 +25,95 @@ pub fn discover_files(options: DiscoverOptions) -> Result<Vec<PathBuf>> {
     discover_files_with_exclusions(options).map(|res| res.files)
 }
 
+/// Scope a discovered file list down to explicit CLI path filters.
+///
+/// Each entry in `paths` may be a file or a directory (relative to `root`
+/// or absolute). A discovered file is kept when it equals a file filter or
+/// lives under a directory filter. Missing paths are an error so typos fail
+/// loudly instead of silently passing the gate.
+pub fn filter_files_by_paths(
+    files: Vec<PathBuf>,
+    paths: &[PathBuf],
+    root: &Path,
+) -> Result<Vec<PathBuf>> {
+    if paths.is_empty() {
+        return Ok(files);
+    }
+    let filters = resolve_path_filters(paths, root)?;
+    let mut out: Vec<PathBuf> = files
+        .into_iter()
+        .filter(|f| filters.matches(path_key(f)))
+        .collect();
+    for f in filters.explicit_files() {
+        let key = path_key(f);
+        let already = out.iter().any(|e| path_key(e) == key);
+        if !already && f.is_file() {
+            out.push(f.clone());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+struct PathFilters {
+    files: HashSet<String>,
+    dirs: Vec<String>,
+    explicit: Vec<PathBuf>,
+}
+
+impl PathFilters {
+    fn matches(&self, key: String) -> bool {
+        self.files.contains(&key) || self.dirs.iter().any(|d| is_within_dir(&key, d))
+    }
+
+    fn explicit_files(&self) -> &[PathBuf] {
+        &self.explicit
+    }
+}
+
+fn resolve_path_filters(paths: &[PathBuf], root: &Path) -> Result<PathFilters> {
+    let mut files = HashSet::new();
+    let mut dirs = Vec::new();
+    let mut explicit = Vec::new();
+    for p in paths {
+        let abs = if p.is_absolute() {
+            p.clone()
+        } else {
+            root.join(p)
+        };
+        if !abs.exists() {
+            anyhow::bail!("Path not found: {}", p.display());
+        }
+        let rel_key = path_key(&abs);
+        let root_key = path_key(&root.join(p));
+        if abs.is_file() {
+            files.insert(rel_key);
+            files.insert(root_key);
+            files.insert(path_key(p));
+            explicit.push(abs);
+        } else {
+            dirs.push(rel_key);
+            dirs.push(root_key);
+            dirs.push(path_key(p));
+        }
+    }
+    Ok(PathFilters {
+        files,
+        dirs,
+        explicit,
+    })
+}
+
+fn is_within_dir(key: &str, dir: &str) -> bool {
+    key == dir || key.starts_with(&format!("{dir}/"))
+}
+
+/// Lossy lexical key: forward slashes, no leading `./`.
+fn path_key(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    s.strip_prefix("./").unwrap_or(&s).to_string()
+}
+
 pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<DiscoveryResult> {
     let exclusion_glob = build_exclusion_globset(options.exclusions);
     let has_exclusions = !options.exclusions.is_empty();
