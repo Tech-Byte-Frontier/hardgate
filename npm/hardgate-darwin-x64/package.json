@@ -1,6 +1,6 @@
 {
   "name": "hardgate-darwin-x64",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "hardgate prebuilt binary: macOS x64 (Intel)",
   "license": "MIT OR Apache-2.0",
   "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
