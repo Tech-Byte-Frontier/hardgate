@@ -1,10 +1,10 @@
 [package]
 name = "hardgate"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
-authors = ["Tauan <tauan@loreframe.dev>"]
+authors = ["Tauan BF <contact@techbytefrontier.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/Tech-Byte-Frontier/hardgate"
