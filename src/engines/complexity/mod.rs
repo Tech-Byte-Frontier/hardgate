@@ -9,6 +9,8 @@ use tree_sitter::Node;
 pub use walker::ComplexityContribution;
 use walker::{AnalysisState, WalkerContext, abc_score, walk_node};
 
+/// Tree-sitter-derived metrics for one function: size, parameters, nesting,
+/// cyclomatic/cognitive/Halstead/ABC scores, and per-node breakdowns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionMetrics {
     pub name: String,
@@ -28,6 +30,8 @@ pub struct FunctionMetrics {
     pub cyclomatic_breakdown: Vec<ComplexityContribution>,
 }
 
+/// One function breaching a [`FunctionBudgets`] ceiling, with the top AST
+/// contributors and a refactor recommendation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplexityViolation {
     pub file: PathBuf,
@@ -41,6 +45,7 @@ pub struct ComplexityViolation {
     pub recommendation: String,
 }
 
+/// Multi-language Tree-sitter analyzer producing [`FunctionMetrics`].
 pub struct ComplexityAnalyzer;
 
 struct ParseContext<'a> {
@@ -60,6 +65,7 @@ impl ComplexityAnalyzer {
         Self
     }
 
+    /// Parse `content` and collect metrics for every function found.
     pub fn analyze_file(
         &mut self,
         path: &Path,
@@ -82,6 +88,7 @@ impl ComplexityAnalyzer {
         functions
     }
 
+    /// Flag every metric in `metrics` that exceeds a `budgets` ceiling.
     pub fn check_violations(
         metrics: &[FunctionMetrics],
         budgets: &FunctionBudgets,

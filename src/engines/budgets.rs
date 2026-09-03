@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// One file that breached a byte or physical-line budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetViolation {
     pub file: PathBuf,

@@ -2,6 +2,9 @@ use super::{GateReport, push_gate_header, status_label};
 use colored::*;
 use serde::{Deserialize, Serialize};
 
+/// Machine-readable rollup of a [`GateReport`]: per-category counts plus
+/// scan totals. Embedded in full JSON output and returned alone by
+/// [`GateReport::render_summary_json`].
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GateSummary {
     pub total_errors: usize,
@@ -21,6 +24,7 @@ pub struct GateSummary {
     pub passed: bool,
 }
 
+/// One entry of the "top files with violations" ranking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopFileEntry {
     pub file: String,
@@ -28,6 +32,7 @@ pub struct TopFileEntry {
 }
 
 impl GateReport {
+    /// Build the [`GateSummary`] rollup for this report.
     pub fn summary(&self) -> GateSummary {
         GateSummary {
             total_errors: self.total_violations(),
@@ -167,6 +172,8 @@ impl GateReport {
         out
     }
 
+    /// Full machine-readable JSON: every violation plus `summary` and
+    /// `top_files` for `jq`-friendly CI and agent consumption.
     pub fn render_json(&self) -> String {
         match serde_json::to_value(self) {
             Ok(mut val) => {

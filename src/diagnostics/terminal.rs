@@ -3,6 +3,8 @@ use crate::engines::ComplexityContribution;
 use colored::*;
 
 impl GateReport {
+    /// Default human output: rustc-style sections per category with details,
+    /// contributor breakdowns, and help text.
     pub fn render_terminal(&self) -> String {
         let mut out = String::new();
         self.render_terminal_header(&mut out);

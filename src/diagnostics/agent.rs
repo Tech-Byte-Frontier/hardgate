@@ -2,6 +2,8 @@ use super::GateReport;
 use crate::engines::ComplexityContribution;
 
 impl GateReport {
+    /// Structured Markdown for LLM context windows: pinpoint breakdowns with
+    /// actionable refactor directives instead of terminal styling.
     pub fn render_agent(&self) -> String {
         if self.passed {
             let mut out = format!(

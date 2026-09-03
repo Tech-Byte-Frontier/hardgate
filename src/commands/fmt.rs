@@ -4,6 +4,8 @@ use anyhow::Result;
 use colored::*;
 use std::path::Path;
 
+/// Format the project with the configured `[orchestration]` formatter.
+/// With `check_only`, verify formatting without writing changes.
 pub fn cmd_fmt(check_only: bool) -> Result<()> {
     let config = HardgateConfig::load_or_default(None)?;
     let engine = OrchestrationEngine::new(&config.orchestration);

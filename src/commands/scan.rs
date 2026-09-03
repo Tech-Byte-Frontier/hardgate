@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
+/// Inspect one file's AST metrics, suppressions, and budgets, then render
+/// and exit non-zero when violations are found.
 pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
     let start_time = std::time::Instant::now();
     let root = Path::new(".");
@@ -46,6 +48,7 @@ pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
 }
 
 /// Backwards-compatible helper for callers passing `format: Option<&str>`.
+/// Prefer [`cmd_scan`] with [`OutputOptions`] for the full flag matrix.
 pub fn cmd_scan_with_format(file_path: &Path, format: Option<&str>) -> Result<()> {
     cmd_scan(
         file_path,

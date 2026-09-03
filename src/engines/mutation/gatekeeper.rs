@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// One mutation-report breach: kill rate below the floor or timed-out mutants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutationViolation {
     pub report_file: PathBuf,

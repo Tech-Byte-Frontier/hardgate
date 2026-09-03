@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// CLI options for `hardgate mutate`.
 #[derive(Debug, Clone, Default)]
 pub struct MutateOptions {
     pub diff: bool,
@@ -20,6 +21,9 @@ pub struct MutateOptions {
     pub format: Option<String>,
 }
 
+/// Run native Tree-sitter AST mutation testing: generate mutants, execute the
+/// test suite per mutant with timeouts and RAII rollbacks, then report the
+/// kill score. Exits non-zero below the configured floor.
 pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let start_time = Instant::now();
     let config = HardgateConfig::load_or_default(None)?;
@@ -87,6 +91,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     Ok(())
 }
 
+/// Borrowed inputs for rendering one mutation run in any output mode.
 pub struct MutationSummaryContext<'a> {
     pub stats: &'a MutationStats,
     pub results: &'a [MutantExecutionResult],

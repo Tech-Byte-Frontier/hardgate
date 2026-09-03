@@ -5,22 +5,28 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// File extensions hardgate analyzes.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "py", "go", "c", "cpp", "cc", "h", "hpp", "css",
 ];
 
+/// Inputs for file discovery: walk `root` (or git diffs with `diff_only`),
+/// skipping `exclusions` glob patterns.
 pub struct DiscoverOptions<'a> {
     pub root: &'a Path,
     pub diff_only: bool,
     pub exclusions: &'a [String],
 }
 
+/// Discovered source files plus files skipped via budget exclusions
+/// (reported as technical-debt advisories, never silently dropped).
 #[derive(Debug, Clone, Default)]
 pub struct DiscoveryResult {
     pub files: Vec<PathBuf>,
     pub excluded_files: Vec<PathBuf>,
 }
 
+/// Discover source files, returning just the included paths.
 pub fn discover_files(options: DiscoverOptions) -> Result<Vec<PathBuf>> {
     discover_files_with_exclusions(options).map(|res| res.files)
 }
@@ -114,6 +120,7 @@ fn path_key(p: &Path) -> String {
     s.strip_prefix("./").unwrap_or(&s).to_string()
 }
 
+/// Discover source files, keeping excluded ones visible for advisories.
 pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<DiscoveryResult> {
     let exclusion_glob = build_exclusion_globset(options.exclusions);
     let has_exclusions = !options.exclusions.is_empty();

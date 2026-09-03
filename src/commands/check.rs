@@ -14,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// CLI options for `hardgate check`, including output modes and path scoping.
 #[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
     pub format: Option<String>,
@@ -39,17 +40,23 @@ pub struct OutputOptions {
 }
 
 impl OutputOptions {
+    /// True for `--json` or `--format json`.
     pub fn is_json(&self) -> bool {
         self.json || matches!(self.format.as_deref(), Some("json"))
     }
+    /// True for `--summary` or `--format summary`.
     pub fn is_summary(&self) -> bool {
         self.summary || matches!(self.format.as_deref(), Some("summary"))
     }
+    /// True for `--compact`, `--no-snippets`, or `--format compact`.
     pub fn is_compact(&self) -> bool {
         self.compact || self.no_snippets || matches!(self.format.as_deref(), Some("compact"))
     }
 }
 
+/// Run the fast deterministic static gate: budgets, suppressions,
+/// invariants, complexity, clones, and optional dead-code, coverage, and
+/// orchestration checks. Exits non-zero when violations are found.
 pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     let start_time = Instant::now();
     let root = Path::new(".");
@@ -127,6 +134,8 @@ fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> 
     None
 }
 
+/// Artifacts of one static-gate run: the report plus the discovered files,
+/// their contents, and per-function metrics for downstream gates.
 pub type StaticGateOutcome = Option<(
     GateReport,
     Vec<PathBuf>,
@@ -134,10 +143,14 @@ pub type StaticGateOutcome = Option<(
     Vec<FunctionMetrics>,
 )>;
 
+/// Run the static gate over the whole discovered tree (see
+/// [`run_static_gate_scoped`] for path-filtered runs).
 pub fn run_static_gate(config: &HardgateConfig, diff: bool) -> Result<StaticGateOutcome> {
     run_static_gate_scoped(config, diff, &[])
 }
 
+/// Run the static gate, optionally scoped to `paths` (files or directories).
+/// Missing filter paths are an error; an empty discovery yields `None`.
 pub fn run_static_gate_scoped(
     config: &HardgateConfig,
     diff: bool,
@@ -253,6 +266,7 @@ fn run_file_analysis(
     (read_results, all_functions)
 }
 
+/// Print the "nothing to check" note, distinguishing scoped runs from diffs.
 pub fn print_empty_discovery(diff: bool, scoped: bool) {
     if scoped {
         println!(
@@ -272,6 +286,8 @@ pub fn print_empty_discovery(diff: bool, scoped: bool) {
     }
 }
 
+/// Render `report` with a legacy `format` name (`agent`, `json`, terminal).
+/// Prefer [`output_report_with_opts`] for the full flag matrix.
 pub fn output_report(report: &GateReport, format: Option<&str>) {
     output_report_with_opts(
         report,
@@ -285,6 +301,7 @@ pub fn output_report(report: &GateReport, format: Option<&str>) {
     );
 }
 
+/// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
 pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) {
     if opts.is_json() {
         if opts.is_summary() {
@@ -312,6 +329,7 @@ pub struct Emission<'a> {
     pub opts: &'a OutputOptions,
 }
 
+/// Finalize `report` from `emission` counts, render it, and exit(1) on failure.
 pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
     report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
     output_report_with_opts(report, emission.opts);
@@ -331,6 +349,8 @@ pub struct AnalyzeInput<'a> {
     pub invariants: &'a InvariantsChecker,
 }
 
+/// Run budgets, suppressions, invariants, and complexity for one file,
+/// appending violations to `report` and returning its function metrics.
 pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec<FunctionMetrics> {
     let AnalyzeInput {
         path,

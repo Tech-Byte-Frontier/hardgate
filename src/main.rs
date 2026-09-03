@@ -23,7 +23,7 @@ struct Cli {
 #[derive(Args, Debug, Clone, Default)]
 struct OutputArgs {
     /// Format output (terminal | agent | json | compact | summary)
-    #[arg(long)]
+    #[arg(long, value_parser = ["terminal", "agent", "json", "compact", "summary"])]
     format: Option<String>,
     /// Shorthand for --format json (machine-readable, jq-friendly)
     #[arg(long)]
@@ -55,7 +55,15 @@ impl OutputArgs {
 enum Commands {
     /// Initialize hardgate.toml in the current repository
     Init {
-        #[arg(short, long, default_value = "strict-agent")]
+        /// Config preset: strict-agent (AI agents), balanced (hybrid teams),
+        /// legacy-migration (burn down tech debt), or custom (empty shell)
+        #[arg(
+            short,
+            long,
+            default_value = "strict-agent",
+            value_parser = ["strict-agent", "balanced", "legacy-migration", "custom"],
+            ignore_case = true
+        )]
         preset: String,
     },
     /// Run fast deterministic static gate checks
@@ -109,7 +117,7 @@ enum Commands {
         #[arg(long)]
         max_mutants: Option<usize>,
         /// Format output (terminal | agent | json)
-        #[arg(long)]
+        #[arg(long, value_parser = ["terminal", "agent", "json"])]
         format: Option<String>,
         /// Shorthand for --format json
         #[arg(long)]

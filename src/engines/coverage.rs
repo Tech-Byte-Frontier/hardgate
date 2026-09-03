@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// One coverage or CRAP breach for a file or function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoverageViolation {
     pub file: PathBuf,

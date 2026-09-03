@@ -5,6 +5,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// One forbidden import, call, or token crossing an architectural boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvariantViolation {
     pub file: PathBuf,

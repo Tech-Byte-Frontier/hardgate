@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 pub use summary::{GateSummary, TopFileEntry};
 
+/// Aggregated result of a gate run: every violation by category plus the
+/// counts needed for terminal, agent, compact, summary, and JSON rendering.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GateReport {
     pub gate_name: String,
@@ -33,6 +35,8 @@ pub struct GateReport {
 }
 
 impl GateReport {
+    /// Create an empty report for `gate_name`; call [`GateReport::finalize`]
+    /// once analysis is done to freeze counts and the pass/fail verdict.
     pub fn new(gate_name: String) -> Self {
         Self {
             gate_name,
@@ -41,6 +45,7 @@ impl GateReport {
         }
     }
 
+    /// Total violations across every category.
     pub fn total_violations(&self) -> usize {
         [
             self.budget_violations.len(),
@@ -57,6 +62,7 @@ impl GateReport {
         .sum()
     }
 
+    /// Freeze scan counts and derive `passed` (true only with zero violations).
     pub fn finalize(&mut self, files_scanned: usize, functions_analyzed: usize, duration_ms: u128) {
         self.files_scanned = files_scanned;
         self.functions_analyzed = functions_analyzed;

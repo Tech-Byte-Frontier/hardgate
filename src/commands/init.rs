@@ -4,6 +4,9 @@ use colored::*;
 use std::fs;
 use std::path::Path;
 
+/// Write a `hardgate.toml` for `preset_str` (`strict-agent`, `balanced`,
+/// `legacy-migration`, or `custom`; anything else falls back to strict-agent).
+/// Refuses to overwrite an existing config.
 pub fn cmd_init(preset_str: &str) -> Result<()> {
     let target = Path::new("hardgate.toml");
     if target.exists() {

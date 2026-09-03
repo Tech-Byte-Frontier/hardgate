@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+/// One external tool failure (formatter or linter step).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationViolation {
     pub step: String,

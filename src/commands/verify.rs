@@ -8,6 +8,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// CLI options for `hardgate verify`, including output modes and path scoping.
 #[derive(Debug, Clone, Default)]
 pub struct VerifyOptions {
     pub coverage_report: Option<String>,
@@ -20,6 +21,8 @@ pub struct VerifyOptions {
     pub paths: Vec<PathBuf>,
 }
 
+/// Run static gates plus coverage and mutation report evaluation.
+/// Exits non-zero when violations are found.
 pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     let start_time = Instant::now();
     let config = HardgateConfig::load_or_default(None)?;
@@ -72,6 +75,7 @@ pub fn cmd_verify_legacy(
     })
 }
 
+/// Ingest an lcov report and flag functions breaching coverage/CRAP floors.
 pub fn verify_coverage(
     config: &HardgateConfig,
     cli_report: Option<String>,
@@ -103,6 +107,8 @@ pub fn verify_coverage(
     }
 }
 
+/// Ingest mutation reports (Stryker, cargo-mutants, generic) and flag scores
+/// below the configured floor.
 pub fn verify_mutation(
     config: &HardgateConfig,
     cli_report: Option<String>,

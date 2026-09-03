@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// One duplicated block shared between two locations, with span sizes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloneViolation {
     pub file_a: PathBuf,
@@ -101,6 +102,7 @@ impl CloneDetector {
         self.excluded_files(files, root).len()
     }
 
+    /// Rolling-hash clone detection over token streams, honoring excludes.
     pub fn detect_clones(&self, files: &[(PathBuf, String)], root: &Path) -> Vec<CloneViolation> {
         let mut window_map: HashMap<u64, Vec<TokenLocation>> = HashMap::new();
         let mut raw_matches: Vec<RawCloneMatch> = Vec::new();

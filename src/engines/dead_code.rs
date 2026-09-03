@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// One unreferenced file or unused export left behind.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeadCodeViolation {
     pub file: PathBuf,

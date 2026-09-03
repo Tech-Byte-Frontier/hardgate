@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// One forbidden suppression pragma found in source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuppressionViolation {
     pub file: PathBuf,
@@ -69,6 +70,7 @@ impl AntiGamingScanner {
         }
     }
 
+    /// Scan one file's lines for forbidden suppression pragmas.
     pub fn scan_content(
         &self,
         path: &Path,

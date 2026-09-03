@@ -28,6 +28,8 @@ struct JsonRpcResponse {
     error: Option<serde_json::Value>,
 }
 
+/// Serve the Model Context Protocol over stdio: `hardgate_check`,
+/// `hardgate_scan_file`, and `hardgate_get_metrics` tools for AI assistants.
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();

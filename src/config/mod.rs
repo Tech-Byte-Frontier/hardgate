@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Root `hardgate.toml` configuration: gate identity plus every engine budget.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HardgateConfig {
     #[serde(default)]
@@ -29,6 +30,7 @@ pub struct HardgateConfig {
     pub analysis: AnalysisConfig,
 }
 
+/// Gate identity: display name, base preset, and strictness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateConfig {
     #[serde(default = "default_gate_name")]
@@ -60,6 +62,7 @@ fn default_true() -> bool {
     true
 }
 
+/// Physical file budgets plus per-function AST complexity budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BudgetsConfig {
     #[serde(default)]
@@ -68,6 +71,7 @@ pub struct BudgetsConfig {
     pub functions: FunctionBudgets,
 }
 
+/// Byte/line ceilings per file, with glob exclusions that surface advisories.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FileBudgets {
     pub max_bytes: Option<u64>,
@@ -83,6 +87,8 @@ pub struct ExclusionConfig {
     pub paths: Vec<String>,
 }
 
+/// Per-function ceilings: cyclomatic, cognitive, Halstead, ABC, parameters,
+/// lines, statements, and nesting depth.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FunctionBudgets {
     pub max_cyclomatic: Option<u32>,
@@ -95,6 +101,7 @@ pub struct FunctionBudgets {
     pub max_nesting_depth: Option<usize>,
 }
 
+/// Zero-tolerance suppression policy plus project-specific forbidden tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntiGamingConfig {
     #[serde(default = "default_true")]
@@ -112,6 +119,7 @@ impl Default for AntiGamingConfig {
     }
 }
 
+/// Architectural boundary rules between subsystems.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InvariantsConfig {
     #[serde(default = "default_true")]
@@ -120,6 +128,8 @@ pub struct InvariantsConfig {
     pub rules: Vec<InvariantRule>,
 }
 
+/// One boundary rule: which files it covers and what imports, calls, or
+/// tokens are forbidden there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvariantRule {
     pub name: Option<String>,
@@ -131,6 +141,7 @@ pub struct InvariantRule {
     pub message: Option<String>,
 }
 
+/// Token-stream clone detection thresholds and exclusion globs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloneConfig {
     #[serde(default = "default_true")]
@@ -161,6 +172,8 @@ fn default_min_clone_tokens() -> usize {
     50
 }
 
+/// Coverage floors (line/function/branch), CRAP ceiling, and critical paths
+/// requiring full coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CoverageConfig {
     #[serde(default)]
@@ -173,6 +186,7 @@ pub struct CoverageConfig {
     pub critical_paths: Option<Vec<String>>,
 }
 
+/// Mutation testing policy: kill-rate floor, timeout handling, and runner tuning.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MutationConfig {
     #[serde(default)]
@@ -186,6 +200,7 @@ pub struct MutationConfig {
     pub max_mutants: Option<usize>,
 }
 
+/// External formatter/linter/test commands orchestrated by `fmt` and `check --all`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OrchestrationConfig {
     pub format_check: Option<String>,
@@ -194,12 +209,14 @@ pub struct OrchestrationConfig {
     pub test_cmd: Option<String>,
 }
 
+/// Post-static analyses such as dead-code detection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AnalysisConfig {
     #[serde(default)]
     pub dead_code: DeadCodeConfig,
 }
 
+/// Dead-code detection: entry points plus exclusion globs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeadCodeConfig {
     #[serde(default)]
@@ -211,6 +228,8 @@ pub struct DeadCodeConfig {
 }
 
 impl HardgateConfig {
+    /// Load `hardgate.toml` (or `path`), falling back to the strict-agent
+    /// preset when no config file exists.
     pub fn load_or_default(path: Option<&Path>) -> Result<Self> {
         let config_path = match path {
             Some(p) => p.to_path_buf(),
@@ -241,6 +260,7 @@ impl HardgateConfig {
         Ok(config)
     }
 
+    /// Render a commented `hardgate.toml` template for `preset` (`init` output).
     pub fn generate_toml_template(preset: Preset) -> String {
         preset.to_clean_toml()
     }
