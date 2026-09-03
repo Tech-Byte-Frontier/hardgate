@@ -32,8 +32,8 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     }
 
     println!(
-        "{} Generating AST mutations across {} source files (diff: {})...",
-        "🧬".bold(),
+        "{} generating AST mutations across {} source files (diff: {})...",
+        "note:".bold(),
         target_files.len().to_string().cyan(),
         opts.diff
     );
@@ -45,8 +45,8 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let mutants = generate_target_mutants(&target_files, max_count);
     if mutants.is_empty() {
         println!(
-            "{} No candidate AST mutation points found in selected files.",
-            "⚠️".yellow()
+            "{} no candidate AST mutation points found in selected files.",
+            "warning:".yellow().bold()
         );
         return Ok(());
     }
@@ -58,8 +58,8 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let test_cmd = opts.test_cmd.or_else(|| config.mutation.test_cmd.clone());
 
     println!(
-        "{} Running {} mutants (timeout: {}s per mutant)...",
-        "⚡".bold(),
+        "{} running {} mutants (timeout: {}s per mutant)...",
+        "note:".bold(),
         mutants.len().to_string().cyan(),
         timeout
     );
@@ -160,18 +160,18 @@ fn run_mutant_batch(
         match res.outcome {
             MutantOutcome::Killed => {
                 stats.killed += 1;
-                println!("{}", "KILLED".green().bold());
+                println!("{}", "killed".green().bold());
             }
             MutantOutcome::Survived => {
                 stats.survived += 1;
-                println!("{}", "SURVIVED".red().bold());
+                println!("{}", "survived".red().bold());
             }
             MutantOutcome::Timeout => {
                 stats.timeout += 1;
-                println!("{}", "TIMEOUT".yellow().bold());
+                println!("{}", "timeout".yellow().bold());
             }
             MutantOutcome::Error => {
-                println!("{}", "ERROR".red());
+                println!("{}", "error".red());
             }
         }
         results.push(res);
@@ -183,13 +183,13 @@ fn run_mutant_batch(
 fn print_no_targets(diff: bool) {
     if diff {
         println!(
-            "{} No git-modified files found for mutation testing.",
-            "✓".green()
+            "{} no git-modified files found for mutation testing.",
+            "note:".green().bold()
         );
     } else {
         println!(
-            "{} No source files found for mutation testing.",
-            "⚠️".yellow()
+            "{} no source files found for mutation testing.",
+            "warning:".yellow().bold()
         );
     }
 }
@@ -241,31 +241,31 @@ fn render_agent_output(ctx: &MutationSummaryContext) {
 }
 
 fn render_terminal_output(ctx: &MutationSummaryContext) {
-    println!("\n{}", "─".repeat(70).dimmed());
-    println!("{}", "Mutation Testing Summary:".bold());
-    println!("  Mutants Tested:  {}", ctx.stats.total.to_string().cyan());
+    println!("\n{}", "-".repeat(70).dimmed());
+    println!("{}", "mutation summary:".bold());
+    println!("  mutants tested:  {}", ctx.stats.total.to_string().cyan());
     println!(
-        "  Killed:          {}",
+        "  killed:          {}",
         ctx.stats.killed.to_string().green()
     );
     println!(
-        "  Survived:        {}",
+        "  survived:        {}",
         ctx.stats.survived.to_string().red()
     );
     println!(
-        "  Timed Out:       {}",
+        "  timed out:       {}",
         ctx.stats.timeout.to_string().yellow()
     );
     println!(
-        "  Score:           {:.1}% (Threshold: {:.1}%)",
+        "  score:           {:.1}% (threshold: {:.1}%)",
         ctx.score, ctx.min_score
     );
     println!(
-        "  Verdict:         {}",
+        "  result:          {}",
         if ctx.passed {
-            "PASS".bold().green()
+            "pass".bold().green()
         } else {
-            "FAIL".bold().red()
+            "fail".bold().red()
         }
     );
 
@@ -277,19 +277,18 @@ fn render_terminal_output(ctx: &MutationSummaryContext) {
     if !survivors.is_empty() {
         println!(
             "\n{} {}",
-            "⚠️".yellow(),
-            format!("Survived Mutants ({})", survivors.len())
-                .bold()
-                .yellow()
+            "warning:".yellow().bold(),
+            format!("survived mutants ({})", survivors.len()).bold()
         );
         for res in survivors {
             println!(
-                "   • {}:{} - {}\n     Original: `{}`  Mutated: `{}`\n     Hint: Add a test asserting behavior for this code branch.\n",
+                "  --> {}:{}: {}\n       original: `{}` mutated: `{}`\n       {} add a test asserting behavior for this code branch.\n",
                 res.mutant.file.display().to_string().bold(),
                 res.mutant.line.to_string().yellow(),
                 res.mutant.description,
                 res.mutant.original.red(),
-                res.mutant.replacement.green()
+                res.mutant.replacement.green(),
+                "help:".dimmed(),
             );
         }
     }

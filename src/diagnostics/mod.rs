@@ -79,16 +79,16 @@ impl GateReport {
 
     fn render_terminal_header(&self, out: &mut String) {
         let status = if self.passed {
-            "[PASSED]".bold().green()
+            "pass".bold().green()
         } else {
-            "[FAILED]".bold().red()
+            "fail".bold().red()
         };
         out.push_str(&format!(
             "\n{} {} {}\n{}\n\n",
-            "🛡️ ".bold(),
-            format!("Hardgate Gate [{}]", self.gate_name).bold().cyan(),
+            "hardgate".bold(),
+            format!("[{}]", self.gate_name).bold(),
             status,
-            "─".repeat(70).dimmed()
+            "-".repeat(70).dimmed()
         ));
     }
 
@@ -97,12 +97,7 @@ impl GateReport {
             return;
         }
         for advisory in &self.advisories {
-            out.push_str(&format!(
-                "{}  {}: {}\n",
-                "⚠️".yellow(),
-                "Advisory".yellow().bold(),
-                advisory
-            ));
+            out.push_str(&format!("{} {}\n", "warning:".yellow().bold(), advisory));
         }
         out.push('\n');
     }
@@ -112,18 +107,14 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🚫".red(),
-            format!(
-                "Anti-Gaming Violations ({})",
-                self.suppression_violations.len()
-            )
-            .bold()
-            .red()
+            "{}\n",
+            format!("error[anti-gaming] ({})", self.suppression_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.suppression_violations {
             out.push_str(&format!(
-                "   • {}:{} - Forbidden: {}\n     {}\n",
+                "  --> {}:{}: forbidden `{}`\n       {}\n",
                 v.file.display().to_string().bold(),
                 v.line_number.to_string().yellow(),
                 v.token.bold().red(),
@@ -138,18 +129,14 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "⚡".yellow(),
-            format!(
-                "Complexity Violations ({})",
-                self.complexity_violations.len()
-            )
-            .bold()
-            .yellow()
+            "{}\n",
+            format!("error[complexity] ({})", self.complexity_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.complexity_violations {
             out.push_str(&format!(
-                "   • {}:{} [{}] - {}: actual {:.0}, budget {:.0}\n",
+                "  --> {}:{} [{}]: {} is {:.0} (limit: {:.0})\n",
                 v.file.display().to_string().bold(),
                 v.line_number.to_string().yellow(),
                 v.function_name.cyan(),
@@ -158,7 +145,11 @@ impl GateReport {
                 v.limit
             ));
             append_terminal_contributors(&v.breakdown, out);
-            out.push_str(&format!("     Hint: {}\n", v.recommendation.dimmed()));
+            out.push_str(&format!(
+                "       {} {}\n",
+                "help:".dimmed(),
+                v.recommendation.dimmed()
+            ));
         }
         out.push('\n');
     }
@@ -168,15 +159,14 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "📦".yellow(),
-            format!("File Budget Violations ({})", self.budget_violations.len())
+            "{}\n",
+            format!("error[file-budget] ({})", self.budget_violations.len())
                 .bold()
-                .yellow()
+                .red()
         ));
         for v in &self.budget_violations {
             out.push_str(&format!(
-                "   • {} - {}: actual {}, limit {}\n",
+                "  --> {}: {} is {} (limit: {})\n",
                 v.file.display().to_string().bold(),
                 v.metric,
                 v.actual.to_string().red(),
@@ -191,22 +181,19 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🏛️".yellow(),
-            format!(
-                "Architectural Invariant Violations ({})",
-                self.invariant_violations.len()
-            )
-            .bold()
-            .yellow()
+            "{}\n",
+            format!("error[architecture] ({})", self.invariant_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.invariant_violations {
             out.push_str(&format!(
-                "   • {}:{} [{}] - {}\n     Hint: Target `{}` violated boundary `{}`.\n",
+                "  --> {}:{} [{}]: {}\n       {} target `{}` violates `{}`.\n",
                 v.file.display().to_string().bold(),
                 v.line_number.to_string().yellow(),
                 v.rule_name.bold().red(),
                 v.message,
+                "help:".dimmed(),
                 v.offending_target.bold(),
                 v.violation_type
             ));
@@ -219,14 +206,13 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "👥".yellow(),
-            format!("Clone Violations ({})", self.clone_violations.len())
+            "{}\n",
+            format!("error[clone] ({})", self.clone_violations.len())
                 .bold()
-                .yellow()
+                .red()
         ));
         for v in &self.clone_violations {
-            out.push_str(&format!("   • `{}:{}-{}` matches `{}:{}-{}` ({} lines, ~{} tokens)\n     Hint: Extract duplicated logic in `{}` and `{}` into a shared helper.\n", v.file_a.display(), v.lines_a.0, v.lines_a.1, v.file_b.display(), v.lines_b.0, v.lines_b.1, v.lines, v.tokens, v.file_a.display(), v.file_b.display()));
+            out.push_str(&format!("  --> `{}:{}-{}` matches `{}:{}-{}` ({} lines, ~{} tokens)\n       {} extract duplicated logic in `{}` and `{}` into a shared helper.\n", v.file_a.display(), v.lines_a.0, v.lines_a.1, v.file_b.display(), v.lines_b.0, v.lines_b.1, v.lines, v.tokens, "help:".dimmed(), v.file_a.display(), v.file_b.display()));
         }
         out.push('\n');
     }
@@ -236,28 +222,25 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🎯".yellow(),
-            format!(
-                "Coverage / CRAP Violations ({})",
-                self.coverage_violations.len()
-            )
-            .bold()
-            .yellow()
+            "{}\n",
+            format!("error[coverage] ({})", self.coverage_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.coverage_violations {
             let func_info = v
                 .function_name
                 .as_ref()
-                .map(|f| format!(" in function `{}`", f))
+                .map(|f| format!(" [{}]", f))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "   • {}{} - {}: actual {:.1}, required {:.1}\n     Hint: {}\n",
+                "  --> {}{}: {} is {:.1} (required: {:.1})\n       {} {}\n",
                 v.file.display().to_string().bold(),
                 func_info.cyan(),
                 v.metric,
                 v.actual,
                 v.limit,
+                "help:".dimmed(),
                 v.recommendation.dimmed()
             ));
         }
@@ -269,22 +252,19 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🧬".yellow(),
-            format!(
-                "Mutation Testing Violations ({})",
-                self.mutation_violations.len()
-            )
-            .bold()
-            .yellow()
+            "{}\n",
+            format!("error[mutation] ({})", self.mutation_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.mutation_violations {
             out.push_str(&format!(
-                "   • {} - {}: actual {:.1}%, required {:.1}%\n     Hint: {}\n",
+                "  --> {}: {} is {:.1}% (required: {:.1}%)\n       {} {}\n",
                 v.report_file.display().to_string().bold(),
                 v.metric,
                 v.actual,
                 v.limit,
+                "help:".dimmed(),
                 v.recommendation.dimmed()
             ));
         }
@@ -296,23 +276,20 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🧹".yellow(),
-            format!(
-                "Dead Code & Unused Export Violations ({})",
-                self.dead_code_violations.len()
-            )
-            .bold()
-            .yellow()
+            "{}\n",
+            format!("error[dead-code] ({})", self.dead_code_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.dead_code_violations {
             let line_str = v.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
             out.push_str(&format!(
-                "   • {}{} [{}] - {}\n     Hint: {}\n",
+                "  --> {}{} [{}]: {}\n       {} {}\n",
                 v.file.display().to_string().bold(),
                 line_str.yellow(),
                 v.violation_type.cyan(),
                 v.message,
+                "help:".dimmed(),
                 v.recommendation.dimmed()
             ));
         }
@@ -324,22 +301,19 @@ impl GateReport {
             return;
         }
         out.push_str(&format!(
-            "{} {}\n",
-            "🛠️ ".red(),
-            format!(
-                "Orchestration Tool Failures ({})",
-                self.orchestration_violations.len()
-            )
-            .bold()
-            .red()
+            "{}\n",
+            format!("error[tool] ({})", self.orchestration_violations.len())
+                .bold()
+                .red()
         ));
         for v in &self.orchestration_violations {
             out.push_str(&format!(
-                "   • [{}] `{}` failed (exit code: {:?})\n     Output: {}\n     Hint: {}\n",
+                "  --> [{}] `{}` failed (exit: {:?})\n       {}\n       {} {}\n",
                 v.step.bold().red(),
                 v.command.cyan(),
                 v.exit_code,
                 v.output.dimmed(),
+                "help:".dimmed(),
                 v.recommendation.dimmed()
             ));
         }
@@ -347,20 +321,20 @@ impl GateReport {
     }
 
     fn render_terminal_summary(&self, out: &mut String) {
-        let verdict = if self.passed {
-            "PASS (All gates satisfied)".bold().green()
+        let result = if self.passed {
+            "pass".bold().green()
         } else {
-            format!("FAIL ({} violations detected)", self.total_violations())
+            format!("fail ({} errors)", self.total_violations())
                 .bold()
                 .red()
         };
         out.push_str(&format!(
-            "{}\nSummary: {} files scanned, {} functions analyzed in {}ms.\nVerdict: {}\n",
-            "─".repeat(70).dimmed(),
+            "{}\nsummary: {} files, {} functions in {}ms\nresult: {}\n",
+            "-".repeat(70).dimmed(),
             self.files_scanned,
             self.functions_analyzed,
             self.duration_ms,
-            verdict
+            result
         ));
     }
 
@@ -379,8 +353,8 @@ fn append_terminal_contributors(breakdown: &[ComplexityContribution], out: &mut 
     append_contributors_formatted(
         breakdown,
         ContributorFormat {
-            header: "     Key AST contributors:\n",
-            prefix: "       • L",
+            header: "       key contributors:\n",
+            prefix: "         - L",
             dim: true,
         },
         out,

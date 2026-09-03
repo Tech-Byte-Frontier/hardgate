@@ -17,8 +17,8 @@ pub fn cmd_fmt(check_only: bool) -> Result<()> {
 
     let Some(res) = res else {
         println!(
-            "{} No format or format_check command configured in [orchestration].",
-            "⚠️".yellow()
+            "{} no format or format_check command configured in [orchestration].",
+            "warning:".yellow().bold()
         );
         return Ok(());
     };
@@ -26,8 +26,8 @@ pub fn cmd_fmt(check_only: bool) -> Result<()> {
     match res {
         Ok(ok) => {
             println!(
-                "{} Format [{}] passed ({}ms)",
-                "✓".green(),
+                "{} format [{}] passed ({}ms)",
+                "ok:".green().bold(),
                 ok.command.bold(),
                 ok.duration_ms
             );
@@ -38,8 +38,8 @@ pub fn cmd_fmt(check_only: bool) -> Result<()> {
         }
         Err(err) => {
             eprintln!(
-                "{} Format [{}] failed (exit code: {:?})",
-                "❌".red(),
+                "{} format [{}] failed (exit: {:?})",
+                "error:".red().bold(),
                 err.command.bold(),
                 err.exit_code
             );

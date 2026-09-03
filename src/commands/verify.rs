@@ -17,7 +17,10 @@ pub fn cmd_verify(
 
     let Some((mut report, _files, read_results, functions)) = run_static_gate(&config, false)?
     else {
-        println!("{} No matching source files detected.", "⚠️".yellow());
+        println!(
+            "{} no matching source files detected.",
+            "warning:".yellow().bold()
+        );
         return Ok(());
     };
 

@@ -9,7 +9,7 @@ pub fn cmd_init(preset_str: &str) -> Result<()> {
     if target.exists() {
         println!(
             "{} `hardgate.toml` already exists in this directory.",
-            "⚠️".yellow()
+            "warning:".yellow().bold()
         );
         return Ok(());
     }
@@ -25,8 +25,8 @@ pub fn cmd_init(preset_str: &str) -> Result<()> {
     fs::write(target, toml_content)?;
 
     println!(
-        "{} Initialized {} with preset [{}]",
-        "✓".green(),
+        "{} initialized {} with preset [{}]",
+        "created:".green().bold(),
         "hardgate.toml".bold(),
         format!("{:?}", preset).bold()
     );

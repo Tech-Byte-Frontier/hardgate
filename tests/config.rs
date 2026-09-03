@@ -218,8 +218,9 @@ fn test_gate_report_advisories_rendering() {
     let term = report.render_terminal();
     assert!(term.contains("25 files excluded from clone detection via hardgate.toml."));
     assert!(term.contains("1 file excluded from file budget checks via hardgate.toml."));
-    assert!(term.contains("Advisory"));
-    assert!(term.contains("PASS (All gates satisfied)"));
+    assert!(term.contains("warning:"));
+    assert!(term.contains("result:"));
+    assert!(term.contains("pass"));
 
     let agent = report.render_agent();
     assert!(

@@ -51,6 +51,13 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         report.orchestration_violations.extend(violations);
     }
 
+    // `check` is static-only and never executes mutants. Nudge humans/LLM
+    // agents toward the opt-in next step so test strength gets verified.
+    report.advisories.push(
+        "Static check excludes live mutation testing. Consider running `hardgate mutate --diff` or `hardgate verify --mutation-report <report>` to verify test strength."
+            .to_string(),
+    );
+
     let elapsed = start_time.elapsed().as_millis();
     report.finalize(read_results.len(), functions.len(), elapsed);
 
@@ -204,11 +211,14 @@ fn run_file_analysis(
 fn print_empty_discovery(diff: bool) {
     if diff {
         println!(
-            "{} No git-modified source files detected to check.",
-            "✓".green()
+            "{} no git-modified source files detected to check.",
+            "note:".green().bold()
         );
     } else {
-        println!("{} No matching source files detected.", "⚠️".yellow());
+        println!(
+            "{} no matching source files detected.",
+            "warning:".yellow().bold()
+        );
     }
 }
 
