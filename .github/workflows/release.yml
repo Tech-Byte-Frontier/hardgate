@@ -219,17 +219,45 @@ jobs:
       # NOTE: the "./" prefix is load-bearing: a bare `npm/<pkg>` arg is
       # parsed as a GitHub `owner/repo` shorthand (git ls-remote failure),
       # not as a local path.
+      # NOTE: this step is deliberately tolerant: one blocked platform
+      # (e.g. `hardgate-win32-x64`, which npm's spam detection rejects --
+      # see https://npmjs.com/support) must not sink the whole release.
+      # Failures are recorded and reported by the final report step, after
+      # the main wrapper has been published.
       - name: publish platform packages (skip versions already live)
         run: |
+          FAIL=/tmp/hg-npm-failures.txt
+          : > "$FAIL"
+          publish_one() {
+            npm publish --provenance --access public "./npm/$1"
+          }
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
             WANT=$(node -p "require('./npm/$pkg/package.json').version")
             HAVE=$(npm view "$pkg" version 2>/dev/null || echo none)
             if [ "$HAVE" = "$WANT" ]; then
               echo "$pkg $WANT already on npm; skipping."
+              continue
+            fi
+            if publish_one "$pkg"; then
+              echo "$pkg $WANT published."
             else
-              npm publish --provenance --access public "./npm/$pkg"
+              echo "$pkg $WANT publish failed; retrying once in 15s..."
+              sleep 15
+              if publish_one "$pkg"; then
+                echo "$pkg $WANT published on retry."
+              elif [ "$(npm view "$pkg" version 2>/dev/null || echo none)" = "$WANT" ]; then
+                echo "$pkg $WANT is live on npm despite the publish error; treating as published."
+              else
+                echo "$pkg" >> "$FAIL"
+                echo "::warning::$pkg $WANT failed to publish; continuing with remaining packages."
+              fi
             fi
           done
+          if [ -s "$FAIL" ]; then
+            echo "Failed platform packages:"; cat "$FAIL"
+          else
+            echo "All platform packages published (or already live)."
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: publish main wrapper (skip version already live)
@@ -243,3 +271,11 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: report npm failures (if any)
+        run: |
+          if [ -s /tmp/hg-npm-failures.txt ]; then
+            echo "::error::These npm packages failed to publish (main wrapper above was still attempted):"
+            cat /tmp/hg-npm-failures.txt
+            exit 1
+          fi
+          echo "npm publish fully green."
