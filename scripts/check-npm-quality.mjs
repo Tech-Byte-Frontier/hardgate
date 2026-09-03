@@ -38,6 +38,8 @@ const readJson = (rel) =>
 
 // --- main wrapper ---
 const main = readJson("npm/hardgate/package.json");
+if (main.name !== "@tech-byte-frontier/hardgate")
+  fail(`npm/hardgate name = ${main.name} (unscoped 'hardgate' is blocked by npm typosquat protection)`);
 if (main.version !== version) fail(`npm/hardgate version ${main.version} != Cargo ${version}`);
 for (const p of platformPkgs) {
   if (main.optionalDependencies?.[p] !== version)

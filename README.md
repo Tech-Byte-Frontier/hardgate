@@ -101,11 +101,11 @@ Automatically detects local `./node_modules/.bin` and global paths, running form
 
 ```sh
 # Via npm (recommended for JS/TS projects, no Rust toolchain needed)
-npm i -D hardgate
+npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 
 # pnpm / Yarn / Bun (same pattern: devDependency + exec)
-pnpm add -D hardgate
+pnpm add -D @tech-byte-frontier/hardgate
 pnpm exec hardgate check
 
 # Via shell (Linux/macOS) / PowerShell (Windows), no npm needed

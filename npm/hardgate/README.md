@@ -1,4 +1,4 @@
-# hardgate (npm)
+# @tech-byte-frontier/hardgate (npm)
 
 [![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
 [![GitHub Release](https://img.shields.io/github/v/release/Tech-Byte-Frontier/hardgate)](https://github.com/Tech-Byte-Frontier/hardgate/releases)
@@ -6,20 +6,20 @@
 Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era. Prebuilt Rust binary, no toolchain required.
 
 ```sh
-npm i -D hardgate
+npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 ```
 
 Install as a devDependency, then run via `npx`, `pnpm exec`, `yarn dlx`, `bunx`, or a `package.json` script. Platform binaries are delivered via `optionalDependencies` (`hardgate-linux-*`, `hardgate-darwin-*`, `hardgate-win32-*`), so installs stay offline-friendly with no postinstall downloads.
 
 ```sh
-pnpm add -D hardgate
+pnpm add -D @tech-byte-frontier/hardgate
 pnpm exec hardgate check --diff
 
 # yarn / bun
-yarn add -D hardgate
+yarn add -D @tech-byte-frontier/hardgate
 yarn dlx hardgate check
-bun add -d hardgate
+bun add -d @tech-byte-frontier/hardgate
 bunx hardgate check
 ```
 

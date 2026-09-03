@@ -5,7 +5,7 @@ hardgate prebuilt binary: linux x64 (musl, static — Alpine/Docker).
 This is a platform-specific package. Install the main wrapper instead:
 
 ```sh
-npm i -D hardgate
+npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 ```
 

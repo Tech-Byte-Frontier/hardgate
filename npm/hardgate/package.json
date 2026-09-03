@@ -1,5 +1,5 @@
 {
-  "name": "hardgate",
+  "name": "@tech-byte-frontier/hardgate",
   "version": "0.4.1",
   "description": "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era",
   "license": "(MIT OR Apache-2.0)",

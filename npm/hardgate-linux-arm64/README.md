@@ -5,7 +5,7 @@ hardgate prebuilt binary: linux arm64 (glibc).
 This is a platform-specific package. Install the main wrapper instead:
 
 ```sh
-npm i -D hardgate
+npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 ```
 
