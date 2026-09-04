@@ -395,3 +395,6 @@ fn pnpm_workspace_file_errors_are_propagated() {
     assert!(message.contains("not a regular file"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[path = "js_resolver_gap_tests.rs"]
+mod gap_tests;
