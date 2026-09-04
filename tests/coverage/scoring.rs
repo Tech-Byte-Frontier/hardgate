@@ -94,6 +94,29 @@ fn test_crap_score_calculation() {
 }
 
 #[test]
+fn crap_scoring_skips_cfg_excluded_functions_but_scores_zero_hit_functions() {
+    let config = scoring_config(None, None, None, Some(25.0));
+    let scorer = CoverageScorer::new(&config);
+    let function = function_metric("src/platform.rs", 10, 20, 7);
+
+    let excluded = coverage_records(&[("src/platform.rs", &[(1, 1)])]);
+    let violations = scorer.evaluate(&excluded, std::slice::from_ref(&function), Path::new("."));
+    assert!(
+        violations
+            .iter()
+            .all(|violation| violation.metric != "CRAP Score")
+    );
+
+    let uncovered = coverage_records(&[("src/platform.rs", &[(10, 0)])]);
+    let violations = scorer.evaluate(&uncovered, &[function], Path::new("."));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| { violation.metric == "CRAP Score" && violation.actual == 56.0 })
+    );
+}
+
+#[test]
 fn test_missing_critical_path_is_a_violation() {
     let scorer = strict_scorer();
     let mut map = HashMap::new();

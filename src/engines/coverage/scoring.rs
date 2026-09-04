@@ -232,8 +232,11 @@ fn evaluate_function_crap(max_crap: Option<f64>, context: &mut ScoreContext<'_>)
         else {
             continue;
         };
-        let coverage_ratio =
-            calculate_function_coverage_ratio(coverage, function.start_line, function.end_line);
+        let Some(coverage_ratio) =
+            calculate_function_coverage_ratio(coverage, function.start_line, function.end_line)
+        else {
+            continue;
+        };
         let complexity = function.cyclomatic as f64;
         let crap = complexity.powi(2) * (1.0 - coverage_ratio).powi(3) + complexity;
         if crap > max_crap {
@@ -316,9 +319,9 @@ fn calculate_function_coverage_ratio(
     coverage: &FileCoverage,
     start_line: usize,
     end_line: usize,
-) -> f64 {
+) -> Option<f64> {
     if end_line < start_line {
-        return 0.0;
+        return None;
     }
     let (executable, hit) = coverage
         .line_hits
@@ -329,5 +332,9 @@ fn calculate_function_coverage_ratio(
             let hit = hit.saturating_add(usize::from(*hits > 0));
             (executable, hit)
         });
-    super::calc_ratio(hit, executable)
+    if executable == 0 {
+        None
+    } else {
+        Some(super::calc_ratio(hit, executable))
+    }
 }
