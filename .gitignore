@@ -7,6 +7,8 @@
 # Agent & AI editor files
 [Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
 [Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
+.agents/
+.codex/
 .claude/
 .cursor/
 .cursorrules
@@ -14,6 +16,7 @@
 .gemini/
 .idea/
 .vscode/
+tmp/code-simplifier/
 
 # Local drafts, media, and articles
 *[Aa][Rr][Tt][Ii][Cc][Ll][Ee]*
