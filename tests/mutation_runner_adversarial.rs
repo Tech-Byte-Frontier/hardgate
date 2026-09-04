@@ -1,5 +1,7 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "support/mutation_assertions.rs"]
+mod mutation_assertions;
 
 use hardgate::engines::{
     AstMutant, BaselineOutcome, MutantExecutionResult, MutantOutcome, NativeMutationRunner,
@@ -91,13 +93,8 @@ fn restoration_refuses_symlink_sabotage_without_touching_external_file() {
 
     assert_eq!(result.outcome, MutantOutcome::RunnerError);
     assert!(!result.source_restored);
-    assert_eq!(std::fs::read(&outside).unwrap(), b"outside\n");
-    assert!(
-        std::fs::symlink_metadata(&target)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
+    mutation_assertions::assert_file_contents(&outside, b"outside\n");
+    mutation_assertions::assert_symlink(&target);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -161,15 +158,9 @@ fn restoration_refuses_symlinked_ancestor_without_touching_external_file() {
 
     assert_eq!(result.outcome, MutantOutcome::RunnerError);
     assert!(!result.source_restored);
-    assert_eq!(std::fs::read(&outside_target).unwrap(), b"outside\n");
-    assert!(
-        std::fs::symlink_metadata(&nested)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(outside);
+    mutation_assertions::assert_file_contents(&outside_target, b"outside\n");
+    mutation_assertions::assert_symlink(&nested);
+    mutation_assertions::remove_dirs(&root, &outside);
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

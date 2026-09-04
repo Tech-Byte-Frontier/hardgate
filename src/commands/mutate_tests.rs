@@ -15,6 +15,9 @@ use crate::engines::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[path = "../../tests/support/mutation_assertions.rs"]
+mod mutation_assertions;
+
 fn mutant(id: usize) -> AstMutant {
     AstMutant {
         id,
@@ -385,13 +388,7 @@ fn batch_aborts_after_restore_failure_before_starting_later_mutants() {
 
     assert!(result.is_err());
     assert!(!second_marker.exists());
-    assert_eq!(std::fs::read(&outside_target).unwrap(), b"outside\n");
-    assert!(
-        std::fs::symlink_metadata(&nested)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(outside);
+    mutation_assertions::assert_file_contents(&outside_target, b"outside\n");
+    mutation_assertions::assert_symlink(&nested);
+    mutation_assertions::remove_dirs(&root, &outside);
 }
