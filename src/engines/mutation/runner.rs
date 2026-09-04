@@ -1,15 +1,22 @@
 use super::generator::AstMutant;
 use super::js::{ResolvedTestPlan, TestSelection, is_javascript_path, resolve_js_test_plan};
-use super::process::{CommandExecution, baseline_outcome, execute_with_timeout};
-use crate::engines::process::{CommandRoots, append_output};
+use super::process::CommandExecution;
+use crate::engines::process::append_output;
+#[path = "apply.rs"]
+mod apply;
+#[path = "baseline.rs"]
+mod baseline;
+#[path = "plan.rs"]
+mod plan;
 #[path = "restore.rs"]
 mod restore;
+use apply::{MutationInput, apply_and_execute};
+use plan::{custom_plan, plain_plan, rust_plan};
 use restore::{
-    SourceSnapshot, atomic_replace, ensure_regular_file, restore_and_verify, snapshot_regular_file,
-    verify_and_restore,
+    RestoreLocation, SourceSnapshot, has_multiple_links, open_location, restore_location,
+    snapshot_location, verify_live_path,
 };
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -66,35 +73,33 @@ pub struct NativeMutationRunner {
 
 struct RollbackGuard<'a> {
     file_path: &'a Path,
-    root: &'a Path,
-    original_bytes: &'a [u8],
-    original_permissions: std::fs::Permissions,
+    location: &'a RestoreLocation,
+    original: &'a SourceSnapshot,
+    expected_mutation: Option<&'a SourceSnapshot>,
     restored: bool,
 }
 
 impl<'a> RollbackGuard<'a> {
     fn new(
         file_path: &'a Path,
-        root: &'a Path,
-        original_bytes: &'a [u8],
-        original_permissions: std::fs::Permissions,
+        location: &'a RestoreLocation,
+        original: &'a SourceSnapshot,
     ) -> Self {
         Self {
             file_path,
-            root,
-            original_bytes,
-            original_permissions,
+            location,
+            original,
+            expected_mutation: None,
             restored: false,
         }
     }
 
+    fn expect_mutation(&mut self, snapshot: &'a SourceSnapshot) {
+        self.expected_mutation = Some(snapshot);
+    }
+
     fn restore(&mut self) -> std::io::Result<()> {
-        let result = restore_and_verify(
-            self.file_path,
-            self.root,
-            self.original_bytes,
-            &self.original_permissions,
-        );
+        let result = restore_location(self.location, self.original, self.expected_mutation);
         if result.is_ok() {
             self.restored = true;
         }
@@ -107,12 +112,7 @@ impl Drop for RollbackGuard<'_> {
         if self.restored {
             return;
         }
-        match restore_and_verify(
-            self.file_path,
-            self.root,
-            self.original_bytes,
-            &self.original_permissions,
-        ) {
+        match self.restore() {
             Ok(()) => eprintln!(
                 "hardgate: restored and verified {} after mutation during cleanup",
                 self.file_path.display()
@@ -182,66 +182,56 @@ impl NativeMutationRunner {
     /// Run one mutant and restore the source before returning.
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
-        let target_path = resolve_target_path(&mutant.file, root);
-        let original_permissions = match ensure_regular_file(&target_path, root) {
-            Ok(permissions) => permissions,
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            return mutant_error(
+                mutant,
+                self.test_cmd.as_deref().unwrap_or_default(),
+                start,
+                unsupported_platform_diagnostic(),
+            );
+        }
+        let prepared = match prepare_target(mutant, root) {
+            Ok(prepared) => prepared,
             Err(error) => {
                 return mutant_error(
                     mutant,
                     self.test_cmd.as_deref().unwrap_or_default(),
                     start,
-                    format!(
-                        "Failed to inspect mutation target '{}': {error}",
-                        target_path.display()
-                    ),
+                    error,
                 );
             }
         };
+        let PreparedTarget {
+            target_path,
+            location,
+            original,
+        } = prepared;
+        if has_multiple_links(&original) {
+            return mutant_error(
+                mutant,
+                self.test_cmd.as_deref().unwrap_or_default(),
+                start,
+                format!(
+                    "refusing mutation target '{}': source has pre-existing hardlinks; no command was executed",
+                    target_path.display()
+                ),
+            );
+        }
         let plan = self.resolve_test_plan(&mutant.file, root);
         if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
             let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
             result.source_restored = true;
             return result;
         }
-        let original_bytes = match fs::read(&target_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return mutant_error(
-                    mutant,
-                    &plan.command,
-                    start,
-                    format!(
-                        "Failed to read mutation target '{}': {error}",
-                        target_path.display()
-                    ),
-                );
-            }
-        };
-        let mut guard =
-            RollbackGuard::new(&target_path, root, &original_bytes, original_permissions);
-        let mut execution = apply_and_execute(
-            self,
-            MutationInput {
-                mutant,
-                target_path: &target_path,
-                root,
-                original_bytes: &original_bytes,
-                plan: &plan,
-            },
-        );
-        let restore_error = guard.restore().err();
-        let source_restored = restore_error.is_none();
-        if let Some(error) = restore_error {
-            execution.outcome = MutantOutcome::RunnerError;
-            append_diagnostic(
-                &mut execution.diagnostic,
-                format!(
-                    "Failed to restore and verify original source '{}': {error}",
-                    target_path.display(),
-                ),
-            );
-        }
-        drop(guard);
+        let (execution, source_restored) = execute_and_restore(MutationContext {
+            runner: self,
+            mutant,
+            target_path: &target_path,
+            location: &location,
+            original: &original,
+            plan: &plan,
+        });
         MutantExecutionResult {
             mutant: mutant.clone(),
             outcome: execution.outcome,
@@ -250,130 +240,6 @@ impl NativeMutationRunner {
             diagnostic: execution.diagnostic,
             source_restored,
         }
-    }
-
-    /// Run the resolved test command against the unmodified source tree.
-    pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
-        let start = Instant::now();
-        let plan = self.resolve_test_plan(file, root);
-        if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
-            return BaselineExecutionResult {
-                file: file.to_path_buf(),
-                outcome: BaselineOutcome::RunnerError,
-                duration_ms: start.elapsed().as_millis(),
-                command: plan.command,
-                diagnostic,
-            };
-        }
-        let target_path = resolve_target_path(file, root);
-        let original = match snapshot_regular_file(&target_path, root) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return BaselineExecutionResult {
-                    file: file.to_path_buf(),
-                    outcome: BaselineOutcome::RunnerError,
-                    duration_ms: start.elapsed().as_millis(),
-                    command: plan.command,
-                    diagnostic: format!(
-                        "Failed to inspect baseline source '{}': {error}",
-                        target_path.display()
-                    ),
-                };
-            }
-        };
-        let execution =
-            execute_with_timeout(&plan.command, process_roots(&plan), self.timeout_secs);
-        let (outcome, diagnostic) = baseline_integrity(execution, &target_path, root, &original);
-        BaselineExecutionResult {
-            file: file.to_path_buf(),
-            outcome,
-            duration_ms: start.elapsed().as_millis(),
-            command: plan.command,
-            diagnostic: baseline_diagnostic(diagnostic, &plan.selection),
-        }
-    }
-}
-
-fn custom_plan(command: &str, file: &Path, root: &Path) -> ResolvedTestPlan {
-    let stem = file
-        .file_stem()
-        .and_then(|item| item.to_str())
-        .unwrap_or("");
-    let command = command
-        .replace("{file}", &file.to_string_lossy())
-        .replace("{stem}", stem);
-    plain_plan(command, root, TestSelection::Custom)
-}
-
-fn rust_plan(file: &Path, root: &Path) -> ResolvedTestPlan {
-    let stem = file
-        .file_stem()
-        .and_then(|item| item.to_str())
-        .unwrap_or("");
-    let command = if stem.is_empty() || matches!(stem, "main" | "lib" | "mod") {
-        "cargo test".to_string()
-    } else {
-        format!("cargo test {stem}")
-    };
-    plain_plan(command, root, TestSelection::Custom)
-}
-
-fn plain_plan(command: String, root: &Path, selection: TestSelection) -> ResolvedTestPlan {
-    ResolvedTestPlan {
-        command,
-        working_dir: root.to_path_buf(),
-        package_root: root.to_path_buf(),
-        workspace_root: root.to_path_buf(),
-        manager: None,
-        framework: None,
-        selection,
-        recommended_timeout_secs: DEFAULT_TIMEOUT_SECS,
-    }
-}
-
-fn process_roots(plan: &ResolvedTestPlan) -> CommandRoots<'_> {
-    CommandRoots {
-        working_dir: &plan.working_dir,
-        package_root: &plan.package_root,
-        workspace_root: &plan.workspace_root,
-    }
-}
-
-struct MutationInput<'a> {
-    mutant: &'a AstMutant,
-    target_path: &'a Path,
-    root: &'a Path,
-    original_bytes: &'a [u8],
-    plan: &'a ResolvedTestPlan,
-}
-
-fn apply_and_execute(runner: &NativeMutationRunner, input: MutationInput<'_>) -> CommandExecution {
-    match apply_mutant_bytes(
-        input.target_path,
-        input.root,
-        input.mutant,
-        input.original_bytes,
-    ) {
-        Ok(ApplyResult::Equivalent) => CommandExecution {
-            outcome: MutantOutcome::Equivalent,
-            diagnostic: "Replacement is byte-for-byte equivalent to the original source text."
-                .to_string(),
-            status: None,
-        },
-        Ok(ApplyResult::Applied) => execute_with_timeout(
-            &input.plan.command,
-            process_roots(input.plan),
-            runner.timeout_secs,
-        ),
-        Err(error) => CommandExecution {
-            outcome: if error.kind() == std::io::ErrorKind::InvalidInput {
-                MutantOutcome::Unviable
-            } else {
-                MutantOutcome::RunnerError
-            },
-            diagnostic: format!("Failed to apply mutant {}: {error}", input.mutant.id),
-            status: None,
-        },
     }
 }
 
@@ -393,94 +259,102 @@ fn mutant_error(
     }
 }
 
-fn baseline_integrity(
-    execution: CommandExecution,
-    path: &Path,
-    root: &Path,
-    original: &SourceSnapshot,
-) -> (BaselineOutcome, String) {
-    let mut outcome = baseline_outcome(&execution);
-    let mut diagnostic = execution.diagnostic;
-    match verify_and_restore(path, root, original) {
-        Ok(false) => {}
-        Ok(true) => {
-            outcome = BaselineOutcome::RunnerError;
-            append_diagnostic(
-                &mut diagnostic,
-                format!(
-                    "Baseline command modified source '{}'; original bytes and permissions were restored, so mutation testing was aborted.",
-                    path.display()
-                ),
-            );
-        }
-        Err(error) => {
-            outcome = BaselineOutcome::RunnerError;
-            append_diagnostic(
-                &mut diagnostic,
-                format!(
-                    "Baseline source integrity check failed for '{}': {error}; mutation testing was aborted.",
-                    path.display()
-                ),
-            );
-        }
-    }
-    (outcome, diagnostic)
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn unsupported_platform_diagnostic() -> String {
+    "mutation runner requires Linux/macOS process-group cleanup and descriptor-relative atomic source replacement; this platform is unsupported and no baseline or source write was attempted".to_string()
 }
 
-fn baseline_diagnostic(mut diagnostic: String, selection: &TestSelection) -> String {
-    if selection.is_full_suite() {
-        let note = "full suite selected: no reliable relevant test was found";
-        if diagnostic.is_empty() {
-            return note.to_string();
-        }
-        diagnostic = append_output(diagnostic, note.to_string());
+struct PreparedTarget {
+    target_path: PathBuf,
+    location: RestoreLocation,
+    original: SourceSnapshot,
+}
+
+struct MutationContext<'a> {
+    runner: &'a NativeMutationRunner,
+    mutant: &'a AstMutant,
+    target_path: &'a Path,
+    location: &'a RestoreLocation,
+    original: &'a SourceSnapshot,
+    plan: &'a ResolvedTestPlan,
+}
+
+fn execute_and_restore(context: MutationContext<'_>) -> (CommandExecution, bool) {
+    let mut expected_mutation = None;
+    let mut guard = RollbackGuard::new(context.target_path, context.location, context.original);
+    let mut execution = apply_and_execute(
+        context.runner,
+        MutationInput {
+            mutant: context.mutant,
+            location: context.location,
+            original: context.original,
+            plan: context.plan,
+        },
+        &mut expected_mutation,
+    );
+    if let Some(snapshot) = expected_mutation.as_ref() {
+        guard.expect_mutation(snapshot);
     }
-    diagnostic
+    let restore_error = guard.restore().err();
+    let source_restored = restore_error.is_none();
+    if let Some(error) = restore_error {
+        execution.outcome = MutantOutcome::RunnerError;
+        append_diagnostic(
+            &mut execution.diagnostic,
+            format!(
+                "Failed to restore and verify original source '{}': {error}",
+                context.target_path.display(),
+            ),
+        );
+    }
+    drop(guard);
+    (execution, source_restored)
+}
+
+fn prepare_target(mutant: &AstMutant, root: &Path) -> Result<PreparedTarget, String> {
+    let target_path = resolve_target_path(&mutant.file, root);
+    let location = open_location(&target_path, root).map_err(|error| {
+        format!(
+            "Failed to inspect mutation target '{}': {error}",
+            target_path.display()
+        )
+    })?;
+    verify_live_path(&location, &target_path, root).map_err(|error| {
+        format!(
+            "Failed to verify live mutation target '{}': {error}",
+            target_path.display()
+        )
+    })?;
+    let original = match snapshot_location(&location) {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => {
+            return Err(format!(
+                "Failed to inspect mutation target '{}': target does not exist",
+                target_path.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect mutation target '{}': {error}",
+                target_path.display()
+            ));
+        }
+    };
+    Ok(PreparedTarget {
+        target_path,
+        location,
+        original,
+    })
 }
 
 fn resolve_target_path(file: &Path, root: &Path) -> PathBuf {
     if file.is_absolute() {
         file.to_path_buf()
     } else {
-        root.join(file)
+        std::fs::canonicalize(root)
+            .unwrap_or_else(|_| root.to_path_buf())
+            .join(file)
     }
-}
-
-fn apply_mutant_bytes(
-    target_path: &Path,
-    root: &Path,
-    mutant: &AstMutant,
-    original_bytes: &[u8],
-) -> std::io::Result<ApplyResult> {
-    if mutant.start_byte > mutant.end_byte || mutant.end_byte > original_bytes.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "mutant byte range out of bounds",
-        ));
-    }
-    if &original_bytes[mutant.start_byte..mutant.end_byte] != mutant.original.as_bytes() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "mutant original text does not match the source bytes",
-        ));
-    }
-    if mutant.replacement.as_bytes() == &original_bytes[mutant.start_byte..mutant.end_byte] {
-        return Ok(ApplyResult::Equivalent);
-    }
-    let mut mutated = Vec::with_capacity(
-        original_bytes.len() - (mutant.end_byte - mutant.start_byte) + mutant.replacement.len(),
-    );
-    mutated.extend_from_slice(&original_bytes[..mutant.start_byte]);
-    mutated.extend_from_slice(mutant.replacement.as_bytes());
-    mutated.extend_from_slice(&original_bytes[mutant.end_byte..]);
-    let permissions = ensure_regular_file(target_path, root)?;
-    atomic_replace(target_path, root, &mutated, &permissions).map(|()| ApplyResult::Applied)
-}
-
-#[derive(Clone, Copy)]
-enum ApplyResult {
-    Applied,
-    Equivalent,
 }
 
 fn append_diagnostic(existing: &mut String, extra: String) {

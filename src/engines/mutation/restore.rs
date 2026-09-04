@@ -1,69 +1,155 @@
-use std::fs::{self, File, OpenOptions, Permissions};
-use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+//! Fail-closed source snapshots and atomic replacement.
+//!
+//! The platform implementation is kept in `restore/unix.rs` so this module
+//! stays within the source-size budget. Targets other than Linux/macOS return
+//! an explicit unsupported error before any baseline or mutation source write.
 
-const TEMP_ATTEMPTS: u64 = 32;
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "restore/unix.rs"]
+mod unix;
+
+use std::fs::Permissions;
+use std::io;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(super) struct SourceSnapshot {
     pub(super) bytes: Vec<u8>,
     pub(super) permissions: Permissions,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) identity: FileIdentity,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FileIdentity {
+    pub(super) device: u64,
+    pub(super) inode: u64,
+    pub(super) links: u64,
+    /// Full `st_mode`, including file type and permission bits.
+    pub(super) mode: u32,
 }
 
 pub(super) fn snapshot_regular_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
-    let permissions = ensure_regular_file(path, root)?;
-    let bytes = fs::read(path)?;
-    Ok(SourceSnapshot { bytes, permissions })
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unix::snapshot_regular_file(path, root)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (path, root);
+        Err(unsupported_platform_error())
+    }
 }
 
-pub(super) fn ensure_regular_file(path: &Path, root: &Path) -> io::Result<Permissions> {
-    ensure_safe_ancestors(path, root)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "refusing to write through symbolic link target '{}'; target is a symlink",
-                path.display()
-            ),
-        ));
+/// Open a trusted, descriptor-relative target location. The returned handle
+/// keeps the validated repository root and parent directory alive so callers
+/// can verify and replace the same directory entry without a second path
+/// lookup.
+pub(super) fn open_location(path: &Path, root: &Path) -> io::Result<RestoreLocation> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        Ok(RestoreLocation {
+            inner: unix::open_location(path, root)?,
+            path: path.to_path_buf(),
+            root: root.to_path_buf(),
+        })
     }
-    if !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "refusing to restore non-regular mutation target '{}'; target is not a regular file",
-                path.display()
-            ),
-        ));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (path, root);
+        Err(unsupported_platform_error())
     }
-    Ok(metadata.permissions())
 }
 
-pub(super) fn restore_and_verify(
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) struct RestoreLocation {
+    inner: unix::TargetLocation,
+    path: PathBuf,
+    root: PathBuf,
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) struct RestoreLocation;
+
+pub(super) fn snapshot_location(location: &RestoreLocation) -> io::Result<Option<SourceSnapshot>> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unix::snapshot_location(&location.inner)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = location;
+        Err(unsupported_platform_error())
+    }
+}
+
+pub(super) fn verify_live_path(
+    location: &RestoreLocation,
     path: &Path,
     root: &Path,
-    original_bytes: &[u8],
-    permissions: &Permissions,
 ) -> io::Result<()> {
-    ensure_restore_target(path, root)?;
-    atomic_replace(path, root, original_bytes, permissions)?;
-    let restored_permissions = ensure_regular_file(path, root)?;
-    if !same_permissions(permissions, &restored_permissions) {
-        return Err(io::Error::other(
-            "restored source permissions differ from the original",
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unix::verify_live_location(&location.inner, path, root)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (location, path, root);
+        Err(unsupported_platform_error())
+    }
+}
+
+pub(super) fn restore_location(
+    location: &RestoreLocation,
+    original: &SourceSnapshot,
+    expected_mutation: Option<&SourceSnapshot>,
+) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let context = unix::LocationContext::new(&location.inner, &location.path, &location.root);
+        unix::restore_location(context, original, expected_mutation)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (location, original, expected_mutation);
+        Err(unsupported_platform_error())
+    }
+}
+
+pub(super) fn atomic_replace_location(
+    location: &RestoreLocation,
+    bytes: &[u8],
+    permissions: &Permissions,
+    expected: &SourceSnapshot,
+) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let context = unix::LocationContext::new(&location.inner, &location.path, &location.root);
+        unix::atomic_replace_location(context, bytes, permissions, Some(expected))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (location, bytes, permissions, expected);
+        Err(unsupported_platform_error())
+    }
+}
+
+/// Snapshot a protected baseline target and reject pre-existing hardlinks.
+pub(super) fn snapshot_protected_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
+    let snapshot = snapshot_regular_file(path, root)?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if snapshot.identity.links > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing baseline: protected source '{}' has {} hardlinks; mutation requires an unshared regular file",
+                path.display(),
+                snapshot.identity.links
+            ),
         ));
     }
-    let restored = fs::read(path)?;
-    if restored == original_bytes {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            "restored source bytes differ from the original",
-        ))
-    }
+    Ok(snapshot)
 }
 
 pub(super) fn verify_and_restore(
@@ -71,251 +157,35 @@ pub(super) fn verify_and_restore(
     root: &Path,
     original: &SourceSnapshot,
 ) -> io::Result<bool> {
-    let changed = match snapshot_regular_file(path, root) {
-        Ok(current) => {
-            !same_permissions(&current.permissions, &original.permissions)
-                || current.bytes != original.bytes
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-        Err(error) => return Err(error),
-    };
-    if changed {
-        restore_and_verify(path, root, &original.bytes, &original.permissions)?;
-    }
-    Ok(changed)
-}
-
-fn ensure_restore_target(path: &Path, root: &Path) -> io::Result<()> {
-    ensure_safe_ancestors(path, root)?;
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "refusing to write through symbolic link target '{}'; target is a symlink",
-                path.display()
-            ),
-        )),
-        Ok(metadata) if !metadata.file_type().is_file() => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "refusing to restore non-regular mutation target '{}'; target is not a regular file",
-                path.display()
-            ),
-        )),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-pub(super) fn atomic_replace(
-    path: &Path,
-    root: &Path,
-    bytes: &[u8],
-    permissions: &Permissions,
-) -> io::Result<()> {
-    ensure_safe_ancestors(path, root)?;
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "mutation target '{}' has no valid file name",
-                    path.display()
-                ),
-            )
-        })?;
-    let (temp_path, temp) = create_temp_file(parent, name)?;
-    let result = write_temp_and_rename(
-        temp,
-        AtomicWrite {
-            temp_path: &temp_path,
-            path,
-            root,
-            bytes,
-            permissions,
-        },
-    );
-    cleanup_temp(&temp_path, result)
-}
-
-fn create_temp_file(parent: &Path, name: &str) -> io::Result<(std::path::PathBuf, File)> {
-    let seed = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    for offset in 0..TEMP_ATTEMPTS {
-        let candidate = parent.join(format!(
-            ".{name}.hardgate-{}-{}.tmp",
-            std::process::id(),
-            seed.saturating_add(offset)
-        ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(file) => return Ok((candidate, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        format!(
-            "could not allocate a temporary mutation file beside '{}'; tried {TEMP_ATTEMPTS} names",
-            path_display(parent, name)
-        ),
-    ))
-}
-
-struct AtomicWrite<'a> {
-    temp_path: &'a Path,
-    path: &'a Path,
-    root: &'a Path,
-    bytes: &'a [u8],
-    permissions: &'a Permissions,
-}
-
-fn write_temp_and_rename(mut temp: File, write: AtomicWrite<'_>) -> io::Result<()> {
-    write_exact(&mut temp, write.bytes)?;
-    temp.set_permissions(write.permissions.clone())?;
-    temp.sync_all()?;
-    drop(temp);
-    fs::rename(write.temp_path, write.path)?;
-    let written_permissions = ensure_regular_file(write.path, write.root)?;
-    if !same_permissions(write.permissions, &written_permissions) {
-        return Err(io::Error::other(
-            "atomic replacement permissions differ from requested source permissions",
-        ));
-    }
-    let written = fs::read(write.path)?;
-    if written == write.bytes {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            "atomic replacement bytes differ from requested source bytes",
-        ))
-    }
-}
-
-fn write_exact(file: &mut File, bytes: &[u8]) -> io::Result<()> {
-    file.write_all(bytes)?;
-    file.flush()
-}
-
-fn cleanup_temp<T>(temp_path: &Path, result: io::Result<T>) -> io::Result<T> {
-    if result.is_ok() {
-        return result;
-    }
-    let cleanup = fs::remove_file(temp_path);
-    let Err(error) = result else {
-        unreachable!("successful replacement returned before temporary cleanup")
-    };
-    match cleanup {
-        Ok(()) => Err(error),
-        Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
-        Err(cleanup) => Err(io::Error::other(format!(
-            "{error}; failed to clean temporary mutation file '{}': {cleanup}",
-            temp_path.display()
-        ))),
-    }
-}
-
-fn ensure_safe_ancestors(path: &Path, root: &Path) -> io::Result<()> {
-    let root = fs::canonicalize(root)?;
-    let path = normalize_absolute(path)?;
-    let relative = path.strip_prefix(&root).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "refusing mutation target '{}' outside repository root '{}'",
-                path.display(),
-                root.display()
-            ),
-        )
-    })?;
-    let relative_parent = relative
-        .parent()
-        .filter(|item| !item.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new(""));
-    let mut current = root;
-    for component in relative_parent.components() {
-        let Component::Normal(part) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "mutation target '{}' has unsafe ancestor components",
-                    path.display()
-                ),
-            ));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let location = open_location(path, root)?;
+        verify_live_path(&location, path, root)?;
+        let current = snapshot_location(&location)?;
+        let changed = match current {
+            None => true,
+            Some(current) => !same_snapshot(&current, original),
         };
-        current.push(part);
-        let metadata = fs::symlink_metadata(&current)?;
-        if metadata.file_type().is_symlink() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "refusing mutation target '{}'; ancestor '{}' is a symlink",
-                    path.display(),
-                    current.display()
-                ),
-            ));
+        if changed {
+            restore_location(&location, original, None)?;
         }
-        if !metadata.file_type().is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "refusing mutation target '{}'; ancestor '{}' is not a directory",
-                    path.display(),
-                    current.display()
-                ),
-            ));
-        }
+        Ok(changed)
     }
-    Ok(())
-}
-
-fn normalize_absolute(path: &Path) -> io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut normalized = PathBuf::new();
-    for component in absolute.components() {
-        normalize_component(&mut normalized, component, path)?;
-    }
-    Ok(normalized)
-}
-
-fn normalize_component(
-    normalized: &mut PathBuf,
-    component: Component<'_>,
-    original: &Path,
-) -> io::Result<()> {
-    match component {
-        Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-        Component::RootDir => normalized.push(component.as_os_str()),
-        Component::CurDir => {}
-        Component::ParentDir => pop_component(normalized, original)?,
-        Component::Normal(part) => normalized.push(part),
-    }
-    Ok(())
-}
-
-fn pop_component(normalized: &mut PathBuf, original: &Path) -> io::Result<()> {
-    if normalized.pop() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("path '{}' escapes its filesystem root", original.display()),
-        ))
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (path, root, original);
+        Err(unsupported_platform_error())
     }
 }
 
-fn same_permissions(expected: &Permissions, actual: &Permissions) -> bool {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn same_snapshot(left: &SourceSnapshot, right: &SourceSnapshot) -> bool {
+    same_snapshot_identity(left, right)
+        && same_permissions(&left.permissions, &right.permissions)
+        && left.bytes == right.bytes
+}
+
+pub(super) fn same_permissions(expected: &Permissions, actual: &Permissions) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -328,6 +198,30 @@ fn same_permissions(expected: &Permissions, actual: &Permissions) -> bool {
     }
 }
 
-fn path_display(parent: &Path, name: &str) -> String {
-    parent.join(name).display().to_string()
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn same_snapshot_identity(left: &SourceSnapshot, right: &SourceSnapshot) -> bool {
+    left.identity == right.identity
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn has_multiple_links(snapshot: &SourceSnapshot) -> bool {
+    snapshot.identity.links > 1
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) fn same_snapshot_identity(_left: &SourceSnapshot, _right: &SourceSnapshot) -> bool {
+    false
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) fn has_multiple_links(_snapshot: &SourceSnapshot) -> bool {
+    false
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn unsupported_platform_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "mutation source writes and descendant cleanup require Linux or macOS; this platform is unsupported and no source write was attempted",
+    )
 }

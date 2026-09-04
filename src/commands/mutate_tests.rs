@@ -16,7 +16,119 @@ fn mutant(id: usize) -> AstMutant {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn baselines_protect_every_production_target_before_mutants() {
+    let root = std::env::temp_dir().join(format!("hardgate-baseline-set-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.rs");
+    let second = root.join("second.rs");
+    std::fs::write(&first, b"true\n").unwrap();
+    std::fs::write(&second, b"false\n").unwrap();
+    let runner = NativeMutationRunner::new(
+        2,
+        Some("sh -c 'printf altered > second.rs; chmod 600 second.rs'".to_string()),
+    );
+    let files = [PathBuf::from("first.rs"), PathBuf::from("second.rs")];
+
+    let result = super::run_unmutated_baselines(&runner, &files, &files, Path::new(&root));
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&first).unwrap(), b"true\n");
+    assert_eq!(std::fs::read(&second).unwrap(), b"false\n");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn baseline_rejects_preexisting_hardlink_before_running_command() {
+    let root =
+        std::env::temp_dir().join(format!("hardgate-baseline-hardlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let target = root.join("target.rs");
+    let peer = root.join("peer.rs");
+    let marker = root.join("ran");
+    std::fs::write(&target, b"true\n").unwrap();
+    std::fs::hard_link(&target, &peer).unwrap();
+    let runner = NativeMutationRunner::new(2, Some(format!("sh -c 'touch {}'", marker.display())));
+
+    let result = runner.run_baseline(Path::new("target.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, crate::engines::BaselineOutcome::RunnerError);
+    assert!(!marker.exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
+    assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn baseline_preflight_restores_external_change_before_running_command() {
+    let root = std::env::temp_dir().join(format!(
+        "hardgate-baseline-preflight-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let target = root.join("target.rs");
+    let marker = root.join("ran");
+    std::fs::write(&target, b"true\n").unwrap();
+    let runner = NativeMutationRunner::new(2, Some(format!("sh -c 'touch {}'", marker.display())));
+    let protected = NativeMutationRunner::snapshot_baseline_sources(
+        &[PathBuf::from("target.rs")],
+        Path::new(&root),
+    )
+    .unwrap();
+    std::fs::write(&target, b"changed\n").unwrap();
+
+    let result =
+        runner.run_baseline_with_sources(Path::new("target.rs"), Path::new(&root), &protected);
+
+    assert_eq!(result.outcome, crate::engines::BaselineOutcome::RunnerError);
+    assert!(!marker.exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn baseline_restores_same_bytes_replacement_and_detaches_hardlink() {
+    let root = std::env::temp_dir().join(format!(
+        "hardgate-baseline-replacement-{}",
+        std::process::id()
+    ));
+    let outside = std::env::temp_dir().join(format!(
+        "hardgate-baseline-replacement-peer-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let target = root.join("target.rs");
+    let peer = outside.join("peer.rs");
+    std::fs::write(&target, b"true\n").unwrap();
+    std::fs::write(&peer, b"true\n").unwrap();
+    let runner = NativeMutationRunner::new(
+        2,
+        Some(format!(
+            "sh -c 'rm target.rs; ln {} target.rs'",
+            peer.display()
+        )),
+    );
+
+    let result = runner.run_baseline(Path::new("target.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, crate::engines::BaselineOutcome::RunnerError);
+    assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
+    assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn batch_aborts_after_restore_failure_before_starting_later_mutants() {
     let root = std::env::temp_dir().join(format!("hardgate-batch-restore-{}", std::process::id()));

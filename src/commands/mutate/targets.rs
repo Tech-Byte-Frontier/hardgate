@@ -33,7 +33,7 @@ fn discover_scope_or_repository(
     canonical_root: &Path,
 ) -> Result<Vec<PathBuf>> {
     match opts.scoped.as_deref() {
-        Some(scope) => discover_scoped_files(scope, canonical_root, config),
+        Some(scope) => discover_scoped_files(scope, canonical_root, config, opts.diff),
         None => discover_files(DiscoverOptions {
             root: canonical_root,
             diff_only: opts.diff,
@@ -46,10 +46,26 @@ fn discover_scoped_files(
     scope: &Path,
     canonical_root: &Path,
     config: &HardgateConfig,
+    diff_only: bool,
 ) -> Result<Vec<PathBuf>> {
     let canonical_scope = canonical_scope(scope, canonical_root)?;
     if canonical_scope.is_file() {
-        return scoped_file_target(scope, &canonical_scope, canonical_root, config);
+        let target = scoped_file_target(scope, &canonical_scope, canonical_root, config)?;
+        if diff_only {
+            let changed = discover_files(DiscoverOptions {
+                root: canonical_root,
+                diff_only: true,
+                exclusions: &config.budgets.files.exclusions.paths,
+            })?;
+            return Ok(target
+                .into_iter()
+                .filter(|file| {
+                    let absolute = canonical_root.join(file);
+                    changed.iter().any(|changed| changed == &absolute)
+                })
+                .collect());
+        }
+        return Ok(target);
     }
     if !canonical_scope.is_dir() {
         bail!(
@@ -57,11 +73,23 @@ fn discover_scoped_files(
             scope.display()
         );
     }
-    discover_files(DiscoverOptions {
-        root: &canonical_scope,
-        diff_only: false,
+    let files = discover_files(DiscoverOptions {
+        root: if diff_only {
+            canonical_root
+        } else {
+            &canonical_scope
+        },
+        diff_only,
         exclusions: &config.budgets.files.exclusions.paths,
-    })
+    })?;
+    if diff_only {
+        Ok(files
+            .into_iter()
+            .filter(|file| file.starts_with(&canonical_scope))
+            .collect())
+    } else {
+        Ok(files)
+    }
 }
 
 fn scoped_file_target(

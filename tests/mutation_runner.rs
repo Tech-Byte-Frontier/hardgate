@@ -45,7 +45,7 @@ fn run_baseline_script(tag: &str, script: &str) -> hardgate::engines::BaselineEx
     result
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn timeout_fixture(tag: &str, script_name: &str, body: String) -> (PathBuf, PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -63,43 +63,36 @@ fn timeout_fixture(tag: &str, script_name: &str, body: String) -> (PathBuf, Path
     (root, pid_file, group_pid_file)
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_process_absent(pid: i32, context: &str) {
+    let pid = rustix::process::Pid::from_raw(pid).expect("fixture pid must be positive");
     for _ in 0..100 {
-        let alive = std::process::Command::new("kill")
-            .args(["-0", "--", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !alive {
-            return;
+        match rustix::io::retry_on_intr(|| rustix::process::test_kill_process(pid)) {
+            Err(error) if error == rustix::io::Errno::SRCH => return,
+            Ok(()) => {}
+            Err(error) => panic!("{context} process probe failed: {error}"),
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("{context} left descendant process {pid} alive");
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_process_group_absent(pgid: i32, context: &str) {
+    let pgid =
+        rustix::process::Pid::from_raw(pgid).expect("fixture process-group id must be positive");
     for _ in 0..100 {
-        let target = format!("-{pgid}");
-        let alive = std::process::Command::new("kill")
-            .args(["-0", "--", &target])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !alive {
-            return;
+        match rustix::io::retry_on_intr(|| rustix::process::test_kill_process_group(pgid)) {
+            Err(error) if error == rustix::io::Errno::SRCH => return,
+            Ok(()) => {}
+            Err(error) => panic!("{context} process-group probe failed: {error}"),
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("{context} left process group {pgid} alive");
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn write_executable(root: &Path, path: &str, content: &str) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -113,7 +106,7 @@ fn write_executable(root: &Path, path: &str, content: &str) {
     std::fs::set_permissions(target, permissions).unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct TimeoutFixtureSpec<'a> {
     tag: &'a str,
     script_name: &'a str,
@@ -123,7 +116,7 @@ struct TimeoutFixtureSpec<'a> {
     diagnostic: Option<&'a str>,
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_timeout_fixture(spec: TimeoutFixtureSpec<'_>) {
     let (root, pid_file, group_pid_file) =
         timeout_fixture(spec.tag, spec.script_name, spec.body.to_string());
@@ -260,7 +253,7 @@ fn mutation_outcomes_require_known_failure_evidence() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn mutation_signal_is_a_runner_error() {
     let result = run_mutant_script(
@@ -286,7 +279,7 @@ fn baseline_classification_keeps_execution_context() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_signal_and_timeout_are_not_ordinary_failures() {
     let signal_result = run_baseline_script("mutation-runner-baseline-signal", "kill -TERM $$");
@@ -334,7 +327,7 @@ fn direct_runner_rejects_short_full_suite_timeout_before_execution() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn javascript_runner_prefers_package_bin_and_falls_back_to_workspace_bin() {
     let root = fs::tempdir("mutation-runner-js-path");
@@ -415,7 +408,7 @@ fn mutation_diagnostic_is_bounded_for_unknown_failure() {
     assert!(result.diagnostic.len() <= 64 * 1024);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn timeout_terminates_process_group_descendants() {
     run_timeout_fixture(TimeoutFixtureSpec {
@@ -428,7 +421,7 @@ fn timeout_terminates_process_group_descendants() {
     });
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn timeout_kills_term_ignoring_descendant_and_verifies_group_absence() {
     run_timeout_fixture(TimeoutFixtureSpec {
@@ -441,7 +434,7 @@ fn timeout_kills_term_ignoring_descendant_and_verifies_group_absence() {
     });
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restoration_recreates_deleted_target_with_original_bytes() {
     let root = source_root("mutation-runner-restore-delete", b"true\n");
@@ -456,16 +449,21 @@ fn restoration_recreates_deleted_target_with_original_bytes() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn atomic_mutation_replacement_detaches_hardlink_without_touching_peer() {
     let root = source_root("mutation-runner-hardlink", b"true\n");
     let target = root.join("fixture.rs");
     let peer = root.join("peer.rs");
+    let marker = root.join("ran");
     std::fs::hard_link(&target, &peer).unwrap();
-    let result = run_mutant_at_root(&root, "printf executed".to_string());
-    assert_eq!(result.outcome, MutantOutcome::Survived);
-    assert!(result.source_restored);
+    let result = run_mutant_at_root(
+        &root,
+        format!("sh -c 'printf executed > {}'", marker.display()),
+    );
+    assert_eq!(result.outcome, MutantOutcome::RunnerError);
+    assert!(!result.source_restored);
+    assert!(!marker.exists());
     assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
     assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");
     let _ = std::fs::remove_dir_all(root);

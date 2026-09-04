@@ -186,9 +186,6 @@ fn rust_failure_line(lower: &str) -> bool {
         || lower.starts_with("test result: failed")
         || lower.starts_with("test ") && lower.contains("... failed")
         || lower.starts_with("thread ") && lower.contains(" panicked at")
-        || lower.starts_with("panicked at")
-        || lower.starts_with("panic:")
-        || lower.starts_with("panic!")
 }
 
 fn assertion_failure_line(lower: &str) -> bool {

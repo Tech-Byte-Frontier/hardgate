@@ -66,7 +66,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let selected_files = selected_mutant_files(&mutants);
     let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
-    run_unmutated_baselines(&runner, &selected_files, root)?;
+    run_unmutated_baselines(&runner, &selected_files, &target_files, root)?;
     print_mutant_notice(mutants.len(), timeout);
     let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
     finish_mutation_run(MutationRun {
@@ -182,11 +182,14 @@ pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result
 }
 fn run_unmutated_baselines(
     runner: &NativeMutationRunner,
-    files: &[PathBuf],
+    command_files: &[PathBuf],
+    protected_files: &[PathBuf],
     root: &Path,
 ) -> Result<()> {
+    let protected = NativeMutationRunner::snapshot_baseline_sources(protected_files, root)
+        .with_context(|| "failed to snapshot protected production sources before baseline")?;
     let mut commands = BTreeMap::new();
-    for file in files {
+    for file in command_files {
         let plan = runner.resolve_test_plan(file, root);
         commands
             .entry((plan.working_dir, plan.command))
@@ -206,7 +209,7 @@ fn run_unmutated_baselines(
             plan.selection.description().dimmed(),
             working_dir.display()
         );
-        let result = runner.run_baseline(&file, root);
+        let result = runner.run_baseline_with_sources(&file, root, &protected);
         if result.outcome == BaselineOutcome::Passed {
             println!("      ... {}", "passed".green().bold());
             continue;

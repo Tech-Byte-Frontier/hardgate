@@ -52,7 +52,7 @@ fn command_output_is_bounded() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn timeout_terminates_descendant_processes() {
     let root = tempdir("orchestration-timeout");
@@ -83,11 +83,12 @@ fn timeout_terminates_descendant_processes() {
     let child_pid = std::fs::read_to_string(&pid_file).unwrap();
     let child_pid = child_pid.trim().parse::<i32>().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let alive = std::process::Command::new("kill")
-        .args(["-0", &child_pid.to_string()])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
+    let child_pid = rustix::process::Pid::from_raw(child_pid).unwrap();
+    let alive = match rustix::io::retry_on_intr(|| rustix::process::test_kill_process(child_pid)) {
+        Ok(()) => true,
+        Err(error) if error == rustix::io::Errno::SRCH => false,
+        Err(error) => panic!("descendant process probe failed: {error}"),
+    };
     let _ = std::fs::remove_dir_all(root);
     assert!(!alive, "timeout left descendant process {child_pid} alive");
 }

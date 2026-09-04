@@ -48,3 +48,6 @@ tree-sitter-javascript = "=0.25.0"
 tree-sitter-python = "=0.25.0"
 tree-sitter-go = "=0.25.0"
 globset = "=0.4.20"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix = { version = "=1.1.4", features = ["process", "fs"] }

@@ -127,13 +127,21 @@ fn prepend_local_bins(command: &mut Command, package_root: &Path, workspace_root
     if local_bins.is_empty() {
         return;
     }
-    let mut paths = local_bins;
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    if let Ok(path) = std::env::join_paths(paths) {
+    if let Some(path) = compose_path(local_bins, std::env::var_os("PATH")) {
         command.env("PATH", path);
     }
+}
+
+fn compose_path(
+    local_bins: Vec<std::path::PathBuf>,
+    inherited: Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    let inherited = std::env::split_paths(&inherited.unwrap_or_default())
+        .filter(|entry| !local_bins.iter().any(|local| local == entry))
+        .collect::<Vec<_>>();
+    let mut paths = local_bins;
+    paths.extend(inherited);
+    std::env::join_paths(paths).ok()
 }
 
 #[cfg(unix)]
@@ -213,15 +221,16 @@ fn finish_process_wait(
 }
 
 fn cleanup_after_capture(
-    incomplete: bool,
+    _incomplete: bool,
     wait: &ProcessWait,
     child: &mut Child,
 ) -> Option<String> {
-    if incomplete && matches!(wait, ProcessWait::Exited(_)) {
-        terminate_process_tree(child).err()
-    } else {
-        None
-    }
+    // A command may close both capture pipes while descendants continue to
+    // run in the inherited process group. Always verify and reap that group,
+    // even when the output readers completed before the direct child exited.
+    matches!(wait, ProcessWait::Exited(_))
+        .then(|| terminate_process_tree(child).err())
+        .flatten()
 }
 
 fn finish_capture(captured: &mut CapturedOutput, initial: CaptureResult) -> CaptureResult {
@@ -345,4 +354,37 @@ fn wait_error_process(
         ),
     };
     ProcessWait::Error(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn local_bins_precede_and_filter_inherited_duplicates() {
+        let package = PathBuf::from("/workspace/package/node_modules/.bin");
+        let workspace = PathBuf::from("/workspace/node_modules/.bin");
+        let inherited = std::env::join_paths([
+            package.clone(),
+            PathBuf::from("/usr/bin"),
+            workspace.clone(),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        let composed =
+            compose_path(vec![package.clone(), workspace.clone()], Some(inherited)).unwrap();
+        let entries = std::env::split_paths(&composed).collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![
+                package,
+                workspace,
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin")
+            ]
+        );
+    }
 }

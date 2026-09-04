@@ -26,7 +26,7 @@ fn source_root(tag: &str, contents: &[u8]) -> PathBuf {
     root
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_restore_case(root: &Path, command: &str) -> (PathBuf, MutantExecutionResult) {
     let outside = root.join("outside.txt");
     std::fs::write(&outside, b"outside\n").unwrap();
@@ -35,7 +35,7 @@ fn run_restore_case(root: &Path, command: &str) -> (PathBuf, MutantExecutionResu
     (outside, result)
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn passing_baseline_source_mutation_is_runner_error_and_restored_exactly() {
     use std::os::unix::fs::PermissionsExt;
@@ -68,7 +68,7 @@ fn passing_baseline_source_mutation_is_runner_error_and_restored_exactly() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restoration_refuses_symlink_sabotage_without_touching_external_file() {
     let root = source_root("mutation-runner-restore-symlink", b"true\n");
@@ -90,7 +90,7 @@ fn restoration_refuses_symlink_sabotage_without_touching_external_file() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restoration_refuses_directory_sabotage() {
     let root = source_root("mutation-runner-restore-directory", b"true\n");
@@ -107,7 +107,33 @@ fn restoration_refuses_directory_sabotage() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn rollback_refuses_post_apply_hardlink_replacement() {
+    let root = source_root("mutation-runner-rollback-hardlink", b"true\n");
+    let outside = fs::tempdir("mutation-runner-rollback-hardlink-peer");
+    let outside_target = outside.join("fixture.rs");
+    std::fs::write(&outside_target, b"outside\n").unwrap();
+    let command = format!(
+        "sh -c 'rm -f fixture.rs; ln {} fixture.rs'",
+        outside_target.display()
+    );
+    let runner = NativeMutationRunner::new(2, Some(command));
+
+    let result = runner.run_mutant(&mutant("fixture.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, MutantOutcome::RunnerError);
+    assert!(!result.source_restored);
+    assert_eq!(std::fs::read(&outside_target).unwrap(), b"outside\n");
+    assert_eq!(
+        std::fs::read(root.join("fixture.rs")).unwrap(),
+        b"outside\n"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restoration_refuses_symlinked_ancestor_without_touching_external_file() {
     let root = fs::tempdir("mutation-runner-restore-ancestor");
@@ -135,7 +161,32 @@ fn restoration_refuses_symlinked_ancestor_without_touching_external_file() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn rollback_refuses_detached_parent_and_does_not_write_old_directory() {
+    let root = fs::tempdir("mutation-runner-detached-parent");
+    let nested = root.join("nested");
+    let detached = root.join("nested.detached");
+    let live_target = nested.join("fixture.rs");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(&live_target, b"true\n").unwrap();
+    let command =
+        "sh -c 'mv nested nested.detached; mkdir nested; printf outside > nested/fixture.rs'";
+    let runner = NativeMutationRunner::new(2, Some(command.to_string()));
+
+    let result = runner.run_mutant(&mutant("nested/fixture.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, MutantOutcome::RunnerError);
+    assert!(!result.source_restored);
+    assert_eq!(std::fs::read(&live_target).unwrap(), b"outside");
+    assert_eq!(
+        std::fs::read(detached.join("fixture.rs")).unwrap(),
+        b"false\n"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn direct_runner_rejects_absolute_mutant_outside_root() {
     let root = source_root("mutation-runner-absolute-outside", b"true\n");
@@ -156,27 +207,52 @@ fn direct_runner_rejects_absolute_mutant_outside_root() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn symlinked_repository_root_spelling_stays_contained() {
+    use std::os::unix::fs::symlink;
+
+    let actual = source_root("mutation-runner-root-spelling", b"true\n");
+    let alias = fs::tempdir("mutation-runner-root-spelling-alias");
+    std::fs::remove_dir_all(&alias).unwrap();
+    symlink(&actual, &alias).unwrap();
+    let runner = NativeMutationRunner::new(2, Some("printf executed".to_string()));
+
+    let result = runner.run_mutant(&mutant("fixture.rs"), Path::new(&alias));
+
+    assert_eq!(result.outcome, MutantOutcome::Survived);
+    assert!(result.source_restored);
+    assert_eq!(std::fs::read(actual.join("fixture.rs")).unwrap(), b"true\n");
+    let _ = std::fs::remove_file(alias);
+    let _ = std::fs::remove_dir_all(actual);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn atomic_replacement_leaves_outside_hardlink_peer_unchanged() {
     let root = source_root("mutation-runner-hardlink-outside", b"true\n");
     let outside = fs::tempdir("mutation-runner-hardlink-outside-peer");
     let target = root.join("fixture.rs");
     let peer = outside.join("peer.rs");
+    let marker = root.join("ran");
     std::fs::hard_link(&target, &peer).unwrap();
-    let runner = NativeMutationRunner::new(2, Some("printf executed".to_string()));
+    let runner = NativeMutationRunner::new(
+        2,
+        Some(format!("sh -c 'printf executed > {}'", marker.display())),
+    );
 
     let result = runner.run_mutant(&mutant("fixture.rs"), Path::new(&root));
 
-    assert_eq!(result.outcome, MutantOutcome::Survived);
-    assert!(result.source_restored);
+    assert_eq!(result.outcome, MutantOutcome::RunnerError);
+    assert!(!result.source_restored);
+    assert!(!marker.exists());
     assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
     assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(outside);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn timeout_reserves_critical_diagnostic_after_saturated_output() {
     let root = source_root("mutation-runner-timeout-output", b"true\n");
@@ -195,7 +271,7 @@ fn timeout_reserves_critical_diagnostic_after_saturated_output() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restoration_diagnostic_survives_saturated_output() {
     let root = source_root("mutation-runner-restore-output", b"true\n");
@@ -212,7 +288,7 @@ fn restoration_diagnostic_survives_saturated_output() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn exited_descendants_with_inherited_pipes_are_cleaned_repeatedly() {
     let root = source_root("mutation-runner-inherited-pipes", b"fn main() {}\n");
@@ -227,5 +303,34 @@ fn exited_descendants_with_inherited_pipes_are_cleaned_repeatedly() {
         started.elapsed() < std::time::Duration::from_secs(8),
         "inherited pipes exceeded bounded cleanup"
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn exited_descendant_with_closed_pipes_is_still_reaped() {
+    let root = source_root("mutation-runner-closed-pipes", b"fn main() {}\n");
+    let pid_file = root.join("child.pid");
+    let command = format!(
+        "sh -c 'sleep 30 >/dev/null 2>&1 & printf %s $! > {}; exit 0'",
+        pid_file.display()
+    );
+    let runner = NativeMutationRunner::new(2, Some(command));
+
+    let result = runner.run_baseline(Path::new("fixture.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, BaselineOutcome::Passed);
+    let child_pid = std::fs::read_to_string(&pid_file).unwrap();
+    let child_pid = child_pid.trim().parse::<i32>().unwrap();
+    let pid = rustix::process::Pid::from_raw(child_pid).unwrap();
+    for _ in 0..100 {
+        match rustix::io::retry_on_intr(|| rustix::process::test_kill_process(pid)) {
+            Err(error) if error == rustix::io::Errno::SRCH => break,
+            Ok(()) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(error) => panic!("closed-pipe descendant probe failed: {error}"),
+        }
+    }
+    let still_alive = rustix::process::test_kill_process(pid).is_ok();
+    assert!(!still_alive, "closed-pipe descendant survived cleanup");
     let _ = std::fs::remove_dir_all(root);
 }

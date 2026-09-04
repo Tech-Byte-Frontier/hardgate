@@ -277,3 +277,140 @@ fn valid_in_root_file_and_directory_scopes_are_accepted() {
     let directory = run_mutate(&root, Some(Path::new("./src/../src")), false);
     assert!(directory.status.success(), "{}", diagnostic(&directory));
 }
+
+#[test]
+fn diff_scoped_unchanged_source_file_is_a_noop() {
+    let root = FixtureRoot::new("mutation-target-diff-unchanged-file");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == true }\n",
+    );
+    init_repo(&root);
+
+    let output = run_mutate(&root, Some(Path::new("src/lib.rs")), true);
+
+    assert!(output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("no-op"),
+        "{}",
+        diagnostic(&output)
+    );
+}
+
+#[test]
+fn diff_scoped_changed_source_file_is_selected() {
+    let root = FixtureRoot::new("mutation-target-diff-changed-file");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == true }\n",
+    );
+    init_repo(&root);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == false }\n",
+    );
+
+    let output = run_mutate(&root, Some(Path::new("src/lib.rs")), true);
+
+    assert!(output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("across 1 source files"),
+        "{}",
+        diagnostic(&output)
+    );
+}
+
+#[test]
+fn diff_scoped_non_source_file_remains_an_error() {
+    let root = FixtureRoot::new("mutation-target-diff-non-source");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(&root, "tests/example.rs", "#[test] fn example() {}\n");
+    init_repo(&root);
+    write(
+        &root,
+        "tests/example.rs",
+        "#[test] fn example() { panic!(); }\n",
+    );
+
+    let output = run_mutate(&root, Some(Path::new("tests/example.rs")), true);
+
+    assert!(!output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("not production source"),
+        "{}",
+        diagnostic(&output)
+    );
+}
+
+#[test]
+fn diff_scoped_missing_file_is_an_error() {
+    let root = FixtureRoot::new("mutation-target-diff-missing");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    init_repo(&root);
+
+    let output = run_mutate(&root, Some(Path::new("src/missing.rs")), true);
+
+    assert!(!output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("Path not found"),
+        "{}",
+        diagnostic(&output)
+    );
+}
+
+#[test]
+fn diff_scoped_directory_intersects_changed_production_sources() {
+    let root = FixtureRoot::new("mutation-target-diff-directory");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/unchanged.rs",
+        "pub fn unchanged(value: bool) -> bool { value == true }\n",
+    );
+    write(
+        &root,
+        "src/changed.rs",
+        "pub fn changed(value: bool) -> bool { value == true }\n",
+    );
+    init_repo(&root);
+    write(
+        &root,
+        "src/changed.rs",
+        "pub fn changed(value: bool) -> bool { value == false }\n",
+    );
+
+    let output = run_mutate(&root, Some(Path::new("src")), true);
+
+    assert!(output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("across 1 source files"),
+        "{}",
+        diagnostic(&output)
+    );
+}
+
+#[test]
+fn diff_scoped_unchanged_directory_is_a_noop() {
+    let root = FixtureRoot::new("mutation-target-diff-unchanged-directory");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == true }\n",
+    );
+    init_repo(&root);
+
+    let output = run_mutate(&root, Some(Path::new("src")), true);
+
+    assert!(output.status.success(), "{}", diagnostic(&output));
+    assert!(
+        diagnostic(&output).contains("no-op"),
+        "{}",
+        diagnostic(&output)
+    );
+}
