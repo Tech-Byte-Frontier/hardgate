@@ -2,8 +2,8 @@
 mod metrics;
 
 use hardgate::config::FunctionBudgets;
-use hardgate::engines::ComplexityAnalyzer;
 use hardgate::engines::complexity::FunctionMetrics;
+use hardgate::engines::{ComplexityAnalyzer, ComplexityContribution};
 use std::path::Path;
 
 /// Analyze one fixture file and return its single function.
@@ -207,6 +207,108 @@ fn test_limit_violation_details_and_order_are_preserved() {
         assert_eq!(violation.message, message);
         assert_eq!(violation.recommendation, recommendation);
     }
+}
+
+#[test]
+fn test_equal_score_breakdown_uses_line_tie_breaker() {
+    let mut function = metrics::sample_metrics(4, 9, 1.0, 1.0);
+    function.cognitive_breakdown = [41, 7, 29, 13, 5, 19]
+        .into_iter()
+        .map(|line| ComplexityContribution {
+            line,
+            column: 1,
+            kind: "if_statement".to_string(),
+            description: "conditional branch (`if`)".to_string(),
+            score: 1,
+        })
+        .collect();
+
+    let budgets = FunctionBudgets {
+        max_cognitive: Some(8),
+        ..Default::default()
+    };
+    let violations = ComplexityAnalyzer::check_violations(&[function], &budgets);
+    assert_eq!(violations.len(), 1);
+    let lines: Vec<usize> = violations[0]
+        .breakdown
+        .iter()
+        .map(|contribution| contribution.line)
+        .collect();
+    assert_eq!(lines, [5, 7, 13, 19, 29]);
+}
+
+#[test]
+fn test_function_expressions_cover_language_name_fallbacks_and_empty_halstead() {
+    const EMPTY_EXPRESSION: &str = "const typed = function () {};";
+    let cases = [
+        ("src/expression.ts", "typed"),
+        ("src/expression.tsx", "typed"),
+        ("src/expression.js", "typed"),
+    ];
+    for (path, expected_name) in cases {
+        let mut analyzer = ComplexityAnalyzer::new();
+        let metrics = analyzer
+            .analyze_file_checked(Path::new(path), EMPTY_EXPRESSION, Path::new("."))
+            .unwrap_or_else(|error| panic!("failed to parse {path}: {error}"));
+        assert_eq!(metrics.len(), 1, "expected one function in {path}");
+        assert_eq!(metrics[0].name, expected_name);
+        assert_eq!(metrics[0].halstead_difficulty, 0.0);
+    }
+
+    let mut analyzer = ComplexityAnalyzer::new();
+    let anonymous_source = format!("{EMPTY_EXPRESSION}\n(function () {{}});");
+    let metrics = analyzer
+        .analyze_file_checked(
+            Path::new("src/anonymous.js"),
+            &anonymous_source,
+            Path::new("."),
+        )
+        .expect("anonymous function expressions should parse");
+    assert_eq!(metrics.len(), 2);
+    assert!(metrics.iter().any(|function| function.name == "typed"));
+    assert!(metrics.iter().any(|function| function.name == "anonymous"));
+}
+
+#[test]
+fn test_property_and_field_identifiers_are_analyzed_across_dialects() {
+    let cases = [
+        (
+            "src/property.js",
+            "function read(record) { return record.value; }",
+            "read",
+        ),
+        (
+            "src/method.go",
+            "package main\n\ntype Counter struct { value int }\n\nfunc (c Counter) Reset(value int) int {\n    return c.value + value\n}\n",
+            "Reset",
+        ),
+    ];
+
+    for (path, source, expected_name) in cases {
+        let mut analyzer = ComplexityAnalyzer::new();
+        let metrics = analyzer
+            .analyze_file_checked(Path::new(path), source, Path::new("."))
+            .unwrap_or_else(|error| panic!("failed to parse {path}: {error}"));
+        assert_eq!(metrics.len(), 1, "expected one function in {path}");
+        assert_eq!(metrics[0].name, expected_name);
+        assert!(metrics[0].halstead_difficulty > 0.0);
+    }
+}
+
+#[test]
+fn test_unchecked_parse_failure_and_nonmatching_root_are_safe() {
+    let mut analyzer = ComplexityAnalyzer::new();
+    let metrics = analyzer
+        .analyze_file_checked(Path::new("outside.rs"), "fn outside() {}", Path::new("src"))
+        .expect("valid source outside the root should still parse");
+    assert_eq!(metrics.len(), 1);
+    assert_eq!(metrics[0].file, Path::new("outside.rs"));
+
+    assert!(
+        analyzer
+            .analyze_file(Path::new("broken.rs"), "fn broken( {", Path::new("src"))
+            .is_empty()
+    );
 }
 
 const CURRENT_AST_REGRESSION_CASES: &[(&str, &str, &str, Option<&str>)] = &[
