@@ -468,3 +468,24 @@ fn generated_presets_and_runtime_defaults_have_matching_semantics() {
     assert!(legacy.ratchet);
     assert!(LegacyConfig::for_preset(false).reference_branch.is_none());
 }
+
+#[test]
+fn mutation_timeout_defaults_are_consistent_for_custom_configs() {
+    assert!(Preset::Custom.to_default_config().mutation.reject_timeouts);
+    let root = fs::tempdir("custom-mutation-default");
+    let path = root.join("hardgate.toml");
+    let load = |content: &str| {
+        std::fs::write(&path, content).unwrap();
+        HardgateConfig::load_or_default(Some(&path)).unwrap()
+    };
+    let generated = load(&HardgateConfig::generate_toml_template(Preset::Custom));
+    assert!(generated.mutation.reject_timeouts);
+    let minimal = load("[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\n");
+    assert!(minimal.mutation.enabled);
+    assert!(minimal.mutation.reject_timeouts);
+    let explicit = load(
+        "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = false\nreject_timeouts = false\n",
+    );
+    assert!(!explicit.mutation.reject_timeouts);
+    let _ = std::fs::remove_dir_all(&root);
+}
