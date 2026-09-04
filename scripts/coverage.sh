@@ -12,5 +12,5 @@ if [ "$installed_version" != "$COV_VERSION" ]; then
   cargo install cargo-llvm-cov --version "=$COV_VERSION" --locked --force
 fi
 mkdir -p coverage
-cargo "+$COV_TOOLCHAIN" llvm-cov --all-targets --all-features --locked --branch --lcov --output-path coverage/lcov.info
+cargo "+$COV_TOOLCHAIN" llvm-cov --all-targets --all-features --locked --branch --include-build-script --lcov --output-path coverage/lcov.info
 test -s coverage/lcov.info

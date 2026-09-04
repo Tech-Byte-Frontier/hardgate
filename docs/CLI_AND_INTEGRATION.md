@@ -5,7 +5,8 @@ Commands run from the current repository. Hardgate loads `hardgate.toml` when pr
 The repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
 instrumentation is unstable. This producer-only toolchain is separate from the
-Rust 1.98.1 crate MSRV and normal build/test gates.
+Rust 1.98.1 crate MSRV and normal build/test gates; the helper includes the
+executable `build.rs` in that LCOV report.
 
 ## `hardgate init`
 
