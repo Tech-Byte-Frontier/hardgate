@@ -68,7 +68,7 @@ for (const packageName of platformPackages) {
 }
 assert.deepEqual(npmPlatformDirectories, [...platformPackages].sort(), "npm directories must match the supported platform set");
 assert.deepEqual(Object.keys(wrapperManifest.optionalDependencies ?? {}).sort(), [...platformPackages].sort(), "wrapper optionalDependencies must match the supported platform set");
-includesAll(installer, ["linux-x86_64", "linux-aarch64|linux-arm64", "darwin-x86_64", "darwin-aarch64|darwin-arm64", "libc_suffix", "HARDGATE_LIBC=gnu|musl", "ldd --version", "ld-musl-*.so.1"], "installer platform map");
+includesAll(installer, ["linux-x86_64", "linux-aarch64|linux-arm64", "darwin-x86_64", "darwin-aarch64|darwin-arm64", "libc_suffix", "gnu|glibc)", "musl)", "HARDGATE_LIBC must be gnu, glibc, or musl", "ldd --version", "ld-musl-*.so.1"], "installer platform map");
 assert.equal((release.match(/target:/g) ?? []).length, targets.length, "release matrix must contain exactly six targets");
 
 assert.match(release, /needs:\s*\[version-check, quality-gate\]/, "build must wait for quality");
