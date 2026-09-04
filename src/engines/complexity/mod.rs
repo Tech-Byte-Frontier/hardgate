@@ -122,6 +122,7 @@ struct ViolationSpec<'a> {
     actual: f64,
     limit: f64,
     breakdown: &'a [ComplexityContribution],
+    message: Option<String>,
     recommendation: String,
 }
 
@@ -133,13 +134,14 @@ fn check_control_flow_limits(
     if let Some(limit) = budgets.max_cyclomatic
         && m.cyclomatic > limit
     {
-        violations.push(create_complexity_violation(
+        violations.push(create_violation(
             m,
             ViolationSpec {
                 metric: "Cyclomatic Complexity",
                 actual: m.cyclomatic as f64,
                 limit: limit as f64,
                 breakdown: &m.cyclomatic_breakdown,
+                message: None,
                 recommendation: format!(
                     "Refactor `{}`: extract decision branches into helper functions.",
                     m.name
@@ -151,20 +153,21 @@ fn check_control_flow_limits(
     if let Some(limit) = budgets.max_cognitive
         && m.cognitive > limit
     {
-        violations.push(create_complexity_violation(
+        violations.push(create_violation(
             m,
             ViolationSpec {
                 metric: "Cognitive Complexity",
                 actual: m.cognitive as f64,
                 limit: limit as f64,
                 breakdown: &m.cognitive_breakdown,
+                message: None,
                 recommendation: format!("Flatten nested control structures in `{}`.", m.name),
             },
         ));
     }
 }
 
-fn create_complexity_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViolation {
+fn create_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViolation {
     let mut top = spec.breakdown.to_vec();
     top.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.line.cmp(&b.line)));
     ComplexityViolation {
@@ -176,10 +179,12 @@ fn create_complexity_violation(m: &FunctionMetrics, spec: ViolationSpec) -> Comp
         actual: spec.actual,
         limit: spec.limit,
         breakdown: top.into_iter().take(5).collect(),
-        message: format!(
-            "{} is {:.0} (budget: {:.0})",
-            spec.metric, spec.actual, spec.limit
-        ),
+        message: spec.message.unwrap_or_else(|| {
+            format!(
+                "{} is {:.0} (budget: {:.0})",
+                spec.metric, spec.actual, spec.limit
+            )
+        }),
         recommendation: spec.recommendation,
     }
 }
@@ -192,64 +197,64 @@ fn check_size_and_param_limits(
     if let Some(limit) = budgets.max_parameters
         && m.parameters > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "Parameter Count".to_string(),
-            actual: m.parameters as f64,
-            limit: limit as f64,
-            breakdown: Vec::new(),
-            message: format!(
-                "Function has {} parameters (budget: {})",
-                m.parameters, limit
-            ),
-            recommendation: format!(
-                "Introduce a config struct or parameter object for `{}`.",
-                m.name
-            ),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "Parameter Count",
+                actual: m.parameters as f64,
+                limit: limit as f64,
+                breakdown: &[],
+                message: Some(format!(
+                    "Function has {} parameters (budget: {})",
+                    m.parameters, limit
+                )),
+                recommendation: format!(
+                    "Introduce a config struct or parameter object for `{}`.",
+                    m.name
+                ),
+            },
+        ));
     }
 
     if let Some(limit) = budgets.max_lines
         && m.lines > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "Function Lines".to_string(),
-            actual: m.lines as f64,
-            limit: limit as f64,
-            breakdown: Vec::new(),
-            message: format!("Function body spans {} lines (budget: {})", m.lines, limit),
-            recommendation: format!("Split `{}` into smaller focused functions.", m.name),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "Function Lines",
+                actual: m.lines as f64,
+                limit: limit as f64,
+                breakdown: &[],
+                message: Some(format!(
+                    "Function body spans {} lines (budget: {})",
+                    m.lines, limit
+                )),
+                recommendation: format!("Split `{}` into smaller focused functions.", m.name),
+            },
+        ));
     }
 
     if let Some(limit) = budgets.max_nesting_depth
         && m.max_nesting_depth > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "Nesting Depth".to_string(),
-            actual: m.max_nesting_depth as f64,
-            limit: limit as f64,
-            breakdown: Vec::new(),
-            message: format!(
-                "Max nesting depth is {} (budget: {})",
-                m.max_nesting_depth, limit
-            ),
-            recommendation: format!(
-                "Use early returns or guard clauses to reduce nesting depth in `{}`.",
-                m.name
-            ),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "Nesting Depth",
+                actual: m.max_nesting_depth as f64,
+                limit: limit as f64,
+                breakdown: &[],
+                message: Some(format!(
+                    "Max nesting depth is {} (budget: {})",
+                    m.max_nesting_depth, limit
+                )),
+                recommendation: format!(
+                    "Use early returns or guard clauses to reduce nesting depth in `{}`.",
+                    m.name
+                ),
+            },
+        ));
     }
 }
 
@@ -261,64 +266,64 @@ fn check_advanced_limits(
     if let Some(limit) = budgets.max_halstead_difficulty
         && m.halstead_difficulty > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "Halstead Difficulty".to_string(),
-            actual: m.halstead_difficulty,
-            limit,
-            breakdown: Vec::new(),
-            message: format!(
-                "Halstead difficulty is {:.1} (budget: {:.1})",
-                m.halstead_difficulty, limit
-            ),
-            recommendation: format!(
-                "Simplify operators/operands in `{}`: extract helpers, reduce distinct operators.",
-                m.name
-            ),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "Halstead Difficulty",
+                actual: m.halstead_difficulty,
+                limit,
+                breakdown: &[],
+                message: Some(format!(
+                    "Halstead difficulty is {:.1} (budget: {:.1})",
+                    m.halstead_difficulty, limit
+                )),
+                recommendation: format!(
+                    "Simplify operators/operands in `{}`: extract helpers, reduce distinct operators.",
+                    m.name
+                ),
+            },
+        ));
     }
 
     if let Some(limit) = budgets.max_statements
         && m.statements > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "Statement Count".to_string(),
-            actual: m.statements as f64,
-            limit: limit as f64,
-            breakdown: Vec::new(),
-            message: format!(
-                "Function has {} statements (budget: {})",
-                m.statements, limit
-            ),
-            recommendation: format!("Split `{}` into smaller focused functions.", m.name),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "Statement Count",
+                actual: m.statements as f64,
+                limit: limit as f64,
+                breakdown: &[],
+                message: Some(format!(
+                    "Function has {} statements (budget: {})",
+                    m.statements, limit
+                )),
+                recommendation: format!("Split `{}` into smaller focused functions.", m.name),
+            },
+        ));
     }
 
     if let Some(limit) = budgets.max_abc
         && m.abc_score > limit
     {
-        violations.push(ComplexityViolation {
-            file: m.file.clone(),
-            function_name: m.name.clone(),
-            line_number: m.start_line,
-            end_line: m.end_line,
-            metric: "ABC Score".to_string(),
-            actual: m.abc_score,
-            limit,
-            breakdown: Vec::new(),
-            message: format!("ABC score is {:.1} (budget: {:.1})", m.abc_score, limit),
-            recommendation: format!(
-                "Reduce assignments/branches/calls in `{}` by extracting helpers.",
-                m.name
-            ),
-        });
+        violations.push(create_violation(
+            m,
+            ViolationSpec {
+                metric: "ABC Score",
+                actual: m.abc_score,
+                limit,
+                breakdown: &[],
+                message: Some(format!(
+                    "ABC score is {:.1} (budget: {:.1})",
+                    m.abc_score, limit
+                )),
+                recommendation: format!(
+                    "Reduce assignments/branches/calls in `{}` by extracting helpers.",
+                    m.name
+                ),
+            },
+        ));
     }
 }
 

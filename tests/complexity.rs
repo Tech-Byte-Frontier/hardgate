@@ -131,6 +131,84 @@ fn test_complexity_advanced_budgets_enforced() {
     assert!(ComplexityAnalyzer::check_violations(&[good], &budgets).is_empty());
 }
 
+#[test]
+fn test_limit_violation_details_and_order_are_preserved() {
+    let mut function = metrics::sample_metrics(99, 2, 99.0, 99.0);
+    function.parameters = 6;
+    function.max_nesting_depth = 6;
+    let budgets = FunctionBudgets {
+        max_parameters: Some(4),
+        max_lines: Some(80),
+        max_nesting_depth: Some(4),
+        max_halstead_difficulty: Some(80.0),
+        max_statements: Some(30),
+        max_abc: Some(10.0),
+        ..Default::default()
+    };
+    let violations =
+        ComplexityAnalyzer::check_violations(std::slice::from_ref(&function), &budgets);
+    let expected = [
+        (
+            "Parameter Count",
+            6.0,
+            4.0,
+            "Function has 6 parameters (budget: 4)",
+            "Introduce a config struct or parameter object for `untested_monster`.",
+        ),
+        (
+            "Function Lines",
+            99.0,
+            80.0,
+            "Function body spans 99 lines (budget: 80)",
+            "Split `untested_monster` into smaller focused functions.",
+        ),
+        (
+            "Nesting Depth",
+            6.0,
+            4.0,
+            "Max nesting depth is 6 (budget: 4)",
+            "Use early returns or guard clauses to reduce nesting depth in `untested_monster`.",
+        ),
+        (
+            "Halstead Difficulty",
+            99.0,
+            80.0,
+            "Halstead difficulty is 99.0 (budget: 80.0)",
+            "Simplify operators/operands in `untested_monster`: extract helpers, reduce distinct operators.",
+        ),
+        (
+            "Statement Count",
+            99.0,
+            30.0,
+            "Function has 99 statements (budget: 30)",
+            "Split `untested_monster` into smaller focused functions.",
+        ),
+        (
+            "ABC Score",
+            99.0,
+            10.0,
+            "ABC score is 99.0 (budget: 10.0)",
+            "Reduce assignments/branches/calls in `untested_monster` by extracting helpers.",
+        ),
+    ];
+
+    assert_eq!(violations.len(), expected.len());
+    for (violation, (metric, actual, limit, message, recommendation)) in
+        violations.iter().zip(expected)
+    {
+        assert_eq!(violation.file, function.file);
+        assert_eq!(violation.function_name, function.name);
+        assert_eq!(violation.line_number, function.start_line);
+        assert_eq!(violation.end_line, function.end_line);
+        assert_eq!(violation.metric, metric);
+        assert_eq!(violation.actual, actual);
+        assert_eq!(violation.limit, limit);
+        assert!(violation.breakdown.is_empty());
+        assert_eq!(violation.message, message);
+        assert_eq!(violation.recommendation, recommendation);
+    }
+}
+
 const CURRENT_AST_REGRESSION_CASES: &[(&str, &str, &str, Option<&str>)] = &[
     (
         "src/regression.rs",
