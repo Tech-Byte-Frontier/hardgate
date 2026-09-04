@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Sync npm/* versions from Cargo.toml [package] version (single source of truth).
-// Usage: node scripts/sync-npm-version.mjs [--check]
+// Usage: node scripts/sync-npm-version.mjs [--check] [--tag vX.Y.Z]
 "use strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,8 +13,26 @@ if (!m) {
   console.error("sync-npm-version: could not parse version from Cargo.toml");
   process.exit(1);
 }
-const version = m[1];
+const cargoVersion = m[1];
 const check = process.argv.includes("--check");
+const tagIndex = process.argv.indexOf("--tag");
+const tagArg = tagIndex >= 0
+  ? process.argv[tagIndex + 1]
+  : process.argv.find((value) => value.startsWith("--tag="))?.slice(6);
+if (tagIndex >= 0 && !tagArg) {
+  console.error("sync-npm-version: --tag requires a v<semver> value");
+  process.exit(1);
+}
+const tagVersion = tagArg?.startsWith("v") ? tagArg.slice(1) : null;
+if (tagArg && !tagVersion) {
+  console.error("sync-npm-version: --tag must be v<semver>");
+  process.exit(1);
+}
+if (tagVersion && tagVersion !== cargoVersion) {
+  console.error(`sync-npm-version: tag ${tagArg} does not match Cargo.toml ${cargoVersion}`);
+  process.exit(1);
+}
+const version = tagVersion ?? cargoVersion;
 
 const platformPkgs = [
   "hardgate-linux-x64",
@@ -73,8 +91,8 @@ syncJson(path.join(root, "npm/hardgate/package.json"), (j) => {
   j.files = ["bin/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"];
   j.optionalDependencies ??= {};
   for (const p of platformPkgs) j.optionalDependencies[p] = version;
-  // Prune entries for dropped platforms (e.g. win32) so the manifest
-  // never references packages that no longer exist.
+  // Prune entries for dropped platforms so the manifest never advertises
+  // packages that no longer exist.
   for (const key of Object.keys(j.optionalDependencies)) {
     if (key.startsWith("hardgate-") && !platformPkgs.includes(key)) {
       delete j.optionalDependencies[key];

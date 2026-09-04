@@ -3,13 +3,15 @@ use hardgate::commands;
 use hardgate::mcp;
 use std::path::PathBuf;
 
+mod build_info;
+
 #[derive(Parser)]
 #[command(name = "hardgate")]
 #[command(
     about = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era",
     long_about = None
 )]
-#[command(version)]
+#[command(version = build_info::VERSION_DISPLAY)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -142,6 +144,7 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    let _ = build_info::identity();
     let cli = Cli::parse();
     execute_command(cli.command)
 }

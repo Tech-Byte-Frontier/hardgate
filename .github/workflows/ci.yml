@@ -5,33 +5,97 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.85.1
+  CARGO_AUDIT_VERSION: 0.21.2
+  CARGO_LLVM_COV_VERSION: 0.9.0
+  NODE_VERSION: 22.22.2
 
 jobs:
   rust:
-    name: rust (test + lint)
-    runs-on: ubuntu-22.04
+    name: Rust format, lint, tests, and audit
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy, llvm-tools-preview
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-targets --all-features --locked
+      - name: RustSec dependency audit
+        run: scripts/dependency-audit.sh
 
   npm-wrapper:
-    name: npm wrapper (node + pnpm compat)
-    runs-on: ubuntu-22.04
+    name: npm quality and wrapper regression
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          node-version: 20
-      - run: cargo build --locked
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - run: cargo build --locked --release
       - run: node scripts/sync-npm-version.mjs --check
       - run: node scripts/check-npm-quality.mjs
-      - run: node npm/hardgate/bin/hardgate.js --version
       - run: node tests/npm-wrapper.test.mjs
+        env:
+          HARDGATE_BINARY: target/release/hardgate
+      - run: node tests/npm-wrapper-regression.test.mjs
+        env:
+          HARDGATE_BINARY: target/release/hardgate
+      - run: node scripts/check-consumer-matrix.mjs
+        env:
+          HARDGATE_BINARY: target/release/hardgate
+
+  hardgate-self:
+    name: Hardgate complete self/evidence gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - run: cargo build --locked --release
+      - name: Run complete configured static/orchestration/evidence gate
+        run: scripts/self-gate.sh
+
+  release-contract:
+    name: Release and installer contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: node tests/release_contract.test.mjs
+
+  quality:
+    name: CI quality aggregate
+    if: ${{ always() }}
+    needs: [rust, npm-wrapper, hardgate-self, release-contract]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every quality job to pass
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+      - run: echo "all required CI gates passed"
