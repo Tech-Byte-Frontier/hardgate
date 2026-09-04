@@ -121,9 +121,6 @@ fn select_files(
     } = discovery;
 
     let (mut files, mut excluded_files) = if diff && !paths.is_empty() {
-        // A diff discovery contains only Git-changed paths. Run the ordinary
-        // full-tree inventory as well so explicit directories can contribute
-        // unchanged files to the static and clone selections.
         let full_discovery = discover_files_with_exclusions(DiscoverOptions {
             root,
             diff_only: false,
@@ -164,10 +161,15 @@ fn normalize_scope_paths(paths: &[PathBuf], root: &Path) -> Result<Vec<PathBuf>>
     paths
         .iter()
         .map(|path| {
-            if !path.is_absolute() {
-                return Ok(path.clone());
+            let absolute_path = if path.is_absolute() {
+                path.clone()
+            } else {
+                absolute_root.join(path)
+            };
+            if !absolute_path.exists() {
+                anyhow::bail!("Path not found: {}", path.display());
             }
-            let absolute_path = fs::canonicalize(path)?;
+            let absolute_path = fs::canonicalize(absolute_path)?;
             Ok(absolute_path
                 .strip_prefix(&absolute_root)
                 .map(PathBuf::from)

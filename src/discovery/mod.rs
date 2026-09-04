@@ -154,7 +154,7 @@ fn resolve_path_filters(paths: &[PathBuf], root: &Path) -> Result<PathFilters> {
 }
 
 fn is_within_dir(key: &str, dir: &str) -> bool {
-    key == dir || key.starts_with(&format!("{dir}/"))
+    dir.is_empty() || dir == "." || key == dir || key.starts_with(&format!("{dir}/"))
 }
 
 /// Lossy lexical key: forward slashes, no leading `./`.
