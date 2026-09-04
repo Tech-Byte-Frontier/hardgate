@@ -5,6 +5,7 @@ mod js_command;
 mod js_tests;
 mod process;
 pub mod runner;
+pub(crate) mod target;
 
 pub use gatekeeper::{MutationGatekeeper, MutationStats, MutationViolation};
 pub use generator::{AstMutant, AstMutationGenerator};

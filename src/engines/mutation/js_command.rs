@@ -14,6 +14,8 @@ pub(crate) fn build_js_command(input: JsCommandInput<'_>) -> String {
         let base = manager_script_command(input.manager, script);
         return if input.framework.is_some() {
             append_candidate(base, input.candidate, input.working_dir)
+        } else if input.manager == PackageManager::Bun && script == "test" {
+            append_bun_candidate(base, input.candidate, input.working_dir)
         } else {
             base
         };
@@ -68,6 +70,17 @@ fn append_candidate(base: String, candidate: Option<&Path>, working_dir: &Path) 
         .unwrap_or(candidate)
         .to_string_lossy();
     format!("{base} -- {}", shell_quote(&relative))
+}
+
+fn append_bun_candidate(base: String, candidate: Option<&Path>, working_dir: &Path) -> String {
+    let Some(candidate) = candidate else {
+        return base;
+    };
+    let relative = candidate
+        .strip_prefix(working_dir)
+        .unwrap_or(candidate)
+        .to_string_lossy();
+    format!("{base} {}", shell_quote(&relative))
 }
 
 fn shell_quote(value: &str) -> String {

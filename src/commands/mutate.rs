@@ -1,6 +1,8 @@
 use super::mutation_output::{MutationSummaryContext, render_mutation_output};
 use crate::config::HardgateConfig;
 use crate::discovery::{ClassifiedFile, DiscoverOptions, discover_files};
+use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
+use crate::engines::mutation::target::is_effective_mutation_target;
 use crate::engines::{
     AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
     MutantExecutionResult, MutantOutcome, MutationStats, NativeMutationRunner,
@@ -108,14 +110,40 @@ fn resolve_timeout(
         .test_cmd
         .as_deref()
         .or(config.mutation.test_cmd.as_deref());
-    let timeout = opts
-        .timeout_secs
-        .or(config.mutation.timeout_secs)
-        .unwrap_or_else(|| NativeMutationRunner::default_timeout_secs(files, root, test_cmd));
-    if timeout == 0 {
-        bail!("mutation timeout_secs must be greater than zero");
+    let configured_timeout = opts.timeout_secs.or(config.mutation.timeout_secs);
+    if let Some(timeout) = configured_timeout {
+        if timeout == 0 {
+            bail!("mutation timeout_secs must be greater than zero");
+        }
+        if let Some(recommended) = automatic_full_suite_timeout(files, root, test_cmd)
+            && timeout < recommended
+        {
+            bail!(
+                "automatic JavaScript full-suite selection requires timeout_secs >= {recommended}s (configured {timeout}s); pass --timeout {recommended} or set [mutation].timeout_secs = {recommended} before baseline"
+            );
+        }
+        return Ok(timeout);
     }
-    Ok(timeout)
+    Ok(NativeMutationRunner::default_timeout_secs(
+        files, root, test_cmd,
+    ))
+}
+
+fn automatic_full_suite_timeout(
+    files: &[PathBuf],
+    root: &Path,
+    test_cmd: Option<&str>,
+) -> Option<u64> {
+    if test_cmd.is_some() {
+        return None;
+    }
+    let runner = NativeMutationRunner::new(FULL_SUITE_TIMEOUT_SECS, None);
+    files
+        .iter()
+        .map(|file| runner.resolve_test_plan(file, root))
+        .filter(|plan| plan.full_suite_timeout_required())
+        .map(|plan| plan.recommended_timeout_secs)
+        .max()
 }
 
 fn print_mutant_notice(count: usize, timeout: u64) {
@@ -156,8 +184,8 @@ fn discover_targets(
 ) -> Result<Vec<PathBuf>> {
     if let Some(ref path) = opts.scoped {
         if path.is_file() {
-            let classified = ClassifiedFile::new(path);
-            if !classified.role.is_mutation_target() {
+            let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
+            if !is_effective_mutation_target(&classified, config) {
                 bail!(
                     "refusing to mutate `{}` because it is classified as {:?}, not production source",
                     path.display(),
@@ -178,7 +206,7 @@ fn discover_targets(
                 diff_only: false,
                 exclusions: &config.budgets.files.exclusions.paths,
             })?;
-            return Ok(filter_production_sources(files));
+            return filter_production_sources(files, config);
         }
         anyhow::bail!("Path not found: {:?}", path);
     }
@@ -187,17 +215,25 @@ fn discover_targets(
         diff_only: opts.diff,
         exclusions: &config.budgets.files.exclusions.paths,
     })?;
-    Ok(filter_production_sources(files))
+    filter_production_sources(files, config)
 }
 
-fn filter_production_sources(files: Vec<PathBuf>) -> Vec<PathBuf> {
-    files
-        .into_iter()
-        .filter(|path| {
-            let classified = ClassifiedFile::new(path);
-            classified.role.is_mutation_target() && classified.ast_supported
-        })
-        .collect()
+fn filter_production_sources(files: Vec<PathBuf>, config: &HardgateConfig) -> Result<Vec<PathBuf>> {
+    let mut targets = Vec::new();
+    for path in files {
+        let classified = ClassifiedFile::new_with_config(&path, &config.classification)?;
+        if is_effective_mutation_target(&classified, config) && classified.ast_supported {
+            targets.push(path);
+        }
+    }
+    Ok(targets)
+}
+
+/// Resolve whether a path is an effective native mutation target under the
+/// built-in role default and any configured role policy override.
+pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
+    let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
+    Ok(is_effective_mutation_target(&classified, config))
 }
 
 fn run_unmutated_baselines(
