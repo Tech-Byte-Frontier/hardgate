@@ -305,3 +305,7 @@ pub(super) fn verify_descriptor_identity(location: &TargetLocation) -> io::Resul
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "location_tests.rs"]
+mod tests;

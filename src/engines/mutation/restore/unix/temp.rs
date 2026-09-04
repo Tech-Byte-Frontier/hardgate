@@ -38,3 +38,7 @@ pub(super) fn create_temp_file(parent: &File, name: &OsStr) -> io::Result<(OsStr
         ),
     ))
 }
+
+#[cfg(test)]
+#[path = "temp_tests.rs"]
+mod tests;

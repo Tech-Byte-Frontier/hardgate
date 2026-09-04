@@ -360,3 +360,7 @@ fn verify_contents(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "unix_tests.rs"]
+mod tests;

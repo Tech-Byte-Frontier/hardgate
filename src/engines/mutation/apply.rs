@@ -162,3 +162,7 @@ enum ApplyResult {
     Applied,
     Equivalent,
 }
+
+#[cfg(test)]
+#[path = "apply_tests.rs"]
+mod tests;

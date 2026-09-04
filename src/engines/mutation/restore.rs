@@ -303,3 +303,7 @@ fn unsupported_platform_error() -> io::Error {
         "mutation source writes and descendant cleanup require Linux or macOS; this platform is unsupported and no source write was attempted",
     )
 }
+
+#[cfg(test)]
+#[path = "restore_tests.rs"]
+mod tests;
