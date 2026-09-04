@@ -1,3 +1,4 @@
 export function homeTitle(host: string): string {
-  return `Home: ${host}`;
+  const prefix = "Home" + ":";
+  return `${prefix} ${host}`;
 }

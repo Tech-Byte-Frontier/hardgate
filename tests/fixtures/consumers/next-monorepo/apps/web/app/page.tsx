@@ -1,3 +1,4 @@
 export default function Page() {
-  return <main data-fixture="next">Next fixture</main>;
+  const title = "Next" + " fixture";
+  return <main data-fixture="next">{title}</main>;
 }
