@@ -1,14 +1,20 @@
 pub mod preset;
+mod roles;
+mod validation;
 
 use anyhow::{Context, Result};
 pub use preset::Preset;
+pub use roles::{
+    ClassificationConfig, ClassificationRule, GeneratedConfig, LegacyConfig, RolePoliciesConfig,
+    RolePolicy, Severity,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Root `hardgate.toml` configuration: gate identity plus every engine budget.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardgateConfig {
     #[serde(default)]
     pub gate: GateConfig,
@@ -28,6 +34,25 @@ pub struct HardgateConfig {
     pub orchestration: OrchestrationConfig,
     #[serde(default)]
     pub analysis: AnalysisConfig,
+    /// Role-specific policy overrides.  Fields omitted here inherit global
+    /// engine budgets for backwards-compatible TOML.
+    #[serde(default, alias = "role_policies")]
+    pub roles: RolePoliciesConfig,
+    /// Ordered custom classification rules evaluated before built-ins.
+    #[serde(default)]
+    pub classification: ClassificationConfig,
+    /// Generated artifact freshness command, independent from exclusions.
+    #[serde(default)]
+    pub generated: GeneratedConfig,
+    /// Existing-code adoption reference branch and ratchet contract.
+    #[serde(default)]
+    pub legacy: LegacyConfig,
+}
+
+impl Default for HardgateConfig {
+    fn default() -> Self {
+        Preset::StrictAgent.to_default_config()
+    }
 }
 
 /// Gate identity: display name, base preset, and strictness.
@@ -207,6 +232,8 @@ pub struct OrchestrationConfig {
     pub format: Option<String>,
     pub lint: Option<String>,
     pub test_cmd: Option<String>,
+    /// Maximum runtime for an orchestrated command, in seconds.
+    pub timeout_secs: Option<u64>,
 }
 
 /// Post-static analyses such as dead-code detection.
@@ -237,7 +264,9 @@ impl HardgateConfig {
         };
 
         if !config_path.exists() {
-            return Ok(Preset::StrictAgent.to_default_config());
+            let config = Preset::StrictAgent.to_default_config();
+            config.validate()?;
+            return Ok(config);
         }
 
         let content = fs::read_to_string(&config_path)
@@ -257,12 +286,22 @@ impl HardgateConfig {
             config = base;
         }
 
+        config.validate()?;
         Ok(config)
     }
 
     /// Render a commented `hardgate.toml` template for `preset` (`init` output).
     pub fn generate_toml_template(preset: Preset) -> String {
         preset.to_clean_toml()
+    }
+
+    /// Validate all user-controlled configuration before an engine executes.
+    ///
+    /// Serde catches malformed enum values and TOML types; this pass catches
+    /// semantically unsafe values such as zero thresholds, invalid globs, and
+    /// enabled freshness without a command.
+    pub fn validate(&self) -> Result<()> {
+        validation::validate(self)
     }
 }
 
@@ -282,11 +321,71 @@ fn has_section(root: &toml::Table, path: &[&str]) -> bool {
 fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig, raw: &toml::Table) {
     merge_static_overrides(base, &user, raw);
     merge_dynamic_overrides(base, &user, raw);
+    merge_role_overrides(base, &user, raw);
     if has_section(raw, &["gate"]) {
         base.gate = user.gate;
     }
     merge_file_budgets(&mut base.budgets.files, user.budgets.files, raw);
     merge_func_budgets(&mut base.budgets.functions, user.budgets.functions, raw);
+}
+
+fn merge_role_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
+    merge_role_policies(&mut base.roles, &user.roles, raw);
+    merge_classification(&mut base.classification, &user.classification, raw);
+    merge_generated(&mut base.generated, &user.generated, raw);
+    merge_legacy(&mut base.legacy, &user.legacy, raw);
+}
+
+fn merge_role_policies(
+    base: &mut RolePoliciesConfig,
+    user: &RolePoliciesConfig,
+    raw: &toml::Table,
+) {
+    if has_section(raw, &["roles"]) || has_section(raw, &["role_policies"]) {
+        base.merge_from(user);
+    }
+}
+
+fn merge_classification(
+    base: &mut ClassificationConfig,
+    user: &ClassificationConfig,
+    raw: &toml::Table,
+) {
+    if has_section(raw, &["classification"]) {
+        *base = user.clone();
+    }
+}
+
+fn merge_generated(base: &mut GeneratedConfig, user: &GeneratedConfig, raw: &toml::Table) {
+    let Some(table) = raw.get("generated").and_then(toml::Value::as_table) else {
+        return;
+    };
+    when_key(table, "enabled", || base.enabled = user.enabled);
+    when_key(table, "freshness_command", || {
+        base.freshness_command = user.freshness_command.clone();
+    });
+    when_key(table, "timeout_secs", || {
+        base.timeout_secs = user.timeout_secs
+    });
+}
+
+fn merge_legacy(base: &mut LegacyConfig, user: &LegacyConfig, raw: &toml::Table) {
+    let Some(table) = raw.get("legacy").and_then(toml::Value::as_table) else {
+        return;
+    };
+    when_key(table, "reference_branch", || {
+        base.reference_branch = user.reference_branch.clone();
+    });
+    when_key(table, "ratchet", || base.ratchet = user.ratchet);
+}
+
+fn when_key<F>(table: &toml::Table, key: &str, apply: F)
+where
+    F: FnOnce(),
+{
+    if table.contains_key(key) {
+        apply();
+    }
 }
 
 fn merge_static_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
@@ -335,6 +434,7 @@ fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw
         || user.orchestration.format_check.is_some()
         || user.orchestration.format.is_some()
         || user.orchestration.lint.is_some()
+        || user.orchestration.timeout_secs.is_some()
     {
         base.orchestration = user.orchestration.clone();
     }

@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
-    AntiGamingConfig, BudgetsConfig, CloneConfig, CoverageConfig, FileBudgets, FunctionBudgets,
-    GateConfig, HardgateConfig, InvariantsConfig, MutationConfig,
+    AnalysisConfig, AntiGamingConfig, BudgetsConfig, CloneConfig, CoverageConfig, DeadCodeConfig,
+    ExclusionConfig, FileBudgets, FunctionBudgets, GateConfig, GeneratedConfig, HardgateConfig,
+    InvariantsConfig, LegacyConfig, MutationConfig, OrchestrationConfig, RolePoliciesConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -22,22 +23,37 @@ impl Preset {
             return;
         }
 
-        let b = get_preset_bundle(*self == Preset::StrictAgent);
+        let strict = *self == Preset::StrictAgent;
+        let b = get_preset_bundle(strict);
 
         config.budgets.files = FileBudgets {
             max_bytes: Some(b.max_bytes),
             max_lines: build_line_budgets(b.lines.0, b.lines.1, b.lines.2),
-            exclusions: Default::default(),
+            exclusions: preset_file_exclusions(strict),
         };
         config.budgets.functions = make_func_budgets(b.thresholds);
         config.anti_gaming.disallow_suppressions = true;
         config.clones = make_clones(b.clones.0, b.clones.1);
         config.coverage = make_coverage(b.coverage.0, b.coverage.1, b.coverage.2);
         config.mutation = make_mutation(b.mutation.0, b.mutation.1, b.mutation.2);
-
-        if *self == Preset::LegacyMigration {
-            config.gate.strict = false;
-        }
+        config.gate.strict = *self != Preset::LegacyMigration;
+        config.gate.enforce_classified_sources = false;
+        config.roles = RolePoliciesConfig::for_preset(strict);
+        config.generated = GeneratedConfig::default();
+        config.legacy = LegacyConfig::for_preset(*self == Preset::LegacyMigration);
+        config.orchestration = make_orchestration();
+        config.analysis = AnalysisConfig {
+            dead_code: DeadCodeConfig {
+                enabled: false,
+                entry_points: vec![
+                    "src/main.rs".to_string(),
+                    "src/lib.rs".to_string(),
+                    "src/index.ts".to_string(),
+                    "src/index.tsx".to_string(),
+                ],
+                exclude: Vec::new(),
+            },
+        };
     }
 
     pub fn to_default_config(self) -> HardgateConfig {
@@ -56,162 +72,22 @@ impl Preset {
             mutation: MutationConfig::default(),
             orchestration: Default::default(),
             analysis: Default::default(),
+            roles: RolePoliciesConfig::default(),
+            classification: Default::default(),
+            generated: GeneratedConfig::default(),
+            legacy: LegacyConfig::default(),
         };
         self.apply_to(&mut config);
         config
     }
 
     pub fn to_clean_toml(self) -> String {
-        let (preset_str, b, exclusions) = self.preset_toml_context();
-        format_toml_template(preset_str, &b, exclusions)
+        let config = self.to_default_config();
+        let body = toml::to_string_pretty(&config).expect("preset config must serialize");
+        format!(
+            "# Hardgate deterministic quality gate configuration\n# Documentation: https://github.com/Tech-Byte-Frontier/hardgate\n\n{body}"
+        )
     }
-
-    fn preset_toml_context(self) -> (&'static str, PresetBudgetContext, &'static str) {
-        let preset_str = match self {
-            Preset::StrictAgent => "strict-agent",
-            Preset::Balanced => "balanced",
-            Preset::LegacyMigration => "legacy-migration",
-            Preset::Custom => "custom",
-        };
-
-        let b = if self == Preset::StrictAgent {
-            PresetBudgetContext {
-                max_bytes: 32768,
-                cyclo: 10,
-                cogn: 15,
-                halstead: 80.0,
-                params: 4,
-                lines: 80,
-                depth: 4,
-                clones_l: 5,
-                clones_t: 50,
-                cov_min: 95.0,
-                mut_min: 85.0,
-            }
-        } else {
-            PresetBudgetContext {
-                max_bytes: 65536,
-                cyclo: 15,
-                cogn: 22,
-                halstead: 120.0,
-                params: 6,
-                lines: 120,
-                depth: 6,
-                clones_l: 8,
-                clones_t: 80,
-                cov_min: 80.0,
-                mut_min: 75.0,
-            }
-        };
-
-        (preset_str, b, file_exclusions(self))
-    }
-}
-
-/// Default `[budgets.files.exclusions]` body per preset. Strict-agent gates
-/// `tests/` like any other code: agent-written tests obey the same budgets
-/// (vacuous tests, suppressions, and copy-pasted fixtures are gaming
-/// vectors, not free passes). Softer presets keep the historical
-/// `tests/**` carve-out for teams burning down debt elsewhere.
-fn file_exclusions(preset: Preset) -> &'static str {
-    if preset == Preset::StrictAgent {
-        "# tests/ are intentionally gated: agent-written tests obey the same budgets.\n# Add globs here to buy down debt loudly: excluded files surface as\n# advisories on every run.\npaths = []"
-    } else {
-        "paths = [\n  \"tests/**\",\n]"
-    }
-}
-
-struct PresetBudgetContext {
-    max_bytes: usize,
-    cyclo: usize,
-    cogn: usize,
-    halstead: f64,
-    params: usize,
-    lines: usize,
-    depth: usize,
-    clones_l: usize,
-    clones_t: usize,
-    cov_min: f64,
-    mut_min: f64,
-}
-
-fn format_toml_template(preset_str: &str, b: &PresetBudgetContext, exclusions: &str) -> String {
-    format!(
-        r#"# Hardgate deterministic quality gate configuration
-# Documentation: https://github.com/Tech-Byte-Frontier/hardgate
-
-[gate]
-name = "project"
-preset = "{preset_str}"
-strict = true
-
-[budgets.files]
-max_bytes = {max_bytes}
-
-[budgets.files.exclusions]
-{exclusions}
-
-[budgets.files.max_lines]
-rs = 499
-ts = 400
-tsx = 400
-js = 400
-default = 350
-
-[budgets.functions]
-max_cyclomatic = {cyclo}
-max_cognitive = {cogn}
-max_halstead_difficulty = {halstead:.1}
-max_parameters = {params}
-max_lines = {lines}
-max_nesting_depth = {depth}
-
-[anti_gaming]
-disallow_suppressions = true
-
-[clones]
-min_lines = {clones_l}
-min_tokens = {clones_t}
-
-[coverage]
-enabled = false
-report = "coverage/lcov.info"
-min_line_percent = {cov_min:.1}
-max_crap_score = 25.0
-
-[mutation]
-enabled = false
-min_score = {mut_min:.1}
-timeout_secs = 10
-max_mutants = 30
-
-[orchestration]
-format_check = "oxfmt --check ."
-format = "oxfmt ."
-lint = "oxlint --type-aware ."
-
-[analysis.dead_code]
-enabled = false
-entry_points = [
-  "src/main.rs",
-  "src/lib.rs",
-  "src/index.ts",
-  "src/index.tsx",
-]
-"#,
-        max_bytes = b.max_bytes,
-        exclusions = exclusions,
-        cyclo = b.cyclo,
-        cogn = b.cogn,
-        halstead = b.halstead,
-        params = b.params,
-        lines = b.lines,
-        depth = b.depth,
-        clones_l = b.clones_l,
-        clones_t = b.clones_t,
-        cov_min = b.cov_min,
-        mut_min = b.mut_min,
-    )
 }
 
 fn build_line_budgets(rs: usize, other: usize, default_val: usize) -> HashMap<String, usize> {
@@ -222,6 +98,26 @@ fn build_line_budgets(rs: usize, other: usize, default_val: usize) -> HashMap<St
     }
     map.insert("default".to_string(), default_val);
     map
+}
+
+fn preset_file_exclusions(strict: bool) -> ExclusionConfig {
+    if strict {
+        ExclusionConfig::default()
+    } else {
+        ExclusionConfig {
+            paths: vec!["tests/**".to_string()],
+        }
+    }
+}
+
+fn make_orchestration() -> OrchestrationConfig {
+    OrchestrationConfig {
+        format_check: Some("oxfmt --check .".to_string()),
+        format: Some("oxfmt .".to_string()),
+        lint: Some("oxlint --type-aware .".to_string()),
+        test_cmd: None,
+        timeout_secs: Some(300),
+    }
 }
 
 fn make_clones(min_lines: usize, min_tokens: usize) -> CloneConfig {

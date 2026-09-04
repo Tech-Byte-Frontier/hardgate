@@ -214,6 +214,7 @@ fn test_orchestration_engine() {
         format: Some("echo formatting-fixed".to_string()),
         lint: Some("echo linting-passed".to_string()),
         test_cmd: None,
+        timeout_secs: None,
     };
 
     let engine = hardgate::engines::OrchestrationEngine::new(&config);
