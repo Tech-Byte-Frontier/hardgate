@@ -33,6 +33,30 @@ import {
 includesAll(packageScript, ["--sort=name", "--mtime=@0", "gzip", "-n", "SHA256SUMS", "chmodSync(packageRoot, 0o755)", "chmodSync(destination, 0o755)", "metadataPath", "chmodSync(metadataPath, 0o644)", "full hexadecimal source identity"], "archive helper");
 includesAll(checksumScript, ["SHA256SUMS", "hardgate-${version}.sbom.cdx.json", "lines.length", "sha256"], "payload checksum helper");
 includesAll(syncScript, ["syncJson(path.join(root, \"package.json\")", "--check", "Cargo.toml"], "version synchronization");
+const cargoInclude = cargo.match(/^include\s*=\s*\[([\s\S]*?)^\]/m);
+assert.ok(cargoInclude, "Cargo package must have an explicit root-anchored include allowlist");
+const cargoIncludeEntries = [...cargoInclude[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+assert.deepEqual(
+  cargoIncludeEntries,
+  [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/build.rs",
+    "/src/**",
+    "/tests/**/*.rs",
+    "/tests/common/*.txt",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+    "/docs/ARCHITECTURE.md",
+    "/docs/CLI_AND_INTEGRATION.md",
+    "/docs/CONFIGURATION_SPEC.md",
+    "/docs/EXISTING_LANDSCAPE.md",
+    "/docs/VISION_AND_PARADIGM.md",
+  ],
+  "Cargo package allowlist must exclude workspace, generated, release, and private local artifacts",
+);
 includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "hardgate-target:", "expected Cargo target marker", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "-l", "-sW", "-n", "classifyBinaryAbi"], "archive verifier");
 includesAll(releaseAbi, ["classifyBinaryAbi", "ld-musl", "__init_libc", "GLIBC_", "gnu_get_libc_version", "_dl_relocate_static_pie", "NT_GNU_ABI_TAG", "staticBinary", "exact Cargo target marker", "targetMarkerValid"], "ABI evidence classifier");
 includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS", "isRetryableNpmPackError", "failed without retry"], "npm publication verifier");

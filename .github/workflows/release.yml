@@ -63,6 +63,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -78,8 +79,11 @@ jobs:
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           main_commit=$(git rev-parse refs/remotes/origin/main)
           if [ "$tag_commit" != "$main_commit" ]; then
-            echo "release tag must point at the exact origin/main tip ($main_commit), not $tag_commit" >&2
-            exit 1
+            if [ "$RUN_ATTEMPT" -le 1 ] || ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+              echo "a first release attempt must point at the exact origin/main tip ($main_commit), not $tag_commit" >&2
+              exit 1
+            fi
+            echo "rerun attempt $RUN_ATTEMPT is recovering signed release $RELEASE_TAG after main advanced to $main_commit"
           fi
 
           ci_runs=$(mktemp)

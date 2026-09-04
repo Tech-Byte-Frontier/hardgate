@@ -234,8 +234,12 @@ includesAll(
   versionCheckJob,
   [
     "GH_TOKEN: ${{ github.token }}",
+    "RUN_ATTEMPT: ${{ github.run_attempt }}",
     'verify-tag "$RELEASE_TAG"',
     "refs/remotes/origin/main",
+    'if [ "$RUN_ATTEMPT" -le 1 ]',
+    'git merge-base --is-ancestor "$tag_commit" "$main_commit"',
+    "is recovering signed release",
     "actions/workflows/ci.yml/runs",
     "-X GET",
     "-f branch=main",
@@ -246,6 +250,11 @@ includesAll(
     "release commit has no completed successful main CI run",
   ],
   "signed main-tip release precondition",
+);
+assert.match(
+  versionCheckJob,
+  /if \[ "\$tag_commit" != "\$main_commit" \]; then\s+if \[ "\$RUN_ATTEMPT" -le 1 \] \|\| ! git merge-base --is-ancestor "\$tag_commit" "\$main_commit"; then/,
+  "only an ancestor-tag rerun may recover after main advances",
 );
 const versionPreconditionOrder = [
   'verify-tag "$RELEASE_TAG"',

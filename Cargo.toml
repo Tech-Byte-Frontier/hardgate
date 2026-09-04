@@ -10,6 +10,23 @@ repository = "https://github.com/Tech-Byte-Frontier/hardgate"
 documentation = "https://docs.rs/hardgate"
 categories = ["development-tools", "command-line-utilities"]
 keywords = ["quality-gate", "ai-agents", "anti-gaming", "code-metrics", "linter"]
+include = [
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/build.rs",
+  "/src/**",
+  "/tests/**/*.rs",
+  "/tests/common/*.txt",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE-MIT",
+  "/LICENSE-APACHE",
+  "/docs/ARCHITECTURE.md",
+  "/docs/CLI_AND_INTEGRATION.md",
+  "/docs/CONFIGURATION_SPEC.md",
+  "/docs/EXISTING_LANDSCAPE.md",
+  "/docs/VISION_AND_PARADIGM.md",
+]
 
 [profile.release]
 strip = true
