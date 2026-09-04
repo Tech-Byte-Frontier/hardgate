@@ -1,3 +1,5 @@
+#[path = "clones/branch_coverage.rs"]
+mod branch_coverage;
 #[path = "support/clones.rs"]
 mod clones;
 #[path = "support/fs.rs"]
