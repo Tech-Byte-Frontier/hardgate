@@ -4,6 +4,7 @@ use super::static_gate::run_static_gate_scoped;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
+use crate::git_evidence::ChangedLineMap;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -75,6 +76,16 @@ pub fn cmd_verify_legacy(
     })
 }
 
+/// Request data for a coverage verification run.
+pub struct CoverageVerification<'a> {
+    pub config: &'a HardgateConfig,
+    pub cli_report: Option<String>,
+    pub functions: &'a [FunctionMetrics],
+    /// Normalized changed executable-line candidates; `None` keeps full mode.
+    pub changed_lines: Option<&'a ChangedLineMap>,
+    pub report: &'a mut GateReport,
+}
+
 /// Ingest an lcov report and flag functions breaching coverage/CRAP floors.
 pub fn verify_coverage(
     config: &HardgateConfig,
@@ -82,14 +93,33 @@ pub fn verify_coverage(
     functions: &[FunctionMetrics],
     report: &mut GateReport,
 ) {
-    if !config.coverage.enabled {
+    verify_coverage_with_diff(CoverageVerification {
+        config,
+        cli_report,
+        functions,
+        changed_lines: None,
+        report,
+    });
+}
+
+/// Ingest an lcov report and evaluate either the full project or supplied
+/// changed executable lines.
+pub fn verify_coverage_with_diff(mut request: CoverageVerification<'_>) {
+    if !request.config.coverage.enabled {
         return;
     }
-    let cov_path = cli_report.or_else(|| config.coverage.report.clone());
+    evaluate_coverage_report(&mut request);
+}
+
+fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
+    let cov_path = request
+        .cli_report
+        .as_deref()
+        .or(request.config.coverage.report.as_deref());
     let Some(ref path_str) = cov_path else {
         record_evidence_failure(
-            report,
-            config.gate.strict,
+            request.report,
+            request.config.gate.strict,
             EvidenceFailure {
                 step: "coverage-report",
                 target: Path::new("<not-configured>"),
@@ -101,8 +131,8 @@ pub fn verify_coverage(
     let p = Path::new(path_str);
     if !p.exists() {
         record_evidence_failure(
-            report,
-            config.gate.strict,
+            request.report,
+            request.config.gate.strict,
             EvidenceFailure {
                 step: "coverage-report",
                 target: p,
@@ -111,16 +141,13 @@ pub fn verify_coverage(
         );
         return;
     }
-    let scorer = CoverageScorer::new(&config.coverage);
+    let scorer = CoverageScorer::new(&request.config.coverage);
     match scorer.parse_lcov(p) {
-        Ok(cov_map) => {
-            let cov_violations = scorer.evaluate(&cov_map, functions, Path::new("."));
-            report.coverage_violations.extend(cov_violations);
-        }
+        Ok(cov_map) => append_coverage_violations(request, &scorer, &cov_map),
         Err(e) => {
             record_evidence_failure(
-                report,
-                config.gate.strict,
+                request.report,
+                request.config.gate.strict,
                 EvidenceFailure {
                     step: "coverage-report",
                     target: p,
@@ -129,6 +156,18 @@ pub fn verify_coverage(
             );
         }
     }
+}
+
+fn append_coverage_violations(
+    request: &mut CoverageVerification<'_>,
+    scorer: &CoverageScorer,
+    coverage_map: &std::collections::HashMap<PathBuf, crate::engines::coverage::FileCoverage>,
+) {
+    let violations = match request.changed_lines {
+        Some(lines) => scorer.evaluate_diff_coverage(coverage_map, lines),
+        None => scorer.evaluate(coverage_map, request.functions, Path::new(".")),
+    };
+    request.report.coverage_violations.extend(violations);
 }
 
 /// Ingest mutation reports (Stryker, cargo-mutants, generic) and flag scores

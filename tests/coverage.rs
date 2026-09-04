@@ -6,9 +6,14 @@ mod metrics;
 
 use fs::tempdir;
 
-use hardgate::config::CoverageConfig;
+use hardgate::commands::verify::{
+    CoverageVerification, verify_coverage, verify_coverage_with_diff,
+};
+use hardgate::config::{CoverageConfig, HardgateConfig};
+use hardgate::diagnostics::GateReport;
 use hardgate::engines::CoverageScorer;
 use hardgate::engines::coverage::FileCoverage;
+use hardgate::git_evidence::ChangedLineMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -41,6 +46,44 @@ fn changed(path: &str, lines: &[usize]) -> BTreeMap<PathBuf, BTreeSet<usize>> {
 
 fn coverage_map(path: &str, hits: &[(usize, usize)]) -> HashMap<PathBuf, FileCoverage> {
     HashMap::from([(PathBuf::from(path), coverage(path, hits))])
+}
+
+fn verify_config() -> HardgateConfig {
+    HardgateConfig {
+        coverage: CoverageConfig {
+            enabled: true,
+            report: None,
+            min_line_percent: Some(90.0),
+            min_function_percent: None,
+            min_branch_percent: None,
+            max_crap_score: None,
+            critical_paths: None,
+        },
+        ..HardgateConfig::default()
+    }
+}
+
+fn write_verify_report(path: &Path) {
+    std::fs::write(
+        path,
+        "SF:src/calc.rs\nDA:1,1\nDA:2,0\nLF:2\nLH:1\nend_of_record\n",
+    )
+    .unwrap();
+}
+
+fn run_diff_verification(
+    config: &HardgateConfig,
+    report_path: &Path,
+    changed_lines: Option<&ChangedLineMap>,
+    report: &mut GateReport,
+) {
+    verify_coverage_with_diff(CoverageVerification {
+        config,
+        cli_report: Some(report_path.display().to_string()),
+        functions: &[],
+        changed_lines,
+        report,
+    });
 }
 
 #[test]
@@ -212,4 +255,86 @@ fn test_full_evaluation_remains_full_project_mode() {
     let full = scorer.evaluate(&map, &[], Path::new("."));
     assert!(full.iter().any(|v| v.metric == "Global Line Coverage"));
     assert!(full.iter().all(|v| v.metric != "Diff Line Coverage"));
+}
+
+#[test]
+fn verify_diff_mode_ignores_global_floor_findings() {
+    let tmp = tempdir("verify-diff-floor");
+    let report_path = tmp.join("lcov.info");
+    write_verify_report(&report_path);
+    let changed = changed("src/calc.rs", &[1]);
+    let mut report = GateReport::new("verify".to_string());
+
+    let config = verify_config();
+    run_diff_verification(&config, &report_path, Some(&changed), &mut report);
+
+    assert!(report.coverage_violations.is_empty());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn verify_diff_mode_reports_uncovered_and_missing_changed_sources() {
+    let tmp = tempdir("verify-diff-violations");
+    let report_path = tmp.join("lcov.info");
+    write_verify_report(&report_path);
+    let changed = BTreeMap::from([
+        (PathBuf::from("src/calc.rs"), BTreeSet::from([2])),
+        (PathBuf::from("src/missing.rs"), BTreeSet::from([4])),
+    ]);
+    let mut report = GateReport::new("verify".to_string());
+
+    let config = verify_config();
+    run_diff_verification(&config, &report_path, Some(&changed), &mut report);
+
+    assert_eq!(report.coverage_violations.len(), 2);
+    assert!(report.coverage_violations.iter().any(|violation| {
+        violation.metric == "Diff Line Coverage"
+            && violation.file == Path::new("src/calc.rs")
+            && violation.actual == 0.0
+            && violation.message.contains("2")
+    }));
+    assert!(report.coverage_violations.iter().any(|violation| {
+        violation.metric == "Missing Diff Coverage" && violation.file == Path::new("src/missing.rs")
+    }));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn verify_coverage_wrapper_remains_full_project_mode() {
+    let tmp = tempdir("verify-full");
+    let report_path = tmp.join("lcov.info");
+    write_verify_report(&report_path);
+    let mut report = GateReport::new("verify".to_string());
+
+    verify_coverage(
+        &verify_config(),
+        Some(report_path.display().to_string()),
+        &[],
+        &mut report,
+    );
+
+    assert_eq!(report.coverage_violations.len(), 1);
+    assert_eq!(report.coverage_violations[0].metric, "Global Line Coverage");
+    assert_eq!(report.coverage_violations[0].actual, 50.0);
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn verify_diff_mode_respects_disabled_policy() {
+    let mut config = verify_config();
+    config.coverage.enabled = false;
+    let changed = changed("src/missing.rs", &[4]);
+    let mut report = GateReport::new("verify".to_string());
+
+    verify_coverage_with_diff(CoverageVerification {
+        config: &config,
+        cli_report: Some("missing-lcov.info".to_string()),
+        functions: &[],
+        changed_lines: Some(&changed),
+        report: &mut report,
+    });
+
+    assert!(report.coverage_violations.is_empty());
+    assert!(report.orchestration_violations.is_empty());
+    assert!(report.advisories.is_empty());
 }
