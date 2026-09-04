@@ -25,10 +25,12 @@ pub(super) fn discover_targets(
                 let classified =
                     ClassifiedFile::new_with_config(&canonical_scope, &config.classification)?;
                 if !is_effective_mutation_target(&classified, config) {
+                    let builtin_role = ClassifiedFile::new(&canonical_scope).role;
                     bail!(
-                        "refusing to mutate `{}` because it is classified as {:?}, not production source",
+                        "refusing to mutate `{}` because it is classified as {:?}, not production source (built-in role {:?})",
                         scope.display(),
-                        classified.role
+                        classified.role,
+                        builtin_role,
                     );
                 }
                 if !classified.ast_supported {
@@ -200,4 +202,33 @@ fn normalize_relative(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_targets_are_repository_relative_and_normalized() {
+        let root = std::env::temp_dir().join(format!(
+            "hardgate-mutation-target-unit-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn lib() {}\n").unwrap();
+        fs::write(root.join("src/nested.rs"), "pub fn nested() {}\n").unwrap();
+
+        let options = MutateOptions {
+            scoped: Some(PathBuf::from("./src/../src")),
+            ..Default::default()
+        };
+        let targets = discover_targets(&options, &HardgateConfig::default(), &root).unwrap();
+        assert_eq!(
+            targets,
+            vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/nested.rs")]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

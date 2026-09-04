@@ -436,12 +436,12 @@ fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> boo
 fn handle_no_targets(diff: bool) -> Result<()> {
     if diff {
         println!(
-            "{} no git-modified production source files found for mutation testing; no-op.",
+            "{} no git-modified files found for mutation testing; no changed production source targets (no-op).",
             "note:".green().bold()
         );
         return Ok(());
     }
     bail!(
-        "no production source files found for mutation testing; full/native runs require at least one production target"
+        "no source files found for mutation testing: no production source files are eligible; full/native runs require at least one production target"
     );
 }
