@@ -18,6 +18,10 @@ impl Repo {
     }
 
     fn write(&self, path: &str, contents: &str) {
+        self.write_bytes(path, contents.as_bytes());
+    }
+
+    fn write_bytes(&self, path: &str, contents: &[u8]) {
         let target = self.0.join(path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -104,6 +108,87 @@ fn attributes_modified_hunks_to_post_image_lines() {
     assert!(touches(&evidence.change_set.changed_lines, path, 2, 2));
     assert!(!touches(&evidence.change_set.changed_lines, path, 3, 3));
     assert!(evidence.change_set.changed_files.contains(path));
+}
+
+#[test]
+fn touches_rejects_reversed_ranges_and_missing_paths() {
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(PathBuf::from("src/lib.rs"), [2, 4].into_iter().collect());
+
+    assert!(touches(&map, Path::new("src/lib.rs"), 2, 2));
+    assert!(!touches(&map, Path::new("src/lib.rs"), 4, 3));
+    assert!(!touches(&map, Path::new("missing.rs"), 1, 10));
+}
+
+#[test]
+fn rejects_empty_and_option_like_references_before_running_git() {
+    let repo = committed_repo("git-evidence-invalid-reference", "src/lib.rs", "base\n");
+
+    for reference in ["", "-", "--all"] {
+        let error = load_reference(&repo, reference).unwrap_err();
+        assert!(error.to_string().contains("non-empty ref name"));
+    }
+}
+
+#[test]
+fn ignores_non_inventory_changes_in_worktree_and_diff() {
+    let repo = Repo::new("git-evidence-non-inventory");
+    repo.write("src/lib.rs", "base\n");
+    repo.write("README.md", "base\n");
+    repo.commit("base");
+    let readme = Path::new("README.md");
+    repo.write("README.md", "changed\n");
+    repo.write("notes.txt", "untracked\n");
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert!(!evidence.change_set.changed_files.contains(readme));
+    assert!(!evidence.change_set.changed_lines.contains_key(readme));
+    assert!(
+        !evidence
+            .change_set
+            .changed_files
+            .contains(Path::new("notes.txt"))
+    );
+}
+
+#[test]
+fn rejects_invalid_utf8_in_changed_tracked_inventory_file() {
+    let repo = committed_repo("git-evidence-invalid-tracked", "src/lib.rs", "base\n");
+    repo.write_bytes("src/lib.rs", b"\0\xff");
+
+    let error = load_reference(&repo, "HEAD").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Changed inventory file `src/lib.rs`")
+    );
+    assert!(error.to_string().contains("not UTF-8"));
+}
+
+#[test]
+fn rejects_invalid_utf8_in_untracked_inventory_file() {
+    let repo = committed_repo("git-evidence-invalid-untracked", "src/lib.rs", "base\n");
+    repo.write_bytes("src/new.rs", b"\xff");
+
+    let error = load_reference(&repo, "HEAD").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Untracked inventory file `src/new.rs`")
+    );
+    assert!(error.to_string().contains("not UTF-8"));
+}
+
+#[test]
+fn staged_deletion_is_a_changed_file_without_post_image_lines() {
+    let repo = committed_repo("git-evidence-staged-deletion", "src/lib.rs", "one\ntwo\n");
+    let path = Path::new("src/lib.rs");
+    git(&repo, &["rm", "-q", "src/lib.rs"]);
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert!(evidence.change_set.changed_files.contains(path));
+    assert!(!evidence.change_set.changed_lines.contains_key(path));
+    assert_eq!(evidence.snapshot.files[path], "one\ntwo\n");
 }
 
 #[test]

@@ -259,12 +259,9 @@ fn is_inventory_path(path: &Path) -> bool {
     !in_skipped_dir(path) && is_inventory_file(path)
 }
 fn in_skipped_dir(path: &Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|part| SKIPPED_DIRS.contains(&part))
-    })
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|part| SKIPPED_DIRS.contains(&part))
 }
 fn add_untracked_lines(
     root: &Path,
@@ -495,3 +492,7 @@ fn load_snapshot(root: &Path, commit: &str) -> Result<RepositorySnapshot> {
         files,
     })
 }
+
+#[cfg(test)]
+#[path = "git_evidence_tests.rs"]
+mod tests;
