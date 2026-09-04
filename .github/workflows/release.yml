@@ -116,7 +116,7 @@ jobs:
       - run: node tests/npm-wrapper-regression.test.mjs
         env:
           HARDGATE_BINARY: target/release/hardgate
-      - run: node scripts/check-consumer-matrix.mjs
+      - run: node tests/consumer_matrix.mjs
         env:
           HARDGATE_BINARY: target/release/hardgate
       - run: node tests/release_contract.test.mjs

@@ -13,6 +13,7 @@ import {
   CONSUMER_CASES,
   CONSUMER_CASE_IDS,
 } from "../scripts/consumer-fixtures.mjs";
+import { evaluateBehavior } from "../scripts/consumer-behavior.mjs";
 import {
   parseExactJson,
   runCase,
@@ -31,8 +32,28 @@ const expectedIds = [
   "package-manager-npm", "package-manager-pnpm", "package-manager-yarn", "package-manager-bun",
   "supabase-roles", "greenfield-strict", "legacy-reference-ratchet",
 ];
+const expectedPackageManagers = {
+  "vite-react-vitest": "pnpm@11.25.0",
+  "next-monorepo-package-local": "pnpm@11.25.0",
+  "jest-fixtures-snapshots": "npm@12.0.2",
+  "playwright-suite": "yarn@4.18.0",
+  "package-manager-npm": "npm@12.0.2",
+  "package-manager-pnpm": "pnpm@11.25.0",
+  "package-manager-yarn": "yarn@4.18.0",
+  "package-manager-bun": "bun@1.4.0",
+};
 
 function assertKeys(value, keys, label) { assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), `${label} schema`); }
+
+function assertPinnedPackageManagers() {
+  for (const testCase of CONSUMER_CASES.filter((item) => item.mutation)) {
+    const packageRoot = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.packageRoot);
+    const workspaceRoot = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.workspaceRoot);
+    const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+    const workspaceJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, "package.json"), "utf8"));
+    assert.equal(packageJson.packageManager ?? workspaceJson.packageManager, expectedPackageManagers[testCase.id], `pinned manager ${testCase.id}`);
+  }
+}
 
 function emptyReport(overrides = {}) {
   const report = {
@@ -68,7 +89,7 @@ const generatedStale = orchestrationRecord("generated-freshness", "node supabase
 const cloneViolation = { file_a: "src/a.ts", lines_a: [1, 5], file_b: "src/b.ts", lines_b: [2, 6], tokens: 50, lines: 5, fingerprint: "clone", message: "duplicate", recommendation: "extract" };
 const legacyViolation = { file: "src/legacy.ts", function_name: "legacy", line_number: 1, end_line: 1, metric: "Parameter Count", actual: 3, limit: 1, breakdown: [], message: "too many parameters", recommendation: "split" };
 
-function writeFakeBinary(dir, mode = "check") {
+function writeFakeBinary(dir, mode = "check", requireDiff = false) {
   const binary = path.join(dir, `fake-${mode}`);
   const gateReports = {
     check: emptyReport(),
@@ -87,15 +108,30 @@ function writeFakeBinary(dir, mode = "check") {
   };
   const script = `#!/usr/bin/env node
 const mode = process.env.FAKE_MODE || ${JSON.stringify(mode)};
+const requireDiff = ${JSON.stringify(requireDiff)};
+if (requireDiff && !process.argv.includes("--diff")) { process.stderr.write("diff mode was not requested\\n"); process.exit(2); }
 if (mode === "signal") process.kill(process.pid, "SIGTERM");
 if (mode === "timeout") setTimeout(() => {}, 10000);
+if (mode === "descendant-timeout") { const { spawn } = require("node:child_process"); const fs = require("node:fs"); const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], { stdio: "ignore" }); fs.writeFileSync(process.env.DESCENDANT_PID, String(descendant.pid)); setTimeout(() => {}, 10000); }
 if (process.argv[2] === "mutate" && mode === "no-target") { process.stderr.write("Error: no source files found for mutation testing: no production source files are eligible\\n"); process.exit(1); }
 if (process.argv[2] === "mutate" && mode === "baseline") { process.stderr.write("unmutated baseline failed before mutants\\n"); process.exit(1); }
 if (process.argv[2] === "mutate") { const reports = ${JSON.stringify(mutationReports)}; process.stdout.write(JSON.stringify(reports[mode] || reports.default)); process.exit(0); }
-const reports = ${JSON.stringify(gateReports)}; const report = reports[mode] || reports.check; process.stdout.write(JSON.stringify(report)); if (mode !== "timeout") process.exit(mode === "failure" || mode === "coverage-malformed" || mode === "generated-stale" || mode === "clone" || mode === "legacy-missing" || mode === "legacy-malformed" || mode === "supabase" ? 1 : 0);
+const reports = ${JSON.stringify(gateReports)}; const report = reports[mode] || reports.check; process.stdout.write(JSON.stringify(report)); if (mode !== "timeout" && mode !== "descendant-timeout") process.exit(mode === "failure" || mode === "coverage-malformed" || mode === "generated-stale" || mode === "clone" || mode === "legacy-missing" || mode === "legacy-malformed" || mode === "supabase" ? 1 : 0);
 `;
   fs.writeFileSync(binary, script, { mode: 0o755 });
   return binary;
+}
+
+function processExists(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function waitForPidGone(pid) {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline && processExists(pid)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  return !processExists(pid);
 }
 
 function assertProcessFailures(temp, cwd) {
@@ -109,6 +145,15 @@ function assertProcessFailures(temp, cwd) {
   assert.deepEqual({ status: missing.status, reasonCode: missing.reasonCode, exitCode: missing.exitCode }, { status: "fail", reasonCode: "spawn-error", exitCode: null });
   const timeout = runCheck(writeFakeBinary(temp, "timeout"), cwd, { expectPass: true, expectedExit: 0, timeout: 20 });
   assert.deepEqual({ status: timeout.status, reasonCode: timeout.reasonCode, timedOut: timeout.timedOut }, { status: "fail", reasonCode: "timeout", timedOut: true });
+  const descendantPidFile = path.join(temp, "descendant.pid");
+  const previousPidFile = process.env.DESCENDANT_PID;
+  process.env.DESCENDANT_PID = descendantPidFile;
+  const descendant = runCheck(writeFakeBinary(temp, "descendant-timeout"), cwd, { expectPass: true, expectedExit: 0, timeout: 40 });
+  if (previousPidFile === undefined) delete process.env.DESCENDANT_PID; else process.env.DESCENDANT_PID = previousPidFile;
+  assert.deepEqual({ status: descendant.status, reasonCode: descendant.reasonCode, timedOut: descendant.timedOut, exitCode: descendant.exitCode, signal: descendant.signal }, { status: "fail", reasonCode: "timeout", timedOut: true, exitCode: null, signal: null });
+  const descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0, "timeout fixture must record a descendant PID");
+  assert.equal(waitForPidGone(descendantPid), true, "timeout cleanup must terminate descendants");
   const signal = runCheck(writeFakeBinary(temp, "signal"), cwd, { expectPass: true, expectedExit: 0 });
   assert.deepEqual({ status: signal.status, reasonCode: signal.reasonCode, signal: signal.signal }, { status: "fail", reasonCode: "signal", signal: "SIGTERM" });
   const pass = runCheck(writeFakeBinary(temp), cwd, { expectPass: true, expectedExit: 0 });
@@ -135,6 +180,16 @@ function assertMutationFailures(temp) {
   }
 }
 
+function assertBehaviorNegativeControl() {
+  const testCase = CONSUMER_CASES.find((item) => item.id === "package-manager-npm");
+  const sourcePath = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.sourcePath);
+  const testPath = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.testPath);
+  const source = fs.readFileSync(sourcePath, "utf8");
+  const test = fs.readFileSync(testPath, "utf8");
+  const result = evaluateBehavior(`${source}\n// unrelated source change\n`, test, testCase.mutation.behavior);
+  assert.equal(result.passed, true, "irrelevant source changes must not fail the behavior assertion");
+}
+
 function assertReportFailures() {
   for (const text of ["junk{}", "{}{}", "[]", "{bad}"]) assert.throws(() => parseExactJson(text), (error) => error.code === "malformed-report");
   const schema = emptyReport(); schema.extra = true;
@@ -148,9 +203,9 @@ function assertReportFailures() {
 }
 
 function assertEvidenceFailures(temp, cwd) {
-  const missing = runCheck(writeFakeBinary(temp, "failure"), cwd, { expectPass: false, expectedExit: 1, expectedViolationCount: 1, expectedOrchestration: [coverageMissing] });
+  const missing = runCheck(writeFakeBinary(temp, "failure", true), cwd, { expectPass: false, expectedExit: 1, expectedViolationCount: 1, expectedOrchestration: [coverageMissing] }, true);
   assert.equal(missing.status, "pass", "exact missing coverage evidence must be recognized");
-  const malformed = runCheck(writeFakeBinary(temp, "coverage-malformed"), cwd, { expectPass: false, expectedExit: 1, expectedOrchestration: [coverageMissing] });
+  const malformed = runCheck(writeFakeBinary(temp, "coverage-malformed", true), cwd, { expectPass: false, expectedExit: 1, expectedOrchestration: [coverageMissing] }, true);
   assert.equal(malformed.reasonCode, "evidence-mismatch");
   const generated = runCheck(writeFakeBinary(temp, "generated-stale"), cwd, { expectPass: false, expectedExit: 1, expectedOrchestration: [orchestrationRecord("generated-freshness", "node supabase/check-generated.mjs", "Generated artifacts are fresh.")] });
   assert.equal(generated.reasonCode, "evidence-mismatch");
@@ -172,21 +227,34 @@ function assertTempCleanup(temp) {
   assert.deepEqual(after, before, "consumer fixture temp roots must be cleaned");
 }
 
+function assertSetupFailureCleanup(temp) {
+  const setupFailure = { id: "setup-failure", fixture: "greenfield-strict", initialize: "strict-agent", check: { expectPass: true, expectedExit: 0 } };
+  const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("hardgate-consumer-")));
+  const outcome = runCase(writeFakeBinary(temp), setupFailure, false);
+  assert.equal(outcome.status, "fail");
+  assert.match(outcome.diagnostics, /hardgate init did not write hardgate\.toml/);
+  const after = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("hardgate-consumer-")));
+  assert.deepEqual(after, before, "fixture setup failures must clean their exact temp roots");
+}
+
 function runAdversarialChecks() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-consumer-negative-"));
   const cwd = path.join(temp, "cwd");
   fs.mkdirSync(cwd);
   try {
+    assertBehaviorNegativeControl();
     assertProcessFailures(temp, cwd);
     assertMutationFailures(temp);
     assertReportFailures();
     assertEvidenceFailures(temp, cwd);
     assertTempCleanup(temp);
+    assertSetupFailureCleanup(temp);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 }
 
+assertPinnedPackageManagers();
 const result = spawnSync(process.execPath, [runner, "--json"], { cwd: root, encoding: "utf8", env: { ...process.env, HARDGATE_CONSUMER_MATRIX: "ci" } });
 if (result.error) assert.fail(`consumer matrix could not spawn: ${result.error.message}`);
 assert.equal(result.status, 0, `consumer acceptance matrix is not green (status=${result.status})\n${result.stdout}\n${result.stderr}`);
@@ -204,8 +272,10 @@ for (const item of report.cases) {
   assertKeys(item.check, ["status", "reasonCode", "diagnostics", "exitCode", "signal", "timedOut", "report"], `check ${item.id}`);
   validateGateReport(item.check.report);
   if (item.mutation) {
+    const mutationContract = CONSUMER_CASES.find((testCase) => testCase.id === item.id).mutation;
     assertKeys(item.mutation, ["status", "reasonCode", "diagnostics", "exitCode", "signal", "timedOut", "report", "commands"], `mutation ${item.id}`);
     assert.equal(item.mutation.status, "pass");
+    assert.deepEqual(item.mutation.commands.map((command) => command.manager), [mutationContract.manager, mutationContract.manager], `detected manager ${item.id}`);
     validateMutationReport(item.mutation.report);
     assert.equal(item.mutation.report.passed, true);
     assert.equal(item.mutation.report.stats.killed, 1);

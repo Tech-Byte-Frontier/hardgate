@@ -20,6 +20,7 @@ import {
   resolveBinary,
   runProcess,
 } from "./consumer-process.mjs";
+import { invocationIdentityFailures } from "./consumer-invocation.mjs";
 
 export {
   ConsumerMatrixError,
@@ -168,11 +169,17 @@ function sourceSnapshot(root, relative) {
 function installHarness(root, spec, snapshot, testSnapshot) {
   const packageRoot = path.resolve(root, spec.packageRoot);
   const workspaceRoot = path.resolve(root, spec.workspaceRoot);
-  const binDir = path.join(packageRoot, "node_modules", ".bin");
-  fs.mkdirSync(binDir, { recursive: true });
+  const packageBin = path.join(packageRoot, "node_modules", ".bin");
+  const workspaceBin = path.join(workspaceRoot, "node_modules", ".bin");
+  fs.mkdirSync(packageBin, { recursive: true });
+  fs.mkdirSync(workspaceBin, { recursive: true });
+  const inheritedPath = (process.env.PATH ?? "").split(path.delimiter)
+    .filter((entry) => !path.resolve(entry).endsWith(path.join("node_modules", ".bin")));
+  const pathValue = (packageBin === workspaceBin ? [] : [workspaceBin]).concat(inheritedPath).join(path.delimiter);
+  const expectedPathBins = packageBin === workspaceBin ? [packageBin] : [packageBin, workspaceBin];
   const harness = path.join(root, ".consumer-harness.mjs");
-  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto";\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst source=process.env.CONSUMER_SOURCE; const test=process.env.CONSUMER_TEST; const sourceHash=hash(source); const testHash=hash(test); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const record={cwd:process.cwd(), manager:process.env.CONSUMER_MANAGER, argv, executable:fs.realpathSync(process.env.CONSUMER_EXECUTABLE), packageRoot:process.env.CONSUMER_PACKAGE_ROOT, workspaceRoot:process.env.CONSUMER_WORKSPACE_ROOT, sourceHash, testHash, sourceMarker:fs.readFileSync(source,"utf8").includes(process.env.CONSUMER_SOURCE_MARKER), testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=sourceHash===process.env.CONSUMER_SOURCE_HASH && record.sourceMarker && record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected ? 0 : 1;\n`);
-  const managerPath = path.join(binDir, spec.manager);
+  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto"; import path from "node:path"; import { evaluateBehavior } from ${JSON.stringify(path.resolve(ROOT, "scripts/consumer-behavior.mjs"))};\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst source=process.env.CONSUMER_SOURCE; const test=process.env.CONSUMER_TEST; const sourceText=fs.readFileSync(source,"utf8"); const testText=fs.readFileSync(test,"utf8"); const sourceHash=hash(source); const testHash=hash(test); const behavior=evaluateBehavior(sourceText,testText,JSON.parse(process.env.CONSUMER_BEHAVIOR)); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const executable=fs.realpathSync(process.env.CONSUMER_EXECUTABLE); const pathEntries=(process.env.PATH??"").split(path.delimiter).filter(Boolean).map(entry=>path.resolve(entry)); const pathBins=pathEntries.filter(entry=>entry.endsWith(path.join("node_modules",".bin"))); const expectedPathBins=JSON.parse(process.env.CONSUMER_EXPECTED_PATH_BINS); const record={cwd:process.cwd(), manager:path.basename(executable), managerEnv:process.env.CONSUMER_MANAGER, argv, executable, packageRoot:process.env.CONSUMER_PACKAGE_ROOT, workspaceRoot:process.env.CONSUMER_WORKSPACE_ROOT, path:process.env.PATH??"", pathEntries, pathBins, pathBinsExpected:JSON.stringify(pathBins)===JSON.stringify(expectedPathBins), sourceHash, testHash, sourceMarker:sourceText.includes(process.env.CONSUMER_SOURCE_MARKER), behaviorExpected:JSON.parse(process.env.CONSUMER_BEHAVIOR).expected, behaviorActual:behavior.actual, behaviorPassed:behavior.passed, behaviorReason:behavior.reason, testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected && record.pathBinsExpected && record.managerEnv===record.manager && record.behaviorPassed ? 0 : 1;\n`);
+  const managerPath = path.join(packageBin, spec.manager);
   fs.writeFileSync(managerPath, `#!/bin/sh\nset -eu\nCONSUMER_EXECUTABLE="$0" CONSUMER_MANAGER="${spec.manager}" exec node "$CONSUMER_HARNESS" "$@"\n`, { mode: 0o755 });
   return {
     log: path.join(root, ".consumer-command-log"),
@@ -182,8 +189,9 @@ function installHarness(root, spec, snapshot, testSnapshot) {
       CONSUMER_SOURCE_HASH: snapshot.hash, CONSUMER_TEST_HASH: testSnapshot.hash,
       CONSUMER_SOURCE_MARKER: spec.sourceMarker, CONSUMER_ARGV: JSON.stringify(spec.argv),
       CONSUMER_PACKAGE_ROOT: packageRoot, CONSUMER_WORKSPACE_ROOT: workspaceRoot,
+      CONSUMER_EXPECTED_PATH_BINS: JSON.stringify(expectedPathBins), CONSUMER_BEHAVIOR: JSON.stringify(spec.behavior), PATH: pathValue,
     },
-    packageRoot, workspaceRoot, managerPath,
+    packageRoot, workspaceRoot, packageBin, workspaceBin, managerPath,
   };
 }
 
@@ -229,28 +237,19 @@ function mutationResultFailures(report, spec) {
   return failures;
 }
 
-function invocationIdentityFailures(command, position, harness, spec) {
-  const failures = [];
-  if (command.manager !== spec.manager || JSON.stringify(command.argv) !== JSON.stringify(spec.argv)) failures.push(`invocation ${position} manager/argv mismatch`);
-  if (command.cwd !== harness.packageRoot) failures.push(`invocation ${position} CWD mismatch`);
-  if (command.executable !== fs.realpathSync(harness.managerPath)) failures.push(`invocation ${position} did not use package-local .bin`);
-  if (command.packageRoot !== harness.packageRoot || command.workspaceRoot !== harness.workspaceRoot) failures.push(`invocation ${position} workspace provenance mismatch`);
-  return failures;
-}
-
-function invocationAssertionFailures(command, index, snapshot) {
+function invocationAssertionFailures(command, index, testSnapshot) {
   const failures = [];
   const position = index + 1;
-  if (index === 0 && command.sourceHash !== snapshot.hash) failures.push("baseline did not assert original source bytes");
-  if (index === 1 && command.sourceHash === snapshot.hash) failures.push("mutant did not change the fixture assertion outcome");
-  if (!command.testExists || !command.argvExpected || command.sourceMarker !== (index === 0)) failures.push(`invocation ${position} fixture assertion failed`);
+  if (command.testHash !== testSnapshot.hash) failures.push(`invocation ${position} test source changed during mutation`);
+  if (command.behaviorPassed !== (index === 0)) failures.push(`invocation ${position} behavior assertion outcome was unexpected`);
+  if (!command.testExists || !command.argvExpected) failures.push(`invocation ${position} fixture assertion failed`);
   return failures;
 }
 
 function invocationFailures(command, index, context) {
   return [
     ...invocationIdentityFailures(command, index + 1, context.harness, context.spec),
-    ...invocationAssertionFailures(command, index, context.snapshot),
+    ...invocationAssertionFailures(command, index, context.testSnapshot),
   ];
 }
 
@@ -278,16 +277,37 @@ export function runMutation(binary, root, spec) {
   if (processError) return failureResult("mutation-report-failed", `mutation process/report status mismatch: ${processError[1]}`, result, { commands });
   const summaryFailure = mutationSummaryFailure(parsed.report, result, commands);
   if (summaryFailure) return summaryFailure;
-  const failures = mutationEvidenceFailures(parsed.report, commands, { harness, snapshot, spec, root });
+  const failures = mutationEvidenceFailures(parsed.report, commands, { harness, snapshot, testSnapshot, spec, root });
   if (failures.length) return failureResult("mutation-evidence-mismatch", failures.join("; "), result, { commands });
   return { status: "pass", reasonCode: "ok", diagnostics: "", exitCode: result.status, signal: null, timedOut: false, report: parsed.report, commands };
 }
 
 function prepareCase(binary, testCase) {
   const root = copyFixture(testCase);
-  if (testCase.initialize) initializeFixture(binary, root, testCase.initialize);
-  if (testCase.legacy) prepareLegacyReference(root);
-  return root;
+  try {
+    if (testCase.initialize) initializeFixture(binary, root, testCase.initialize);
+    if (testCase.legacy) prepareLegacyReference(root);
+    return root;
+  } catch (error) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch (cleanupError) {
+      if (error instanceof Error) error.message = `${error.message}; fixture temp cleanup failed: ${cleanupError.message}`;
+    }
+    throw error;
+  }
+}
+
+function cleanupCaseRoot(root, outcome) {
+  if (!root) return outcome;
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+    return outcome;
+  } catch (error) {
+    const previous = outcome.diagnostics || outcome.mutation?.diagnostics || outcome.check?.diagnostics || "";
+    const detail = `fixture temp cleanup failed: ${error.message}`;
+    return { ...outcome, status: "fail", diagnostics: bounded(previous ? `${previous}; ${detail}` : detail) };
+  }
 }
 
 export function runCase(binary, testCase, keepTemp = false) {
@@ -302,14 +322,7 @@ export function runCase(binary, testCase, keepTemp = false) {
   } catch (error) {
     outcome = { id: testCase.id, fixture: testCase.fixture, status: "fail", requirement: testCase.mutation?.requirement ?? testCase.check?.requirement ?? null, check: null, mutation: null, diagnostics: bounded(error.message) };
   }
-  if (root && !keepTemp) {
-    try {
-      fs.rmSync(root, { recursive: true, force: true });
-    } catch (error) {
-      outcome = { ...outcome, status: "fail", diagnostics: bounded(`fixture temp cleanup failed: ${error.message}`) };
-    }
-  }
-  return outcome;
+  return keepTemp ? outcome : cleanupCaseRoot(root, outcome);
 }
 
 export function runConsumerMatrix(options = {}) {

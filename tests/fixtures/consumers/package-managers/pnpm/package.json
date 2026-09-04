@@ -1,6 +1,6 @@
 {
   "name": "consumer-package-manager-pnpm",
   "private": true,
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@11.25.0",
   "scripts": { "test": "vitest run" }
 }

@@ -1,6 +1,7 @@
 {
   "name": "consumer-playwright-fixtures",
   "private": true,
+  "packageManager": "yarn@4.18.0",
   "scripts": {
     "test": "playwright test"
   }
