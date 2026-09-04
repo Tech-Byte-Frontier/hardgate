@@ -150,11 +150,10 @@ pub fn classify_with_config(
             .iter()
             .any(|candidate| matcher.is_match(candidate))
         {
-            let reason = rule
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("custom classification rule {index}: {}", rule.glob));
-            return Ok((rule.role, reason));
+            return Ok((
+                rule.role,
+                format!("custom classification rule {index}: {}", rule.glob),
+            ));
         }
     }
 

@@ -130,12 +130,10 @@ fn custom_rules_are_ordered_and_cannot_override_vendor_pruning() {
             ClassificationRule {
                 glob: "src/**".to_string(),
                 role: FileRole::Fixture,
-                reason: Some("first rule".to_string()),
             },
             ClassificationRule {
                 glob: "src/generated/**".to_string(),
                 role: FileRole::Source,
-                reason: Some("second rule".to_string()),
             },
         ],
     };
@@ -143,7 +141,7 @@ fn custom_rules_are_ordered_and_cannot_override_vendor_pruning() {
         ClassifiedFile::new_with_config(Path::new("/tmp/project/src/generated/api.ts"), &config)
             .unwrap();
     assert_eq!(first.role, FileRole::Fixture);
-    assert_eq!(first.reason, "first rule");
+    assert!(first.reason.contains("custom classification rule 0"));
 
     let vendor =
         ClassifiedFile::new_with_config(Path::new("/tmp/project/node_modules/src/api.ts"), &config)
@@ -158,7 +156,6 @@ fn classification_rules_reject_empty_invalid_and_duplicate_globs() {
             rules: vec![ClassificationRule {
                 glob: glob.to_string(),
                 role: FileRole::Source,
-                reason: None,
             }],
         };
         assert!(config.validate().is_err(), "{glob:?}");
@@ -169,12 +166,10 @@ fn classification_rules_reject_empty_invalid_and_duplicate_globs() {
             ClassificationRule {
                 glob: "src/**".to_string(),
                 role: FileRole::Source,
-                reason: None,
             },
             ClassificationRule {
                 glob: "SRC/**".to_string(),
                 role: FileRole::Test,
-                reason: None,
             },
         ],
     };

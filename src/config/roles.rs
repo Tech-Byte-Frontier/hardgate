@@ -332,7 +332,6 @@ impl LegacyConfig {
 pub struct ClassificationRule {
     pub glob: String,
     pub role: FileRole,
-    pub reason: Option<String>,
 }
 
 /// Classification rules are evaluated in declaration order before built-ins,
