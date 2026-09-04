@@ -146,12 +146,21 @@ impl Default for AntiGamingConfig {
 }
 
 /// Architectural boundary rules between subsystems.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvariantsConfig {
     #[serde(default = "default_true")]
     pub enforce: bool,
     #[serde(default)]
     pub rules: Vec<InvariantRule>,
+}
+
+impl Default for InvariantsConfig {
+    fn default() -> Self {
+        Self {
+            enforce: true,
+            rules: Vec::new(),
+        }
+    }
 }
 
 /// One boundary rule: which files it covers and what imports, calls, or

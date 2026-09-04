@@ -193,6 +193,37 @@ fn partial_preset_sections_retain_omitted_defaults() {
 }
 
 #[test]
+fn invariant_defaults_are_enabled_for_presets_and_partial_rules() {
+    use hardgate::config::{HardgateConfig, Preset};
+
+    for preset in [
+        Preset::StrictAgent,
+        Preset::Balanced,
+        Preset::LegacyMigration,
+    ] {
+        let root = tempdir("invariant-preset");
+        let path = root.join("hardgate.toml");
+        let template = HardgateConfig::generate_toml_template(preset);
+        std::fs::write(&path, template).unwrap();
+        let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+        assert!(config.invariants.enforce, "{preset:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    let root = tempdir("invariant-partial");
+    let path = root.join("hardgate.toml");
+    std::fs::write(
+        &path,
+        "[gate]\npreset = \"balanced\"\n\n[[invariants.rules]]\nfrom = \"src/**\"\n",
+    )
+    .unwrap();
+    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    assert!(config.invariants.enforce);
+    assert_eq!(config.invariants.rules.len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_budget_exclusions_glob() {
     let tmp = tempdir("bud");
     std::fs::create_dir_all(tmp.join("src/generated")).unwrap();
