@@ -14,7 +14,7 @@ function commandCase(id, fixture, mutation, check = {}) {
 }
 
 const COMMAND_CASES = [
-  ["vite-react-vitest", "vite-react-vitest", { scope: "src", manager: "pnpm", includes: ["vitest"], requirement: "Vitest framework fallback and React/TSX classification" }],
+  ["vite-react-vitest", "vite-react-vitest", { scope: "src", manager: "pnpm", includes: ["test", "App.test.tsx"], requirement: "Vitest framework fallback and React/TSX classification" }],
   ["next-monorepo-package-local", "next-monorepo", { scope: "apps/web/app/page.tsx", manager: "pnpm", includes: ["page.test.tsx"], requirement: "nearest package root and package-local Next workspace tool", cwdSuffix: "/apps/web" }],
   ["jest-fixtures-snapshots", "jest-playwright/jest", { scope: "src/sum.ts", manager: "npm", includes: ["sum.test.ts"], requirement: "Jest test selection while fixture and snapshot files stay visible" }, { minFiles: 8 }],
   ["playwright-suite", "jest-playwright/playwright", { scope: "src/home.ts", manager: "yarn", includes: ["home.spec.ts"], requirement: "Playwright test selection from a Yarn workspace" }],
@@ -43,7 +43,11 @@ export const CONSUMER_CASES = [
     id: "greenfield-strict",
     fixture: "greenfield-strict",
     initialize: "strict-agent",
-    check: { expectPass: true },
+    check: {
+      expectPass: false,
+      orchestrationSteps: ["coverage-report", "mutation-report"],
+      requirement: "strict init must fail closed until coverage and mutation evidence exist",
+    },
   },
   {
     id: "legacy-reference-ratchet",
