@@ -1,6 +1,6 @@
 {
   "name": "hardgate-linux-x64",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "hardgate prebuilt binary: linux x64 (glibc)",
   "license": "(MIT OR Apache-2.0)",
   "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
