@@ -51,9 +51,9 @@ hardgate check --diff src/routes/revenue.ts
 
 Git status and diff evidence select changed or staged inventory files, including untracked inventory files. A missing Git worktree or malformed Git evidence fails closed. Static findings are scoped to that selection when no legacy ratchet is enabled.
 
-Clone analysis is different: it builds a full repository index of eligible role groups, then reports only clone pairs touching a changed file. This catches a new copy against an unchanged file. Clone fingerprints are content-only and line-independent, so the legacy matcher can preserve identity across a safe rename.
+In ordinary diff mode, clone analysis is different: it builds a full repository index of eligible role groups, then reports only clone pairs touching a changed file. This catches a new copy against an unchanged file. Clone fingerprints are content-only and line-independent, so the legacy matcher can preserve identity across a safe rename.
 
-When `[legacy].ratchet = true`, the static pass uses the full current tree so it can compare against the configured reference merge-base. Existing non-worsened static findings (and configured dead-code findings) may be grandfathered as advisories; new or worsened findings remain blocking. Retained findings are annotated with changed-file or changed-hunk context. Enabled coverage is evaluated only on changed executable lines from AST-supported source-role files. Mutation reports and generated freshness remain current blocking evidence; orchestration still requires `--all`.
+When `[legacy].ratchet = true`, static and clone analysis disables diff filtering but still honors explicit path filters: it uses the full current selected scope (the whole tree when no paths are supplied) to compare against the configured reference merge-base, even though ordinary `--diff` static mode selects changed/staged files. Existing non-worsened static findings (and configured dead-code findings) may be grandfathered as advisories; new or worsened findings with effective role severity `error` remain blocking, `warning` findings remain advisories, and `ignore` findings are omitted. Retained findings are annotated with changed-file or changed-hunk context. Enabled coverage is evaluated only on changed executable lines from AST-supported source-role files. Mutation reports and generated freshness remain current blocking evidence; orchestration still requires `--all`.
 
 ## `hardgate check --all`
 
@@ -67,8 +67,10 @@ An absent command is skipped because it was not configured; a configured command
 
 ## `hardgate verify`
 
-`verify` is the full-tree evidence gate by default; optional path arguments
-scope the static/evidence pass when a narrower selection is requested:
+`verify` runs the full-tree static and configured evidence gate by default.
+Optional path arguments scope the static inventory and coverage source matching
+only; mutation-report ingestion, generated freshness, and legacy ratchet
+evidence continue to use their configured/full scope:
 
 ```sh
 hardgate verify
@@ -90,7 +92,8 @@ Accepted report inputs are LCOV for coverage and Stryker-shaped, cargo-mutants-s
 
 ## `hardgate mutate`
 
-Run native AST mutation testing against classified source-role files:
+Run native AST mutation testing against classified source-role files when the
+mutation policy is enabled:
 
 ```sh
 hardgate mutate --diff
@@ -99,6 +102,11 @@ hardgate mutate --scoped src/services/auth.ts \
   --test-cmd 'pnpm test {file}' --format agent
 hardgate mutate --json
 ```
+
+If `[mutation].enabled = false`, `mutate` prints a disabled-policy note and
+exits successfully without discovering targets, running a baseline, or
+executing mutants. The target and no-target rules below apply only when native
+mutation is enabled.
 
 The native runner:
 
@@ -111,9 +119,10 @@ The native runner:
 
 A scope with no viable mutation points fails. Native mutation is independent of mutation-report ingestion and does not invoke Stryker or cargo-mutants.
 
-For `mutate --diff`, a valid diff with no changed production targets is an
-explicitly reported no-op. An unrestricted invocation or an explicit scope
-with no eligible source-role target fails before mutation execution.
+Any `mutate --diff` invocation, including one with `--scoped`, is an explicitly
+reported no-op when no changed production targets exist. Only a non-diff
+unrestricted invocation or explicit scope with no eligible source-role target
+fails before mutation execution.
 
 Native mutation is Unix-only in the v0.5.0 contract. On non-Unix builds,
 `mutate` fails closed before running commands because the required
@@ -125,13 +134,13 @@ release artifact is specified.
 
 For JavaScript-family targets (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`), Hardgate walks from the source directory toward the repository root.
 
-1. The nearest `package.json` supplies the package root, optional `packageManager`, scripts, and framework hints. Workspace markers (`pnpm-workspace.yaml`, lockfiles, `.yarnrc.yml`, Bun config, or a `workspaces` field) identify the surrounding workspace boundary.
-2. Package-manager precedence is `packageManager` in the nearest manifest, then the nearest lock/config marker, then npm as the fallback. Supported managers are npm, pnpm, Yarn, and Bun.
-3. A framework named in a test script takes precedence over manifest/config hints. Otherwise Hardgate uses `jest`, `vitest`, or `playwright` keys in `package.json`, then matching `jest.config.*`, `vitest.config.*`, or `playwright.config.*` files in ancestor directories.
-4. The command runs from the package root when a test script exists, from the framework-config root when no script exists, or from the supplied repository root as a final fallback.
-5. A matching `<stem>.test.<ext>` or `<stem>.spec.<ext>` is searched beside the source, under `__tests__`/`tests`, and in nested test roots (bounded depth). If no reliable match exists, the full suite is selected.
+1. Every existing ancestor `package.json`, including the nearest manifest, is parsed and validated. A malformed or unreadable manifest fails automatic resolution rather than falling back to an ancestor; pass `--test-cmd` to supply an explicit command.
+2. A workspace root is recognized only from a validated declaration: a non-empty `workspaces` array/object in `package.json` or a valid `pnpm-workspace.yaml` `packages` list. Lockfiles and manager configuration files are package-manager hints only; they never prove workspace membership. Package-manager precedence remains `packageManager` in the nearest manifest, then the nearest lock/config hint, then npm as the fallback. Supported managers are npm, pnpm, Yarn, and Bun.
+3. A local `test` script takes precedence. If it is absent, exactly one `test:*` script may be selected; multiple `test:*` scripts are ambiguous and fail closed, so use `--test-cmd`. Without a local script, one reliable child-local framework package or config signal supplies a direct framework command and takes precedence over a workspace-root script.
+4. Only when the child has neither a local script nor a reliable local framework signal may a validated enclosing workspace-root manifest supply a test script; that fallback runs from the workspace root. When a selected script names an unambiguous Jest, Vitest, or Playwright executable, that script supplies selector behavior. Composed or unrecognized scripts run their script command without an inferred selector. Malformed or multiple framework hints fall back to a full-suite command, or use `--test-cmd`.
+5. A matching `<stem>.test.<ext>` or `<stem>.spec.<ext>` is searched beside the source, under `__tests__`/`tests`, and in nested test roots (bounded depth). A child script runs from its package root; a workspace fallback script runs from the workspace root; a framework-only command runs from its config root (or the package root for a manifest-only hint); and the supplied repository root is the final fallback. If no reliable match exists, the full suite is selected.
 
-The generated command uses the detected manager's local binary: `npm test`/`npm run`, `pnpm test`/`pnpm run`, `yarn test`/`yarn <script>`, or `bun test`/`bun run`; direct framework fallback uses `npm exec --offline`, `pnpm exec`, `yarn exec`, or `bun x --no-install`. Jest receives its normal file selector, Vitest receives `run`, and Playwright receives `test`. A project-specific `--test-cmd` is the authoritative override. No resolver path downloads packages; unavailable managers, binaries, or commands are baseline failures.
+The generated command uses the detected manager's local binary: `npm test`/`npm run`, `pnpm test`/`pnpm run`, `yarn test`/`yarn <script>`, or `bun test`/`bun run`; direct framework fallback uses `npm exec --offline`, `pnpm exec`, `yarn exec`, or `bun x --no-install`. Jest receives its normal file selector, Vitest receives `run`, and Playwright receives `test` when selector inference is valid. A project-specific `--test-cmd` is the authoritative override. No resolver path downloads packages; unavailable managers, binaries, malformed manifests, ambiguous scripts, and other resolver failures are baseline failures.
 
 ## `hardgate scan <file>`
 

@@ -218,9 +218,15 @@ reference_branch = "origin/main"
 ratchet = true
 ```
 
-`ratchet = true` requires a non-empty reference. Hardgate resolves the Git merge base, loads the baseline snapshot, and analyzes baseline static findings plus configured dead-code findings. Existing non-worsened static debt can be grandfathered as advisories; new or worsened budget, suppression, complexity, invariant, clone, or dead-code findings remain blocking. Pure rename lineage maps the current path back to the baseline path. Stable clone fingerprints remove line-number dependence. Retained findings are annotated with changed files or changed hunk ranges.
+`ratchet = true` requires a non-empty reference. Hardgate resolves the Git merge base, loads the baseline snapshot, and analyzes baseline static findings plus configured dead-code findings. Existing non-worsened static debt can be grandfathered as advisories; new or worsened findings with effective role severity `error` remain blocking, `warning` findings remain advisories, and `ignore` findings are omitted. Pure rename lineage maps the current path back to the baseline path. Stable clone fingerprints remove line-number dependence. Retained findings are annotated with changed files or changed hunk ranges.
 
 The ratchet applies only to static and configured dead-code findings. Coverage, mutation, generated freshness, and orchestration are evaluated against the current tree and remain blocking; they are never grandfathered. If the reference, merge base, snapshot, or baseline analysis cannot be loaded, the ratchet reports a blocking evidence failure.
+
+With the ratchet enabled, `check --diff` still uses changed executable lines
+for LCOV, while static and clone analysis disables diff filtering but honors
+explicit path filters: the selected scope is the full current tree when no
+paths are supplied. Without a ratchet, ordinary diff static findings remain
+scoped to changed/staged inventory files and clone pairs touching those files.
 
 ## Coverage and CRAP evidence
 
@@ -237,6 +243,10 @@ critical_paths = ["src/core.ts"]
 
 Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. A missing, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
+`verify` accepts optional path arguments for static inventory and coverage source
+matching only. Mutation-report ingestion, generated freshness, and the legacy
+ratchet continue to evaluate their configured/full evidence scope.
+
 ## Mutation report evidence
 
 ```toml
@@ -251,7 +261,7 @@ reports = ["reports/stryker-mutation.json"]
 
 `check` and `verify` evaluate Stryker-shaped (`files`), cargo-mutants-shaped (`outcomes`), or generic outcome-count JSON. Empty reports, empty outcome arrays, missing reports, parse errors, and reports with no viable outcomes are blocking when mutation is enabled. Scores use killed divided by killed plus survived. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings and remain blocking; mutation timeout handling is not a user-weakenable exception.
 
-`hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool.
+`hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool. When `[mutation].enabled = false`, it prints a disabled-policy note and exits successfully without target discovery or execution; the native baseline and no-target rules apply only when enabled.
 
 Native mutation is Unix-only in the v0.5.0 contract. Non-Unix builds fail
 closed before executing `mutate`, because robust process-group cleanup and

@@ -52,11 +52,15 @@ npx hardgate check                 # static engines + enabled reports/freshness
 npx hardgate check --diff          # changed static scope + full-index clones + diff LCOV
 npx hardgate check --all           # add configured formatter/linter/test commands
 npx hardgate verify                # full static + enabled evidence/ratchet
-npx hardgate mutate --diff        # native baseline + AST mutants
+npx hardgate mutate --diff        # native baseline + AST mutants when enabled
 npx hardgate init --preset strict-agent
 ```
 
-No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation.
+`verify` path arguments only narrow static inventory and coverage source
+matching; mutation reports, generated freshness, and legacy ratchet evidence
+remain configured/full checks.
+
+No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation. If `[mutation].enabled = false`, it prints a disabled-policy note and succeeds without target discovery, baseline execution, or mutants; target/no-target rules apply only when enabled.
 
 Native `mutate` is Unix-only in the v0.5.0 contract and fails closed on
 non-Unix builds before running commands, because robust process-group cleanup
@@ -64,7 +68,16 @@ and atomic source restoration are unavailable there. Static `check` and `scan`
 remain separate commands; the six-package release matrix does not include a
 Windows artifact.
 
-For JavaScript/TypeScript mutation targets, Hardgate resolves npm, pnpm, Yarn, or Bun from the nearest package/workspace markers and infers Jest, Vitest, or Playwright from scripts, package metadata, or config files. It selects a matching test file where possible and otherwise runs the full suite. `--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
+For JavaScript/TypeScript mutation targets, Hardgate validates encountered
+package manifests, recognizes only declared workspaces (lockfiles are manager
+hints), and resolves npm, pnpm, Yarn, or Bun. A child `test` script wins; one
+unambiguous `test:*` script is allowed, and a reliable child-local framework
+package or config signal wins over a validated enclosing workspace-root script.
+That root script is used only with no local script or reliable local signal;
+malformed manifests or ambiguous scripts fail closed. It infers
+Jest, Vitest, or Playwright only when selector behavior is unambiguous, selects
+a matching test where possible, and otherwise runs the full suite.
+`--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
 
 ## MCP
 
@@ -73,8 +86,8 @@ The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is 
 ## Release identity
 
 The v0.5.0 shell-installer and release-archive contract supports the same six
-Unix artifacts. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` overrides libc
-detection when needed. Archives are listed in `SHA256SUMS`;
+Unix artifacts. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects
+the libc and takes precedence over automatic detection. Archives are listed in `SHA256SUMS`;
 `BUILD-METADATA.json` records target, package, version, and full source commit.
 Installation verifies the unique checksum entry before extraction and
 requires the binary's exact `hardgate VERSION (COMMIT)` identity. The binary

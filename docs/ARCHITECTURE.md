@@ -31,7 +31,7 @@ Each file becomes a `ClassifiedFile` with a role and AST-support flag. Ordered c
 
 ## Role policy
 
-The first-class policy roles are source, test, generated, fixture, and migration. Each has independent severity, file/function thresholds, clone settings, and native mutation eligibility:
+The first-class policy roles are source, test, generated, fixture, and migration. Each has independent severity, file/function thresholds, and clone settings; native mutation is source-role-only and source eligibility is configurable:
 
 - **Source:** safety, invariants, AST complexity when supported, role-group clones, and native mutation targets.
 - **Test:** safety, invariants, AST complexity, role-group clones, never native mutation.
@@ -95,23 +95,45 @@ When `[mutation].enabled` is true, `check` and `verify` evaluate Stryker-shaped,
 
 ### Legacy adoption
 
-With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference and merge base, loads a baseline snapshot, runs the static gate (plus configured dead code), and compares current findings. Existing non-worsened static debt can be grandfathered as advisories. New or worsened static debt remains blocking; retained findings are annotated with changed-file or changed-hunk context. Budget, suppression, complexity, invariant, clone, and dead-code findings participate. Coverage, mutation, generated freshness, and orchestration findings remain current blocking evidence and are not grandfathered. Missing reference, merge base, snapshot, or baseline analysis is a blocking evidence failure.
+With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference and merge base, loads a baseline snapshot, runs the static gate (plus configured dead code), and compares current findings. Existing non-worsened static debt can be grandfathered as advisories. New or worsened findings with effective role severity `error` remain blocking; `warning` findings remain advisories and `ignore` findings are omitted. Retained findings are annotated with changed-file or changed-hunk context. Budget, suppression, complexity, invariant, clone, and dead-code findings participate. Coverage, mutation, generated freshness, and orchestration findings remain current blocking evidence and are not grandfathered. Missing reference, merge base, snapshot, or baseline analysis is a blocking evidence failure.
 
 ## Command boundaries
 
 - `check`: static engines, enabled reports, freshness, and optional configured dead code.
-- `check --diff`: changed/staged static scope, full-index clone matching, changed executable LCOV, and full-tree legacy static ratchet when enabled.
+- `check --diff`: changed/staged static scope when no ratchet is enabled, with full-index clone matching and changed executable LCOV; with a legacy ratchet, static/clone analysis uses the full current selected scope (whole tree when no paths are supplied) while LCOV remains diff-scoped.
 - `check --all`: `check` plus configured formatter/linter/test orchestration.
-- `verify`: full static tree by default (or requested path filters) plus enabled reports, freshness, and legacy static/dead-code ratchet; no orchestration or native mutation.
-- `mutate`: native unmutated baseline and AST mutants; no report ingestion.
+- `verify`: full static tree and configured evidence by default; optional path filters scope only static inventory and coverage source matching, while mutation reports, freshness, and legacy ratchet evidence remain configured/full; no orchestration or native mutation.
+- `mutate`: when `[mutation].enabled = true`, native unmutated baseline and AST mutants; when disabled, prints a note and succeeds without target discovery or execution; no report ingestion.
 
 Orchestration commands run sequentially from the repository root; a local `node_modules/.bin` is prepended to `PATH`. An unconfigured command is not inferred. A configured command that is empty, unavailable, times out, or exits non-zero yields an orchestration finding.
 
 ## Native mutation and JavaScript resolution
 
-Native mutation is source-role only. It resolves a test command per file, runs a passing unmutated baseline, mutates one AST point at a time, classifies outcomes, and verifies byte-for-byte restoration. A failed baseline or zero viable mutants fails before a green result.
+Native mutation is source-role only and Unix-only in the v0.5.0 contract. When
+`[mutation].enabled = false`, the command exits successfully without target
+discovery or execution. When enabled, it resolves a test command per file,
+runs a passing unmutated baseline, mutates one AST point at a time, classifies
+outcomes, and verifies byte-for-byte restoration. A failed baseline or zero
+viable mutants fails before a green result; non-Unix builds fail closed before
+execution because robust process-group cleanup and atomic restoration are not
+available.
 
-For JS/TS files, the resolver walks ancestor directories, chooses the nearest `package.json`, identifies workspace markers, and detects npm, pnpm, Yarn, or Bun from `packageManager`/lock/config markers (npm is the fallback). Jest, Vitest, and Playwright are inferred from the test script, manifest keys, or ancestor config files. The package/config root is the command working directory; the supplied repository root is the final fallback. A matching sibling or nested `<stem>.test|spec>` file is selected when reliable, otherwise the full suite runs. Manager-local `test`/`run`/`exec` commands are used, with `npm exec --offline` and `bun x --no-install` preventing runtime installation. `--test-cmd` overrides this resolver.
+For JS/TS files, the resolver validates every encountered `package.json`; a
+malformed or unreadable manifest fails closed, with `--test-cmd` as the explicit
+override. Only validated `workspaces` declarations or a valid
+`pnpm-workspace.yaml` `packages` list establish a workspace; lockfiles and
+manager config are hints for npm, pnpm, Yarn, or Bun selection, never workspace
+proof. A child package's `test` script wins, one unambiguous `test:*` script is
+allowed, and multiple `test:*` scripts fail closed. A reliable child-local
+framework package or config signal takes precedence over an enclosing
+workspace-root script; that root script is used only when the child has no
+local script or reliable framework signal. Framework selectors are inferred
+only from unambiguous recognized commands or hints;
+ambiguous/composed cases use the full suite. A matching sibling or nested
+`<stem>.test|spec>` file is selected when reliable, otherwise the full suite
+runs. Manager-local `test`/`run`/`exec` commands are used, with
+`npm exec --offline` and `bun x --no-install` preventing runtime installation.
+`--test-cmd` overrides this resolver.
 
 ## Reports and MCP
 

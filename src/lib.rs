@@ -34,13 +34,16 @@
 //! ## Roles and evidence
 //!
 //! Source, test, generated, fixture, and migration roles have independent
-//! severity, budget, clone, and native-mutation policies. Generated freshness
-//! remains a separate current check even when generated paths are excluded
-//! from file budgets. Each enabled coverage, mutation, freshness, and legacy
-//! reference check is required and blocking; empty or missing evidence is
-//! never treated as a pass. A legacy reference/merge-base ratchet may
-//! grandfather non-worsened static and configured dead-code debt, while
-//! current evidence engines remain outside the ratchet.
+//! severity, budget, and clone policies. Native mutation is source-role-only,
+//! with source eligibility configurable; other roles remain ineligible.
+//! Generated freshness remains a separate current check even when generated
+//! paths are excluded from file budgets. Each enabled coverage, mutation,
+//! freshness, and legacy reference check is required and blocking; empty or
+//! missing evidence is never treated as a pass. A legacy reference/merge-base
+//! ratchet may grandfather non-worsened static and configured dead-code debt,
+//! while current evidence engines remain outside the ratchet. Under that
+//! ratchet, new or worsened findings with effective role severity `error` block;
+//! `warning` findings are advisories and `ignore` findings are omitted.
 //!
 //! The JavaScript-family parser set includes `.js`, `.jsx`, `.mjs`, `.cjs`,
 //! `.ts`, `.tsx`, `.mts`, and `.cts`. Built-in Supabase conventions classify
@@ -57,14 +60,19 @@
 //! ## Command boundaries
 //!
 //! `check` runs static engines plus enabled report and freshness evaluators.
-//! `check --diff` scopes static files to changed/staged inventory, compares
-//! clones against a full repository index, and evaluates changed executable
-//! LCOV lines; an enabled legacy ratchet performs a full-tree static comparison
-//! with changed-hunk attribution. `check --all` additionally runs configured
-//! formatter, linter, and test commands. `verify` runs full static analysis by
-//! default (or requested path filters), enabled reports/freshness, and the
-//! legacy static ratchet without orchestration or native mutation. `mutate`
-//! runs the native unmutated baseline and AST mutants.
+//! `check --diff` scopes static files to changed/staged inventory when no
+//! ratchet is enabled, compares clones against a full repository index, and
+//! evaluates changed executable LCOV lines; an enabled legacy ratchet disables
+//! diff filtering but honors explicit path filters, using the full current
+//! selected scope (the whole tree when no paths are supplied) for static/clone
+//! comparison with changed-hunk attribution. `check --all`
+//! additionally runs configured formatter, linter, and test commands. `verify`
+//! runs full static and configured evidence by default; optional path filters
+//! scope only static inventory and coverage source matching while mutation
+//! reports, freshness, and legacy ratchet evidence remain configured/full.
+//! It does not run orchestration or native mutation. When enabled, `mutate`
+//! runs the native unmutated baseline and AST mutants; when disabled, it emits
+//! a note and succeeds without target discovery or execution.
 //!
 //! ## Example: loading configuration and discovering files
 //!
