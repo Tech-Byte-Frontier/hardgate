@@ -1,5 +1,5 @@
 use hardgate::config::GeneratedConfig;
-use hardgate::engines::{OrchestrationResult, run_generated_freshness};
+use hardgate::engines::{OrchestrationResult, OrchestrationViolation, run_generated_freshness};
 use std::path::{Path, PathBuf};
 
 #[test]
@@ -34,13 +34,36 @@ fn nonzero_freshness_is_a_violation() {
         Some(1),
     );
 
-    let violation = run_generated_freshness(&config, &root)
-        .expect("enabled freshness should execute")
-        .expect_err("nonzero command must fail closed");
-    assert_eq!(violation.step, "generated-freshness");
-    assert_eq!(violation.exit_code, Some(7));
-    assert!(violation.output.contains("freshness-failure"));
-    assert!(!violation.recommendation.is_empty());
+    assert_command_failure(
+        &config,
+        &root,
+        FailureExpectation {
+            exit_code: Some(7),
+            output: "freshness-failure",
+            recommendation: "generated artifacts",
+        },
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_failure_is_a_violation() {
+    let root = tempdir("generated-runner-failure");
+    let config = generated_config(
+        true,
+        Some("hardgate-generated-command-that-does-not-exist"),
+        Some(1),
+    );
+
+    assert_command_failure(
+        &config,
+        &root,
+        FailureExpectation {
+            exit_code: None,
+            output: "Failed to execute",
+            recommendation: "installed",
+        },
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -130,6 +153,26 @@ fn successful_result(config: &GeneratedConfig, root: &Path) -> OrchestrationResu
     run_generated_freshness(config, root)
         .expect("enabled freshness should execute")
         .expect("successful command should return evidence")
+}
+
+fn violation_result(config: &GeneratedConfig, root: &Path) -> OrchestrationViolation {
+    run_generated_freshness(config, root)
+        .expect("enabled freshness should execute")
+        .expect_err("freshness command must fail closed")
+}
+
+fn assert_command_failure(config: &GeneratedConfig, root: &Path, expected: FailureExpectation<'_>) {
+    let violation = violation_result(config, root);
+    assert_eq!(violation.step, "generated-freshness");
+    assert_eq!(violation.exit_code, expected.exit_code);
+    assert!(violation.output.contains(expected.output));
+    assert!(violation.recommendation.contains(expected.recommendation));
+}
+
+struct FailureExpectation<'a> {
+    exit_code: Option<i32>,
+    output: &'a str,
+    recommendation: &'a str,
 }
 
 fn tempdir(tag: &str) -> PathBuf {
