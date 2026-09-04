@@ -319,9 +319,7 @@ fn source_file_for_coverage(
         return None;
     }
     if is_rust_source(path) {
-        let Some(key) = normalized_repository_key(path, rust_scope.root) else {
-            return None;
-        };
+        let key = normalized_repository_key(path, rust_scope.root)?;
         if !rust_scope.executable_files.contains(&key) {
             return None;
         }

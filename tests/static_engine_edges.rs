@@ -14,7 +14,7 @@ use trees::{has_suffix, write_tree};
 
 #[test]
 fn complexity_checked_paths_cover_unsupported_syntax_and_arrows() {
-    let mut analyzer = ComplexityAnalyzer::default();
+    let mut analyzer = ComplexityAnalyzer;
     assert!(
         analyzer
             .analyze_file_checked(Path::new("src/style.css"), "body {}", Path::new("."))

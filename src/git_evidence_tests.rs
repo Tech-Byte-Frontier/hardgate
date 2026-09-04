@@ -19,7 +19,9 @@ fn diff_status_rejects(output: &[u8]) -> bool {
     parse_diff_status(output).is_err()
 }
 
-fn assert_parser_rejects(cases: &[(&str, fn(&[u8]) -> bool, &[u8])]) {
+type ParserRejectionCase<'a> = (&'a str, fn(&[u8]) -> bool, &'a [u8]);
+
+fn assert_parser_rejects(cases: &[ParserRejectionCase<'_>]) {
     for (label, parser, output) in cases {
         assert!(parser(output), "accepted {label} {output:?}");
     }
