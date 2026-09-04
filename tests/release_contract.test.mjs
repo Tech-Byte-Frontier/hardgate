@@ -37,6 +37,14 @@ const targets = [
   "aarch64-apple-darwin",
 ];
 
+const npmRoot = path.join(root, "npm");
+const npmPlatformDirectories = fs
+  .readdirSync(npmRoot, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && entry.name !== "hardgate")
+  .map((entry) => entry.name)
+  .sort();
+const wrapperManifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "hardgate/package.json"), "utf8"));
+
 function includesAll(text, snippets, label) {
   for (const snippet of snippets) assert.ok(text.includes(snippet), `${label} must contain ${snippet}`);
 }
@@ -103,6 +111,8 @@ for (const target of targets) assert.ok(release.includes(target), `release must 
 for (const packageName of platformPackages) {
   assert.ok(release.includes(packageName), `release must handle ${packageName}`);
 }
+assert.deepEqual(npmPlatformDirectories, [...platformPackages].sort(), "npm directories must match the supported platform set");
+assert.deepEqual(Object.keys(wrapperManifest.optionalDependencies ?? {}).sort(), [...platformPackages].sort(), "wrapper optionalDependencies must match the supported platform set");
 includesAll(installer, ["linux-x86_64", "linux-aarch64|linux-arm64", "darwin-x86_64", "darwin-aarch64|darwin-arm64", "libc_suffix"], "installer platform map");
 assert.equal((release.match(/target:/g) ?? []).length, targets.length, "release matrix must contain exactly six targets");
 
