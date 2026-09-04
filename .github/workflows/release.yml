@@ -535,7 +535,7 @@ jobs:
             mkdir -p "npm/$pkg/bin"
             tar xOf "dist/$pkg.tar.gz" "$pkg/hardgate" > "npm/$pkg/bin/hardgate"
             chmod 755 "npm/$pkg/bin/hardgate"
-            cp README.md LICENSE-MIT LICENSE-APACHE "npm/$pkg/"
+            cp LICENSE-MIT LICENSE-APACHE "npm/$pkg/"
             (cd "npm/$pkg" && npm pack --dry-run --json >/dev/null)
           done
           cp LICENSE-MIT LICENSE-APACHE npm/hardgate/

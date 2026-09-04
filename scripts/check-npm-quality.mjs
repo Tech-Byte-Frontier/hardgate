@@ -34,6 +34,7 @@ const fail = (msg) => {
 
 const readJson = (rel) =>
   JSON.parse(fs.readFileSync(path.join(root, rel), "utf8"));
+const readText = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 
 // --- main wrapper ---
 const main = readJson("npm/hardgate/package.json");
@@ -66,7 +67,12 @@ for (const p of platformPkgs) {
   for (const f of ["bin/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]) {
     if (!j.files?.includes(f)) fail(`npm/${p} files[] missing ${f}`);
   }
-  if (!fs.existsSync(path.join(root, `npm/${p}/README.md`))) fail(`npm/${p}/README.md missing`);
+  const readmePath = `npm/${p}/README.md`;
+  if (!fs.existsSync(path.join(root, readmePath))) {
+    fail(`${readmePath} missing`);
+  } else if (readText(readmePath).split(/\r?\n/, 1)[0].trim() !== `# ${p}`) {
+    fail(`${readmePath} does not identify ${p}`);
+  }
   if (!j.os?.length || !j.cpu?.length) fail(`npm/${p} missing os/cpu`);
 }
 

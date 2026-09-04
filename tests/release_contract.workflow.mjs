@@ -218,6 +218,20 @@ const finalNpmPlatformLoop = finalNpmVerificationStep.slice(
 for (const packageName of platformPackages) {
   assert.ok(finalNpmPlatformLoop.includes(packageName), `final npm verification must probe ${packageName}`);
 }
+const npmPreparationStep = release.slice(
+  release.indexOf("- name: Verify release bundle and prepare npm packages"),
+  release.indexOf("- name: Publish and verify each platform package in order"),
+);
+assert.match(
+  npmPreparationStep,
+  /cp LICENSE-MIT LICENSE-APACHE "npm\/\$pkg\/"/,
+  "platform package staging must copy both license files",
+);
+assert.doesNotMatch(
+  npmPreparationStep,
+  /cp\s+README\.md\b[^\n]*npm\/\$pkg\//,
+  "platform package staging must preserve each tracked package README",
+);
 const crateStateStep = release.slice(release.indexOf("id: crate-state"), release.indexOf("name: Publish crate when exact version is missing"));
 const cratePublishStep = release.slice(release.indexOf("name: Publish crate when exact version is missing"), release.indexOf("- name: Verify published crate identity without publish credentials"));
 const crateVerifyStep = release.slice(release.indexOf("- name: Verify published crate identity without publish credentials"), release.indexOf("  publish-npm:"));
