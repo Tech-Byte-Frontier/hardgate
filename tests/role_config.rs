@@ -296,6 +296,136 @@ fn partial_orchestration_override_preserves_preset_commands() {
 }
 
 #[test]
+fn partial_strict_verification_sections_preserve_omitted_preset_defaults() {
+    let root = fs::tempdir("partial-strict-verification");
+    let path = root.join("hardgate.toml");
+    std::fs::write(
+        &path,
+        r#"
+[gate]
+preset = "strict-agent"
+
+[coverage]
+report = "reports/custom-lcov.info"
+
+[mutation]
+min_score = 72.0
+
+[analysis.dead_code]
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    let expected = Preset::StrictAgent.to_default_config();
+
+    assert!(config.coverage.enabled);
+    assert_eq!(
+        config.coverage.report.as_deref(),
+        Some("reports/custom-lcov.info")
+    );
+    assert_eq!(
+        config.coverage.min_line_percent,
+        expected.coverage.min_line_percent
+    );
+    assert_eq!(
+        config.coverage.min_function_percent,
+        expected.coverage.min_function_percent
+    );
+    assert_eq!(
+        config.coverage.min_branch_percent,
+        expected.coverage.min_branch_percent
+    );
+    assert_eq!(
+        config.coverage.max_crap_score,
+        expected.coverage.max_crap_score
+    );
+    assert_eq!(
+        config.coverage.critical_paths,
+        expected.coverage.critical_paths
+    );
+
+    assert!(config.mutation.enabled);
+    assert_eq!(config.mutation.min_score, Some(72.0));
+    assert_eq!(
+        config.mutation.reject_timeouts,
+        expected.mutation.reject_timeouts
+    );
+    assert_eq!(config.mutation.reports, expected.mutation.reports);
+    assert_eq!(config.mutation.test_cmd, expected.mutation.test_cmd);
+    assert_eq!(config.mutation.timeout_secs, expected.mutation.timeout_secs);
+    assert_eq!(config.mutation.max_mutants, expected.mutation.max_mutants);
+
+    assert!(config.analysis.dead_code.enabled);
+    assert_eq!(
+        config.analysis.dead_code.entry_points,
+        expected.analysis.dead_code.entry_points
+    );
+    assert_eq!(
+        config.analysis.dead_code.exclude,
+        expected.analysis.dead_code.exclude
+    );
+}
+
+#[test]
+fn explicit_false_and_empty_verification_values_override_strict_defaults() {
+    let root = fs::tempdir("explicit-strict-verification");
+    let path = root.join("hardgate.toml");
+    std::fs::write(
+        &path,
+        r#"
+[gate]
+preset = "strict-agent"
+
+[coverage]
+enabled = false
+report = ""
+critical_paths = []
+
+[mutation]
+enabled = false
+reject_timeouts = false
+reports = []
+test_cmd = ""
+
+[analysis.dead_code]
+enabled = false
+entry_points = []
+exclude = []
+"#,
+    )
+    .unwrap();
+
+    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    let expected = Preset::StrictAgent.to_default_config();
+
+    assert!(!config.coverage.enabled);
+    assert_eq!(config.coverage.report.as_deref(), Some(""));
+    assert_eq!(config.coverage.critical_paths, Some(Vec::new()));
+    assert_eq!(
+        config.coverage.min_line_percent,
+        expected.coverage.min_line_percent
+    );
+    assert_eq!(
+        config.coverage.max_crap_score,
+        expected.coverage.max_crap_score
+    );
+
+    assert!(!config.mutation.enabled);
+    assert!(!config.mutation.reject_timeouts);
+    assert_eq!(config.mutation.reports, Some(Vec::new()));
+    assert_eq!(config.mutation.test_cmd.as_deref(), Some(""));
+    assert_eq!(config.mutation.min_score, expected.mutation.min_score);
+    assert_eq!(config.mutation.timeout_secs, expected.mutation.timeout_secs);
+    assert_eq!(config.mutation.max_mutants, expected.mutation.max_mutants);
+
+    assert!(!config.analysis.dead_code.enabled);
+    assert!(config.analysis.dead_code.entry_points.is_empty());
+    assert!(config.analysis.dead_code.exclude.is_empty());
+}
+
+#[test]
 fn generated_presets_and_runtime_defaults_have_matching_semantics() {
     let strict =
         HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))
@@ -308,7 +438,6 @@ fn generated_presets_and_runtime_defaults_have_matching_semantics() {
     );
     assert_eq!(strict.coverage.enabled, strict_preset.coverage.enabled);
     assert_eq!(strict.mutation.enabled, strict_preset.mutation.enabled);
-
     for preset in [
         Preset::StrictAgent,
         Preset::Balanced,

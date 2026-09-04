@@ -34,9 +34,39 @@ fn test_clean_toml_formatting() {
 }
 
 #[test]
-fn test_strict_template_gates_tests_others_carve_out() {
-    // Strict-agent holds tests to the same budgets (agent-written tests are
-    // a gaming vector, not a free pass); softer presets keep `tests/**`.
+fn strict_no_config_matches_generated_template_sections() {
+    use hardgate::config::{HardgateConfig, Preset};
+
+    let runtime =
+        HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))
+            .unwrap();
+    let generated: HardgateConfig =
+        toml::from_str(&HardgateConfig::generate_toml_template(Preset::StrictAgent)).unwrap();
+
+    assert_eq!(
+        toml::Value::try_from(&runtime).unwrap(),
+        toml::Value::try_from(&generated).unwrap()
+    );
+
+    let root = tempdir("strict-template-load");
+    let path = root.join("hardgate.toml");
+    std::fs::write(
+        &path,
+        hardgate::config::HardgateConfig::generate_toml_template(Preset::StrictAgent),
+    )
+    .unwrap();
+    let loaded = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    assert_eq!(
+        toml::Value::try_from(&loaded).unwrap(),
+        toml::Value::try_from(&runtime).unwrap()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_preset_templates_keep_tests_visible_to_budget_checks() {
+    // Every preset keeps tests in the budget inventory. Role policies provide
+    // any softer test thresholds without hiding the files through exclusions.
     let strict = hardgate::config::HardgateConfig::generate_toml_template(
         hardgate::config::Preset::StrictAgent,
     );
@@ -53,7 +83,9 @@ fn test_strict_template_gates_tests_others_carve_out() {
     ] {
         let other = hardgate::config::HardgateConfig::generate_toml_template(preset);
         let other_cfg: hardgate::config::HardgateConfig = toml::from_str(&other).unwrap();
-        assert_eq!(other_cfg.budgets.files.exclusions.paths, vec!["tests/**"]);
+        assert!(other_cfg.budgets.files.exclusions.paths.is_empty());
+        assert_eq!(other_cfg.roles.test.mutation_target, Some(false));
+        assert_eq!(other_cfg.roles.test.clone_min_lines, Some(12));
     }
 }
 
@@ -125,6 +157,39 @@ enforce = false
     assert!(!cfg.anti_gaming.disallow_suppressions);
     assert!(!cfg.invariants.enforce);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn partial_preset_sections_retain_omitted_defaults() {
+    use hardgate::config::{HardgateConfig, Preset};
+
+    let legacy_root = tempdir("legacy-gate-defaults");
+    let legacy_path = legacy_root.join("hardgate.toml");
+    std::fs::write(&legacy_path, "[gate]\npreset = \"legacy-migration\"\n").unwrap();
+    let legacy = HardgateConfig::load_or_default(Some(&legacy_path)).unwrap();
+    assert_eq!(legacy.gate.preset, Preset::LegacyMigration);
+    assert!(!legacy.gate.strict, "legacy preset must remain non-strict");
+    assert_eq!(
+        legacy.legacy.reference_branch.as_deref(),
+        Some("origin/main")
+    );
+    assert!(legacy.legacy.ratchet);
+    let _ = std::fs::remove_dir_all(&legacy_root);
+
+    let clone_root = tempdir("partial-clone-defaults");
+    let clone_path = clone_root.join("hardgate.toml");
+    std::fs::write(
+        &clone_path,
+        "[gate]\npreset = \"balanced\"\n\n[clones]\nmin_tokens = 123\n",
+    )
+    .unwrap();
+    let clone = HardgateConfig::load_or_default(Some(&clone_path)).unwrap();
+    let balanced = Preset::Balanced.to_default_config();
+    assert!(clone.clones.enabled);
+    assert_eq!(clone.clones.min_lines, balanced.clones.min_lines);
+    assert_eq!(clone.clones.min_tokens, 123);
+    assert_eq!(clone.clones.excludes, balanced.clones.excludes);
+    let _ = std::fs::remove_dir_all(&clone_root);
 }
 
 #[test]

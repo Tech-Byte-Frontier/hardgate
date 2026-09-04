@@ -29,7 +29,7 @@ impl Preset {
         config.budgets.files = FileBudgets {
             max_bytes: Some(b.max_bytes),
             max_lines: build_line_budgets(b.lines.0, b.lines.1, b.lines.2),
-            exclusions: preset_file_exclusions(strict),
+            exclusions: ExclusionConfig::default(),
         };
         config.budgets.functions = make_func_budgets(b.thresholds);
         config.anti_gaming.disallow_suppressions = true;
@@ -98,16 +98,6 @@ fn build_line_budgets(rs: usize, other: usize, default_val: usize) -> HashMap<St
     }
     map.insert("default".to_string(), default_val);
     map
-}
-
-fn preset_file_exclusions(strict: bool) -> ExclusionConfig {
-    if strict {
-        ExclusionConfig::default()
-    } else {
-        ExclusionConfig {
-            paths: vec!["tests/**".to_string()],
-        }
-    }
 }
 
 fn make_orchestration() -> OrchestrationConfig {
