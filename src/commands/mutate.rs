@@ -1,8 +1,8 @@
 use super::mutation_output::{MutationSummaryContext, render_mutation_output};
+mod targets;
+
 use crate::config::HardgateConfig;
-use crate::discovery::{ClassifiedFile, DiscoverOptions, discover_files};
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
-use crate::engines::mutation::target::is_effective_mutation_target;
 use crate::engines::{
     AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
     MutantExecutionResult, MutantOutcome, MutationStats, NativeMutationRunner,
@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use targets::discover_targets;
 
 /// CLI options for `hardgate mutate`.
 #[derive(Debug, Clone, Default)]
@@ -46,8 +48,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     }
     let target_files = discover_targets(&opts, &config, root)?;
     if target_files.is_empty() {
-        print_no_targets(opts.diff);
-        return Ok(());
+        return handle_no_targets(opts.diff);
     }
     print_generation_notice(&target_files, opts.diff);
     let test_cmd = opts
@@ -171,61 +172,10 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
         std::process::exit(1)
     }
 }
-fn discover_targets(
-    opts: &MutateOptions,
-    config: &HardgateConfig,
-    root: &Path,
-) -> Result<Vec<PathBuf>> {
-    if let Some(ref path) = opts.scoped {
-        if path.is_file() {
-            let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
-            if !is_effective_mutation_target(&classified, config) {
-                bail!(
-                    "refusing to mutate `{}` because it is classified as {:?}, not production source",
-                    path.display(),
-                    classified.role
-                );
-            }
-            if !classified.ast_supported {
-                bail!(
-                    "refusing to mutate `{}` because Hardgate has no AST mutator for its file type",
-                    path.display()
-                );
-            }
-            return Ok(vec![path.clone()]);
-        }
-        if path.is_dir() {
-            let files = discover_files(DiscoverOptions {
-                root: path,
-                diff_only: false,
-                exclusions: &config.budgets.files.exclusions.paths,
-            })?;
-            return filter_production_sources(files, config);
-        }
-        anyhow::bail!("Path not found: {:?}", path);
-    }
-    let files = discover_files(DiscoverOptions {
-        root,
-        diff_only: opts.diff,
-        exclusions: &config.budgets.files.exclusions.paths,
-    })?;
-    filter_production_sources(files, config)
-}
-fn filter_production_sources(files: Vec<PathBuf>, config: &HardgateConfig) -> Result<Vec<PathBuf>> {
-    let mut targets = Vec::new();
-    for path in files {
-        let classified = ClassifiedFile::new_with_config(&path, &config.classification)?;
-        if is_effective_mutation_target(&classified, config) && classified.ast_supported {
-            targets.push(path);
-        }
-    }
-    Ok(targets)
-}
 /// Resolve whether a path is an effective native mutation target under the
 /// built-in role default and any configured role policy override.
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
-    let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
-    Ok(is_effective_mutation_target(&classified, config))
+    targets::effective_mutation_target(path, config)
 }
 fn run_unmutated_baselines(
     runner: &NativeMutationRunner,
@@ -483,16 +433,15 @@ fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> boo
         && stats.unviable == 0
 }
 
-fn print_no_targets(diff: bool) {
-    let (label, message) = match diff {
-        true => (
-            "note:".green().bold(),
-            "no git-modified files found for mutation testing",
-        ),
-        false => (
-            "warning:".yellow().bold(),
-            "no source files found for mutation testing",
-        ),
-    };
-    println!("{label} {message}.");
+fn handle_no_targets(diff: bool) -> Result<()> {
+    if diff {
+        println!(
+            "{} no git-modified production source files found for mutation testing; no-op.",
+            "note:".green().bold()
+        );
+        return Ok(());
+    }
+    bail!(
+        "no production source files found for mutation testing; full/native runs require at least one production target"
+    );
 }
