@@ -85,6 +85,11 @@ function syncJson(file, mutate) {
   }
 }
 
+// Keep the private workspace manifest aligned too: release-version validates
+// it as a source of truth, so --check must detect drift before a tag is cut.
+syncJson(path.join(root, "package.json"), (j) => {
+  j.version = version;
+});
 syncJson(path.join(root, "npm/hardgate/package.json"), (j) => {
   j.version = version;
   applyCommon(j);

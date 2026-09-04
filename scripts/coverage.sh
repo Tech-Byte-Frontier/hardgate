@@ -8,7 +8,7 @@ if command -v cargo-llvm-cov >/dev/null 2>&1 && output=$(cargo llvm-cov --versio
   installed_version=$(printf '%s\n' "$output" | awk 'NR == 1 { print $2 }')
 fi
 if [ "$installed_version" != "$COV_VERSION" ]; then
-  cargo install cargo-llvm-cov --version "$COV_VERSION" --locked --force
+  cargo install cargo-llvm-cov --version "=$COV_VERSION" --locked --force
 fi
 mkdir -p coverage
 cargo llvm-cov --all-targets --all-features --locked --lcov --output-path coverage/lcov.info

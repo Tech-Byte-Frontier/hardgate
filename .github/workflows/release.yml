@@ -17,31 +17,33 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: 1.85.1
-  CARGO_AUDIT_VERSION: 0.21.2
+  RUST_TOOLCHAIN: 1.98.1
+  CARGO_AUDIT_VERSION: 0.22.2
   CARGO_LLVM_COV_VERSION: 0.9.0
-  NODE_VERSION: 22.22.2
+  NODE_VERSION: 26.8.1
+  NPM_VERSION: 12.0.2
+  PNPM_VERSION: 11.25.0
+  YARN_VERSION: 4.18.0
+  BUN_VERSION: 1.4.0
 
 jobs:
   version-check:
     name: Validate tag and every version source
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -53,6 +55,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
           tag_commit=$(git rev-parse "${RELEASE_TAG}^{commit}")
           head_commit=$(git rev-parse HEAD)
           test "$tag_commit" = "$head_commit"
@@ -71,14 +74,23 @@ jobs:
     needs: version-check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+      - run: npm install --global "npm@${NPM_VERSION}" "@yarnpkg/cli-dist@${YARN_VERSION}"
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, llvm-tools-preview
@@ -102,6 +114,7 @@ jobs:
         env:
           HARDGATE_BINARY: target/release/hardgate
       - run: node tests/release_contract.test.mjs
+      - run: node tests/release_contract.install.test.mjs
       - name: Hardgate complete configured self/orchestration/evidence gate
         run: scripts/self-gate.sh
 
@@ -112,9 +125,9 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             musl: true
           - os: ubuntu-24.04-arm
@@ -122,17 +135,18 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             musl: true
-          - os: macos-14
+          - os: macos-15-intel
             target: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
@@ -179,16 +193,22 @@ jobs:
   package:
     name: Package and verify release artifacts
     needs: [version-check, quality-gate, build]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -202,6 +222,8 @@ jobs:
           set -euo pipefail
           node scripts/release-package.mjs --incoming build-binaries --output dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT"
           node scripts/release-sbom.mjs --output "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json"
+          node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
+          node scripts/release-checksums.mjs --dist dist --version "$RELEASE_VERSION"
       - name: Verify every archive and checksum before publication
         env:
           RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
@@ -210,6 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+          node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
       - name: Upload verified release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -219,11 +242,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Sign archive checksums with GitHub artifact attestation
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS
       - name: Sign archive SBOM with GitHub artifact attestation
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*.tar.gz
           sbom-path: dist/hardgate-${{ needs.version-check.outputs.version }}.sbom.cdx.json
@@ -231,7 +254,9 @@ jobs:
   github-release:
     name: Publish verified GitHub Release
     needs: [version-check, quality-gate, package]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -243,60 +268,193 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
+          assets=(
+            hardgate-linux-x64.tar.gz
+            hardgate-linux-x64-musl.tar.gz
+            hardgate-linux-arm64.tar.gz
+            hardgate-linux-arm64-musl.tar.gz
+            hardgate-darwin-x64.tar.gz
+            hardgate-darwin-arm64.tar.gz
+            SHA256SUMS
+            "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
+          )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS dist/*.sbom.cdx.json --clobber
+            existing=$(mktemp -d)
+            trap 'rm -rf "$existing"' EXIT
+            asset_names=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+            for existing_name in $asset_names; do
+              case " ${assets[*]} " in
+                *" $existing_name "*) ;;
+                *) echo "unexpected immutable release asset: $existing_name" >&2; exit 1 ;;
+              esac
+            done
+            for asset in "${assets[@]}"; do
+              if printf '%s\n' "$asset_names" | grep -Fqx "$asset"; then
+                gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$existing"
+                cmp -- "dist/$asset" "$existing/$asset"
+              else
+                gh release upload "$RELEASE_TAG" "dist/$asset"
+              fi
+            done
           else
-            gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS dist/*.sbom.cdx.json --verify-tag --generate-notes
+            paths=()
+            for asset in "${assets[@]}"; do paths+=("dist/$asset"); done
+            gh release create "$RELEASE_TAG" "${paths[@]}" --verify-tag --generate-notes
           fi
 
   publish-crates:
     name: Publish verified crate
     needs: [version-check, quality-gate, package, github-release]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # v1, Rust 1.85.1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - run: cargo publish --locked
+      - name: Publish crate when exact version is missing
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Verify exact crates.io version
-        env:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
+          crate_probe() {
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "$api") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
+                  rm -f "$body"
+                  return 2
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
+                return 0
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 2 ;;
+            esac
+          }
+          crate_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(crate_probe); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 1 ]; then return 1; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
+          already_published=0
+          if current=$(crate_version); then
+            test "$current" = "$RELEASE_VERSION"
+            already_published=1
+            echo "hardgate@$current already verified on crates.io"
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              echo "crates.io version probe failed; refusing to publish" >&2
+              exit "$status"
+            fi
+          fi
+          if [ "$already_published" -eq 0 ]; then
+            cargo publish --locked
+          fi
+      - name: Verify published crate identity without publish credentials
+        env:
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
+          crate_probe() {
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "$api") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
+                  rm -f "$body"
+                  return 2
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
+                return 0
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 2 ;;
+            esac
+          }
+          crate_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(crate_probe); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 1 ]; then return 1; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
+          verified=0
           for attempt in $(seq 1 20); do
-            if body=$(curl --fail --location --silent --show-error "$api"); then
-              actual=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])')
+            if actual=$(crate_version); then
               test "$actual" = "$RELEASE_VERSION"
               echo "hardgate@$actual verified on crates.io"
-              exit 0
+              verified=1
+              break
             fi
-            sleep 10
+            [ "$attempt" -lt 20 ] && sleep 10
           done
-          echo "crates.io did not expose hardgate@$RELEASE_VERSION" >&2
-          exit 1
+          test "$verified" -eq 1
+          crate_root=$(mktemp -d)
+          crate_installed=0
+          for attempt in $(seq 1 20); do
+            if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
+              crate_installed=1
+              break
+            fi
+            [ "$attempt" -lt 20 ] && sleep 10
+          done
+          test "$crate_installed" -eq 1
+          test -x "$crate_root/bin/hardgate"
+          test "$("$crate_root/bin/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
 
   publish-npm:
     name: Publish platform packages, then wrapper
     needs: [version-check, quality-gate, package, github-release, publish-crates]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
+      - run: npm install --global "npm@${NPM_VERSION}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-bundle
@@ -322,9 +480,50 @@ jobs:
       - name: Publish and verify each platform package in order
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          registry_version() { npm view "$1@$2" version 2>/dev/null; }
+          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
+          # Keep the token out of probes, package verification, and helper
+          # processes. It is reintroduced only for the single npm publish
+          # process that needs it.
+          unset NODE_AUTH_TOKEN
+          npm_registry_probe() {
+            name="$1"
+            wanted="$2"
+            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
+                  rm -f "$body"
+                  return 2
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
+                return 0
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 2 ;;
+            esac
+          }
+          registry_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(npm_registry_probe "$1" "$2"); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 1 ]; then return 1; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
           publish_platform() {
             pkg="$1"
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
@@ -333,58 +532,248 @@ jobs:
               test "$current" = "$wanted"
               echo "$pkg@$wanted already verified on npm"
             else
-              npm publish --provenance --access public "./npm/$pkg"
-              test "$(registry_version "$pkg" "$wanted")" = "$wanted"
+              status=$?
+              if [ "$status" -ne 1 ]; then
+                echo "npm registry version probe failed for $pkg@$wanted; refusing to publish" >&2
+                return "$status"
+              fi
+              NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public "./npm/$pkg"
+              current=$(registry_version "$pkg" "$wanted")
+              test "$current" = "$wanted"
               echo "$pkg@$wanted published and exact-version verified"
             fi
           }
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             publish_platform "$pkg"
+            env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only --package "$pkg"
           done
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
             test "$(registry_version "$pkg" "$wanted")" = "$wanted"
           done
+          env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
+          unset publish_token
       - name: Publish wrapper only after all platforms are verified
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
+          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
+          unset NODE_AUTH_TOKEN
           wanted=$(node -p "require('./npm/hardgate/package.json').version")
           current=""
-          if current=$(npm view "@tech-byte-frontier/hardgate@$wanted" version 2>/dev/null); then
+          npm_registry_probe() {
+            encoded_name=$(printf '%s' "$1" | sed 's|/|%2f|g')
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/$2") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
+                  rm -f "$body"
+                  return 2
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
+                return 0
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 2 ;;
+            esac
+          }
+          registry_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(npm_registry_probe "$1" "$2"); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 1 ]; then return 1; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
+          if current=$(registry_version "@tech-byte-frontier/hardgate" "$wanted"); then
             test "$current" = "$wanted"
           else
-            npm publish --provenance --access public ./npm/hardgate
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              echo "npm registry version probe failed for @tech-byte-frontier/hardgate@$wanted; refusing to publish" >&2
+              exit "$status"
+            fi
+            NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
           fi
-          test "$(npm view "@tech-byte-frontier/hardgate@$wanted" version)" = "$wanted"
+          test "$(registry_version "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
+          env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+          unset publish_token
           echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
 
   verify-channels:
     name: Verify all published channels
     needs: [version-check, github-release, publish-crates, publish-npm]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Verify release assets, crates.io, and all npm versions
+      - run: npm install --global "npm@${NPM_VERSION}" "@yarnpkg/cli-dist@${YARN_VERSION}"
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Download and verify the complete release bundle
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
           release_tag=$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)
           test "$release_tag" = "$RELEASE_TAG"
-          assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
-          for asset in hardgate-linux-x64.tar.gz hardgate-linux-x64-musl.tar.gz hardgate-linux-arm64.tar.gz hardgate-linux-arm64-musl.tar.gz hardgate-darwin-x64.tar.gz hardgate-darwin-arm64.tar.gz SHA256SUMS "hardgate-${RELEASE_VERSION}.sbom.cdx.json"; do
-            printf '%s\n' "$assets" | grep -qx "$asset"
+          assets=(
+            hardgate-linux-x64.tar.gz
+            hardgate-linux-x64-musl.tar.gz
+            hardgate-linux-arm64.tar.gz
+            hardgate-linux-arm64-musl.tar.gz
+            hardgate-darwin-x64.tar.gz
+            hardgate-darwin-arm64.tar.gz
+            SHA256SUMS
+            "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
+          )
+          expected_assets=$(printf '%s\n' "${assets[@]}" | sort)
+          actual_assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)
+          test "$actual_assets" = "$expected_assets"
+          mkdir -p dist
+          for asset in "${assets[@]}"; do
+            gh release download "$RELEASE_TAG" --pattern "$asset" --dir dist
           done
-          crate_version=$(curl --fail --location --silent "https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])')
-          test "$crate_version" = "$RELEASE_VERSION"
+          for asset in "${assets[@]}"; do test -s "dist/$asset"; done
+          node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+          node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+
+      - name: Verify published registry versions and runnable installs
+        env:
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          expected="hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          retry_npm_view() {
+            spec="$1"
+            for attempt in $(seq 1 20); do
+              if version=$(npm view "$spec" version 2>/dev/null); then
+                printf '%s\n' "$version"
+                return 0
+              fi
+              [ "$attempt" -lt 20 ] && sleep 10
+            done
+            echo "npm did not expose $spec after bounded retries" >&2
+            return 1
+          }
+          retry_crate_view() {
+            api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
+            for attempt in $(seq 1 20); do
+              if body=$(curl --fail --location --silent --show-error "$api"); then
+                printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])'
+                return 0
+              fi
+              [ "$attempt" -lt 20 ] && sleep 10
+            done
+            echo "crates.io did not expose hardgate@$RELEASE_VERSION after bounded retries" >&2
+            return 1
+          }
+          test "$(retry_crate_view)" = "$RELEASE_VERSION"
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            test "$(npm view "$pkg@$RELEASE_VERSION" version)" = "$RELEASE_VERSION"
+            test "$(retry_npm_view "$pkg@$RELEASE_VERSION")" = "$RELEASE_VERSION"
           done
-          test "$(npm view "@tech-byte-frontier/hardgate@$RELEASE_VERSION" version)" = "$RELEASE_VERSION"
-          echo "all release channels verified at $RELEASE_VERSION"
+          test "$(retry_npm_view "@tech-byte-frontier/hardgate@$RELEASE_VERSION")" = "$RELEASE_VERSION"
+
+          crate_root=$(mktemp -d)
+          crate_installed=0
+          for attempt in $(seq 1 20); do
+            if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
+              crate_installed=1
+              break
+            fi
+            [ "$attempt" -lt 20 ] && sleep 10
+          done
+          test "$crate_installed" -eq 1
+          test -x "$crate_root/bin/hardgate"
+          test "$("$crate_root/bin/hardgate" --version)" = "$expected"
+
+          npm_root=$(mktemp -d)
+          npm init --yes --prefix "$npm_root" >/dev/null
+          npm_installed=0
+          for attempt in $(seq 1 20); do
+            if npm install --ignore-scripts --no-audit --no-fund --prefix "$npm_root" "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"; then
+              npm_installed=1
+              break
+            fi
+            [ "$attempt" -lt 20 ] && sleep 10
+          done
+          test "$npm_installed" -eq 1
+          npm_binary="$npm_root/node_modules/.bin/hardgate"
+          test -x "$npm_binary"
+          test "$("$npm_binary" --version)" = "$expected"
+
+      - name: Verify clean npm, pnpm, Yarn, and Bun consumers
+        env:
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+          PNPM_VERSION: ${{ env.PNPM_VERSION }}
+          YARN_VERSION: ${{ env.YARN_VERSION }}
+          BUN_VERSION: ${{ env.BUN_VERSION }}
+          NPM_VERSION: ${{ env.NPM_VERSION }}
+        run: |
+          set -euo pipefail
+          expected="hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          test "$(npm --version)" = "$NPM_VERSION"
+          test "$(pnpm --version)" = "$PNPM_VERSION"
+          test "$(yarn --version)" = "$YARN_VERSION"
+          test "$(bun --version)" = "$BUN_VERSION"
+
+          pnpm_project=$(mktemp -d)
+          npm init --yes --prefix "$pnpm_project" >/dev/null
+          (cd "$pnpm_project" && pnpm add --ignore-scripts "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
+          test "$($pnpm_project/node_modules/.bin/hardgate --version)" = "$expected"
+
+          yarn_project=$(mktemp -d)
+          npm init --yes --prefix "$yarn_project" >/dev/null
+          printf '%s\n' 'nodeLinker: node-modules' > "$yarn_project/.yarnrc.yml"
+          (cd "$yarn_project" && yarn add "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
+          test "$($yarn_project/node_modules/.bin/hardgate --version)" = "$expected"
+
+          bun_project=$(mktemp -d)
+          npm init --yes --prefix "$bun_project" >/dev/null
+          (cd "$bun_project" && bun add "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
+          test "$($bun_project/node_modules/.bin/hardgate --version)" = "$expected"
+
+      - name: Exercise the documented shell installer
+        env:
+          HARDGATE_VERSION: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          install_root=$(mktemp -d)
+          HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
+          test -x "$install_root/hardgate"
+          test "$("$install_root/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"

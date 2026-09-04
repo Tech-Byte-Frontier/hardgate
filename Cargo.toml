@@ -2,7 +2,7 @@
 name = "hardgate"
 version = "0.4.2"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.98.1"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
 authors = ["Tauan BF <contact@techbytefrontier.com>"]
 license = "MIT OR Apache-2.0"
@@ -21,29 +21,14 @@ codegen-units = 1
 [profile.dist]
 inherits = "release"
 
-# cargo-dist release config: prebuilt binaries for GitHub Releases and the
-# checked shell installer. Additional package-manager installers are omitted
-# until a maintained formula exists.
+# Release archives, the shell installer, npm packages, and publication gates
+# are hand-authored in `.github/workflows/release.yml`; no cargo-dist metadata
+# is emitted so a stale generator cannot silently advertise another channel.
 # npm distribution is hand-maintained in npm/* (optionalDependencies pattern,
-# pnpm-compatible) and published by .github/workflows/release.yml `publish-npm`
-# job from the same Release binaries. Single source of truth for versions is
-# `package.version` above. npm/* versions are synced from here via
+# pnpm-compatible) and published by the workflow from the same Release
+# binaries. Single source of truth for versions is `package.version` above;
+# npm/* and the private workspace manifest are synced by
 # `node scripts/sync-npm-version.mjs`.
-[package.metadata.dist]
-cargo-dist-version = "0.28.0"
-ci = "github"
-pr-run-mode = "plan"
-installers = ["shell"]
-install-path = "CARGO_HOME"
-targets = [
-  "x86_64-unknown-linux-gnu",
-  "x86_64-unknown-linux-musl",
-  "aarch64-unknown-linux-gnu",
-  "aarch64-unknown-linux-musl",
-  "x86_64-apple-darwin",
-  "aarch64-apple-darwin",
-]
-include = ["README.md", "LICENSE-MIT", "LICENSE-APACHE", "hardgate.toml"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -63,4 +48,3 @@ tree-sitter-javascript = "0.23.1"
 tree-sitter-python = "0.23.6"
 tree-sitter-go = "0.23.4"
 globset = "0.4"
-

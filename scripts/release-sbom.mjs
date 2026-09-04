@@ -29,19 +29,43 @@ function component(pkg) {
     version: pkg.version,
     purl: `pkg:cargo/${pkg.name}@${pkg.version}`,
   };
-  if (pkg.license) value.licenses = [{ license: { id: pkg.license } }];
+  if (pkg.license) {
+    // A few older Cargo manifests use the legacy `Unlicense/MIT` spelling;
+    // CycloneDX carries SPDX expressions, so normalize that separator before
+    // classifying the value.
+    const licenseText = pkg.license.trim().replace(/\s*\/\s*/g, " OR ");
+    // CycloneDX distinguishes a single SPDX identifier from a compound SPDX
+    // expression. Never put an expression such as `MIT OR Apache-2.0` in the
+    // `license.id` field: consumers validate that field as one identifier.
+    const license = /^[A-Za-z0-9.-]+$/.test(licenseText)
+      ? { id: licenseText }
+      : { expression: licenseText };
+    value.licenses = [{ license }];
+  }
   return value;
+}
+
+function codepointCompare(left, right) {
+  // Compare UTF-8 bytes explicitly so ordering is independent of locale and
+  // JavaScript UTF-16 collation details across runners.
+  return Buffer.from(left, "utf8").compare(Buffer.from(right, "utf8"));
 }
 
 const output = path.resolve(option("--output", "dist/hardgate.sbom.cdx.json"));
 const metadata = cargoMetadata();
-const components = metadata.packages.map(component).sort((left, right) => left.purl.localeCompare(right.purl));
+const components = metadata.packages.map(component).sort((left, right) => codepointCompare(left.purl, right.purl));
+const rootComponent = components.find((item) => item.name === "hardgate");
+if (!rootComponent) throw new Error("release-sbom: Cargo metadata has no hardgate root component");
+rootComponent.type = "application";
 const bom = {
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   bomFormat: "CycloneDX",
   specVersion: "1.5",
   version: 1,
-  metadata: { component: components.find((item) => item.name === "hardgate") },
-  components,
+  metadata: { component: rootComponent },
+  // CycloneDX represents the application in metadata.component; dependency
+  // components must not repeat that same bom-ref at the top level.
+  components: components.filter((item) => item["bom-ref"] !== rootComponent["bom-ref"]),
 };
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, `${JSON.stringify(bom, null, 2)}\n`);

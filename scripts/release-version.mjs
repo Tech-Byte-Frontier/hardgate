@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Resolve and validate the version for a tagged release.
-// Usage: node scripts/release-version.mjs --tag v0.4.3
+// Usage: node scripts/release-version.mjs --tag vX.Y.Z
 "use strict";
 
 import fs from "node:fs";

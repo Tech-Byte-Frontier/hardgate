@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Verify release archives before any registry or GitHub publication.
-// Usage: node scripts/release-verify.mjs --dist dist --version 0.4.3 --commit <sha> --tag v0.4.3
+// Usage: node scripts/release-verify.mjs --dist dist --version <version> --commit <sha> --tag v<version>
 "use strict";
 
 import crypto from "node:crypto";
@@ -10,12 +10,12 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const targets = [
-  ["x86_64-unknown-linux-gnu", "hardgate-linux-x64", /x86-64/],
-  ["x86_64-unknown-linux-musl", "hardgate-linux-x64-musl", /x86-64/],
-  ["aarch64-unknown-linux-gnu", "hardgate-linux-arm64", /ARM aarch64/],
-  ["aarch64-unknown-linux-musl", "hardgate-linux-arm64-musl", /ARM aarch64/],
-  ["x86_64-apple-darwin", "hardgate-darwin-x64", /x86_64/],
-  ["aarch64-apple-darwin", "hardgate-darwin-arm64", /arm64/],
+  ["x86_64-unknown-linux-gnu", "hardgate-linux-x64", /x86-64/, "gnu"],
+  ["x86_64-unknown-linux-musl", "hardgate-linux-x64-musl", /x86-64/, "musl"],
+  ["aarch64-unknown-linux-gnu", "hardgate-linux-arm64", /ARM aarch64/, "gnu"],
+  ["aarch64-unknown-linux-musl", "hardgate-linux-arm64-musl", /ARM aarch64/, "musl"],
+  ["x86_64-apple-darwin", "hardgate-darwin-x64", /x86_64/, null],
+  ["aarch64-apple-darwin", "hardgate-darwin-arm64", /arm64/, null],
 ];
 
 function option(name, fallback) {
@@ -38,6 +38,23 @@ function digest(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+const MAX_BINARY_BYTES = 128 * 1024 * 1024;
+
+function verifyEmbeddedIdentity(binaryPath, version, commit, packageName) {
+  const { size } = fs.statSync(binaryPath);
+  if (!Number.isSafeInteger(size) || size > MAX_BINARY_BYTES) {
+    fail(`${packageName} binary is unreasonably large for bounded identity verification`);
+  }
+  const bytes = fs.readFileSync(binaryPath);
+  const marker = Buffer.from(`${version} (${commit})`, "utf8");
+  if (!bytes.includes(Buffer.from(version, "utf8")) || !bytes.includes(Buffer.from(commit, "utf8"))) {
+    fail(`${packageName} binary does not embed the expected version and source commit`);
+  }
+  if (!bytes.includes(marker)) {
+    fail(`${packageName} binary does not embed the expected version/commit identity`);
+  }
+}
+
 function verifyTagIdentity(tag, commit) {
   if (!tag) return;
   const tagged = run("git", ["rev-parse", `${tag}^{commit}`]).trim();
@@ -49,8 +66,9 @@ function verifyChecksums(dist, expectedNames) {
   const file = path.join(dist, "SHA256SUMS");
   if (!fs.existsSync(file)) fail("SHA256SUMS is missing");
   const archiveNames = fs.readdirSync(dist).filter((name) => name.endsWith(".tar.gz")).sort();
-  if (archiveNames.join("\n") !== [...expectedNames].sort().join("\n")) {
-    fail(`dist must contain exactly ${expectedNames.join(", ")}`);
+  const expectedArchives = expectedNames.filter((name) => name.endsWith(".tar.gz"));
+  if (archiveNames.join("\n") !== [...expectedArchives].sort().join("\n")) {
+    fail(`dist must contain exactly ${expectedArchives.join(", ")}`);
   }
   const lines = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
   const names = lines.map((line) => line.match(/^[0-9a-f]{64}  (.+)$/i)?.[1]).filter(Boolean);
@@ -76,9 +94,42 @@ function extract(archive, member, directory) {
   return output;
 }
 
-function verifyArchive(dist, target, pkg, archPattern, version, commit, directory) {
+function verifyExecutableMember(archive, packageName) {
+  const member = `${packageName}/hardgate`;
+  const listing = run("tar", ["-tvzf", archive]);
+  const line = listing
+    .split("\n")
+    .find((entry) => entry.trim().endsWith(` ${member}`));
+  const mode = line?.trim().split(/\s+/, 1)[0];
+  if (!mode || mode.length !== 10 || !mode.startsWith("-") || ![mode[3], mode[6], mode[9]].some((value) => /[xstST]/.test(value))) {
+    fail(`${packageName} archive member hardgate must retain an executable mode before extraction`);
+  }
+}
+
+function verifyBinaryAbi(binaryPath, target, abi, packageName) {
+  if (!abi) return;
+  const report = run("file", ["-b", binaryPath]);
+  const programHeaders = run("readelf", ["-l", binaryPath]);
+  if (abi === "musl") {
+    const staticBinary = /(?:static(?:-pie)?|statically linked)/i.test(report);
+    const muslInterpreter = /ld-musl(?:-[^\s\]]+)?\.so(?:\.[0-9]+)?/i.test(programHeaders);
+    if (!staticBinary && !muslInterpreter) {
+      fail(`${packageName} musl target ${target} has no static link or musl interpreter`);
+    }
+    if (/ld-linux|glibc/i.test(`${report}\n${programHeaders}`)) {
+      fail(`${packageName} musl target ${target} requires glibc: ${programHeaders.trim()}`);
+    }
+    return;
+  }
+  if (abi === "gnu" && !/ld-linux|glibc/i.test(`${report}\n${programHeaders}`)) {
+    fail(`${packageName} GNU target ${target} does not identify a glibc ABI: ${programHeaders.trim()}`);
+  }
+}
+
+function verifyArchive(dist, target, pkg, archPattern, abi, version, commit, directory) {
   const archive = path.join(dist, `${pkg}.tar.gz`);
   if (!fs.existsSync(archive)) fail(`missing ${path.basename(archive)}`);
+  verifyExecutableMember(archive, pkg);
   const metadataPath = extract(archive, `${pkg}/BUILD-METADATA.json`, directory);
   let metadata;
   try {
@@ -90,8 +141,14 @@ function verifyArchive(dist, target, pkg, archPattern, version, commit, director
     if (metadata[key] !== value) fail(`${pkg} metadata ${key} is ${metadata[key] ?? "<missing>"}`);
   }
   const binaryPath = extract(archive, `${pkg}/hardgate`, directory);
+  // tar -xO writes bytes without preserving the executable bit. Restore it
+  // before the host smoke test and keep the extracted file bounded for the
+  // embedded identity check below.
+  fs.chmodSync(binaryPath, 0o755);
+  verifyEmbeddedIdentity(binaryPath, version, commit, pkg);
   const report = run("file", ["-b", binaryPath]);
   if (!archPattern.test(report)) fail(`${pkg} architecture does not match ${target}: ${report.trim()}`);
+  verifyBinaryAbi(binaryPath, target, abi, pkg);
   const listing = run("tar", ["-tzf", archive]).split("\n").filter(Boolean).sort();
   const expected = [`${pkg}/`, `${pkg}/BUILD-METADATA.json`, `${pkg}/hardgate`];
   if (listing.join("\n") !== expected.join("\n")) fail(`${pkg} contains unexpected archive members`);
@@ -117,15 +174,16 @@ if (commit === "unknown" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(commit)) {
 if (tag && tag !== `v${version}`) fail(`tag ${tag} does not identify version ${version}`);
 verifyTagIdentity(tag, commit);
 const names = targets.map(([, pkg]) => `${pkg}.tar.gz`);
-verifyChecksums(dist, names);
+verifyChecksums(dist, [...names, `hardgate-${version}.sbom.cdx.json`]);
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-verify-"));
 try {
-  const checked = targets.map(([target, pkg, pattern]) => verifyArchive(dist, target, pkg, pattern, version, commit, directory));
+  const checked = targets.map(([target, pkg, pattern, abi]) => verifyArchive(dist, target, pkg, pattern, abi, version, commit, directory));
   const host = hostTarget();
   const smoke = checked.find(({ archive }) => path.basename(archive, ".tar.gz") === host);
   if (smoke) {
     const result = spawnSync(smoke.binaryPath, ["--version"], { encoding: "utf8" });
-    if (result.status !== 0 || !result.stdout.trim().startsWith(`hardgate ${version} (`)) {
+    const expectedOutput = `hardgate ${version} (${commit})`;
+    if (result.error || result.status !== 0 || result.stdout.trim() !== expectedOutput) {
       fail(`host binary smoke test failed: ${result.stderr ?? result.error?.message ?? result.stdout}`);
     }
   }

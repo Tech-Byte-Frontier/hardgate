@@ -73,13 +73,12 @@ function platformPackage() {
 }
 
 // On Linux the musl (static) binary also runs on glibc hosts, so it is a
-// valid fallback when the preferred optional dep was skipped
-// (e.g. installed with --no-optional / --omit=optional).
+// valid fallback for a glibc host when the preferred optional dep was skipped
+// (e.g. installed with --no-optional / --omit=optional). Never select a
+// glibc-linked binary on a musl host: its loader is unavailable there.
 function fallbackPackages(primary) {
   if (primary === "hardgate-linux-x64") return ["hardgate-linux-x64-musl"];
-  if (primary === "hardgate-linux-x64-musl") return ["hardgate-linux-x64"];
   if (primary === "hardgate-linux-arm64") return ["hardgate-linux-arm64-musl"];
-  if (primary === "hardgate-linux-arm64-musl") return ["hardgate-linux-arm64"];
   return [];
 }
 
@@ -244,8 +243,7 @@ function launcherDepth() {
 }
 
 // Spawn contract in one place so stdio inheritance, Windows window hiding,
-// and fuse depth propagation are unit-assertable on every platform without
-// spawning anything.
+// and fuse depth propagation are unit-assertable without spawning anything.
 function spawnOptions() {
   return {
     stdio: "inherit",
