@@ -64,6 +64,7 @@
 //! * `hardgate_scan_file` analyzes one file.
 //! * `hardgate_get_metrics` returns metrics for a function symbol in a file.
 
+pub mod adoption;
 pub mod commands;
 pub mod config;
 pub mod diagnostics;
@@ -72,6 +73,9 @@ pub mod engines;
 pub mod git_evidence;
 pub mod mcp;
 
+pub use adoption::{
+    LegacyRatchetOutcome, LegacyRatchetSummary, apply_legacy_ratchet, ratchet_report,
+};
 pub use config::{HardgateConfig, Preset};
 pub use diagnostics::{GateReport, GateSummary, TopFileEntry};
 pub use discovery::{
