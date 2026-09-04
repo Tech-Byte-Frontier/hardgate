@@ -95,13 +95,14 @@ for (const packageName of platformPackages) {
 assert.deepEqual(npmPlatformDirectories, [...platformPackages].sort(), "npm directories must match the supported platform set");
 assert.deepEqual(Object.keys(wrapperManifest.optionalDependencies ?? {}).sort(), [...platformPackages].sort(), "wrapper optionalDependencies must match the supported platform set");
 includesAll(installer, ["linux-x86_64", "linux-aarch64|linux-arm64", "darwin-x86_64", "darwin-aarch64|darwin-arm64", "libc_suffix", "gnu|glibc)", "musl)", "HARDGATE_LIBC must be gnu, glibc, or musl", "ldd --version", "ld-musl-*.so.1"], "installer platform map");
-assert.equal((release.match(/target:/g) ?? []).length, targets.length, "release matrix must contain exactly six targets");
+assert.equal((release.match(/^\s+target:/gm) ?? []).length, targets.length - 1, "release matrix must contain only the five non-native targets");
+assert.match(release, /native-linux-x64-attempt-/, "release must promote the native Linux x64 artifact from exact successful CI");
 
-assert.match(release, /needs:\s*\[version-check, quality-gate\]/, "build must wait for quality");
-assert.match(release, /package:[\s\S]*needs:\s*\[version-check, quality-gate, build\]/, "packaging must wait for all builds");
+assert.match(release, /build:[\s\S]*needs:\s*\[version-check\]/, "cross-platform builds must wait for the exact CI receipt");
+assert.match(release, /package:[\s\S]*needs:\s*\[version-check, build\]/, "packaging must wait for all non-native builds");
 assert.match(release, /attest:[\s\S]*needs:\s*\[version-check, package\]/, "attestation must consume the completed package checkpoint");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, quality-gate, package, attest, publication-preflight\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
-assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, quality-gate, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
+assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
+assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
 assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, github-release, publish-crates, publish-npm\]/, "final channel verification must wait for every publication");
 const platformPublish = release.indexOf("Publish and verify each platform package in order");
 const wrapperPublish = release.indexOf("Publish wrapper only after all platforms are verified");
@@ -112,7 +113,8 @@ const packageJob = release.slice(release.indexOf("  package:"), release.indexOf(
 const attestJob = release.slice(release.indexOf("  attest:"), release.indexOf("  publication-preflight:"));
 assert.doesNotMatch(packageJob, /actions\/attest@/, "successful packaging must remain reusable when attestation fails");
 assert.doesNotMatch(packageJob, /id-token: write|attestations: write|artifact-metadata: write/, "packaging must not have attestation credentials");
-assert.match(packageJob.trimEnd(), /retention-days: 14$/, "verified bundle upload must be the package job's final checkpoint");
+assert.match(packageJob.trimEnd(), /retention-days: 30$/, "verified bundle upload must be the package job's final checkpoint for the full rerun window");
+includesAll(packageJob, ["pattern: binary-*", "needs.version-check.outputs.ci_native_artifact_id", "needs.version-check.outputs.ci_run_id", "build-binaries/binary-x86_64-unknown-linux-gnu", "chmod 755", "resume_artifact_id", "github-token: ${{ github.token }}", "run-id: ${{ inputs.resume_run_id }}", "digest-mismatch: error"], "CI-promoted and verified-resume bundle inputs");
 includesAll(attestJob, ["artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}", "digest-mismatch: error", "release-verify.mjs", "release-sbom-verify.mjs", "sha256sum --check --strict", "actions: read", "id-token: write", "attestations: write", "artifact-metadata: write", "verify-tag", "subject-checksums", "sbom-path"], "resumable attestation checkpoint");
 assert.equal((attestJob.match(/actions\/attest@/g) ?? []).length, 2, "attestation checkpoint must sign checksums and the SBOM exactly once each");
 assert.doesNotMatch(attestJob, /continue-on-error/, "attestation failures must block publication");

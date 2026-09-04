@@ -1,7 +1,7 @@
 name: Release
 
-# A release is an immutable, tag-addressed transaction. Every publication job
-# waits for the same quality gate and for the verified six-archive bundle.
+# A release is an immutable, tag-addressed transaction. It promotes the exact
+# successful main-CI receipt and waits for the verified six-archive bundle.
 on:
   push:
     tags: ["v*"]
@@ -10,6 +10,10 @@ on:
       tag:
         description: Existing v<semver> tag to publish
         required: true
+        type: string
+      resume_run_id:
+        description: Prior release run whose verified bundle should be reused
+        required: false
         type: string
 
 concurrency:
@@ -25,9 +29,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: 1.98.1
-  RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
-  CARGO_AUDIT_VERSION: 0.22.2
-  CARGO_LLVM_COV_VERSION: 0.9.0
   NODE_VERSION: 26.8.1
   NPM_VERSION: 12.0.2
   PNPM_VERSION: 11.25.0
@@ -39,6 +40,7 @@ env:
   # wait below five minutes while allowing normal eventual-consistency lag.
   HARDGATE_REGISTRY_ATTEMPTS: 10
   HARDGATE_REGISTRY_DELAY: 10
+  HARDGATE_CRATES_IO_USER_AGENT: "hardgate-release (https://github.com/Tech-Byte-Frontier/hardgate)"
 
 jobs:
   version-check:
@@ -48,6 +50,10 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
+      resume: ${{ steps.version.outputs.resume }}
+      resume_artifact_id: ${{ steps.version.outputs.resume_artifact_id }}
+      ci_run_id: ${{ steps.version.outputs.ci_run_id }}
+      ci_native_artifact_id: ${{ steps.version.outputs.ci_native_artifact_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +70,8 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -76,14 +84,129 @@ jobs:
           version=$(node scripts/release-version.mjs --tag "$RELEASE_TAG")
           node scripts/sync-npm-version.mjs --check --tag "$RELEASE_TAG"
 
+          resume=false
+          resume_artifact_id=""
+          if [ -n "$RESUME_RUN_ID" ]; then
+            if [ "$EVENT_NAME" != workflow_dispatch ]; then
+              echo "resume_run_id is accepted only for an explicit workflow dispatch" >&2
+              exit 1
+            fi
+            case "$RESUME_RUN_ID" in
+              *[!0-9]*|'') echo "resume_run_id must be a numeric GitHub Actions run ID" >&2; exit 1 ;;
+            esac
+            if [ "$RESUME_RUN_ID" = "$CURRENT_RUN_ID" ]; then
+              echo "a release run cannot resume from itself" >&2
+              exit 1
+            fi
+
+            source_run=$(mktemp)
+            source_jobs=$(mktemp)
+            source_artifacts=$(mktemp)
+            cleanup_resume_metadata() {
+              rm -f "$source_run" "$source_jobs" "$source_artifacts"
+            }
+            trap cleanup_resume_metadata EXIT
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}" > "$source_run"
+            if ! jq -e --arg sha "$tag_commit" --arg tag "$RELEASE_TAG" '
+              (.path | split("@")[0]) == ".github/workflows/release.yml" and
+              .event == "push" and
+              .status == "completed" and
+              .conclusion == "failure" and
+              .head_sha == $sha and
+              .head_branch == $tag
+            ' "$source_run" >/dev/null; then
+              echo "resume source is not a completed tag-triggered release run for $RELEASE_TAG at $tag_commit" >&2
+              exit 1
+            fi
+
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/jobs" \
+              -f per_page=100 > "$source_jobs"
+            for required_job in \
+              "Validate tag and every version source" \
+              "Build x86_64-unknown-linux-musl" \
+              "Build aarch64-unknown-linux-gnu" \
+              "Build aarch64-unknown-linux-musl" \
+              "Build x86_64-apple-darwin" \
+              "Build aarch64-apple-darwin" \
+              "Package and verify release artifacts"
+            do
+              successful=$(jq --arg name "$required_job" \
+                '[.jobs[] | select(.name == $name and .status == "completed" and .conclusion == "success")] | length' \
+                "$source_jobs")
+              if [ "$successful" -ne 1 ]; then
+                echo "resume source lacks exactly one successful prerequisite job: $required_job" >&2
+                exit 1
+              fi
+            done
+
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/artifacts" \
+              -f per_page=100 > "$source_artifacts"
+            artifact_count=$(jq --arg sha "$tag_commit" --argjson run "$RESUME_RUN_ID" '[
+              .artifacts[] |
+              select(
+                .name == "release-bundle" and
+                .expired == false and
+                .workflow_run.id == $run and
+                .workflow_run.head_sha == $sha
+              )
+            ] | length' "$source_artifacts")
+            if [ "$artifact_count" -ne 1 ]; then
+              echo "resume source must contain exactly one unexpired release-bundle for $tag_commit" >&2
+              exit 1
+            fi
+            resume_artifact_id=$(jq -r --arg sha "$tag_commit" --argjson run "$RESUME_RUN_ID" '
+              .artifacts[] |
+              select(
+                .name == "release-bundle" and
+                .expired == false and
+                .workflow_run.id == $run and
+                .workflow_run.head_sha == $sha
+              ) |
+              .id
+            ' "$source_artifacts")
+            case "$resume_artifact_id" in
+              *[!0-9]*|'') echo "resume artifact ID is invalid" >&2; exit 1 ;;
+            esac
+            resume=true
+            cleanup_resume_metadata
+            trap - EXIT
+          fi
+
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           main_commit=$(git rev-parse refs/remotes/origin/main)
           if [ "$tag_commit" != "$main_commit" ]; then
-            if [ "$RUN_ATTEMPT" -le 1 ] || ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+              echo "release tag commit $tag_commit is not an ancestor of origin/main $main_commit" >&2
+              exit 1
+            fi
+            if [ "$resume" != true ] && [ "$RUN_ATTEMPT" -le 1 ]; then
               echo "a first release attempt must point at the exact origin/main tip ($main_commit), not $tag_commit" >&2
               exit 1
             fi
-            echo "rerun attempt $RUN_ATTEMPT is recovering signed release $RELEASE_TAG after main advanced to $main_commit"
+            echo "recovering signed release $RELEASE_TAG after main advanced to $main_commit"
+          fi
+
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_SHA" != "$main_commit" ]; then
+            echo "a release dispatch must run the workflow from the exact origin/main tip $main_commit" >&2
+            exit 1
+          fi
+
+          if [ "$resume" = true ]; then
+            recovery_ci_runs=$(mktemp)
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f branch=main \
+              -f event=push \
+              -f status=success \
+              -f head_sha="$main_commit" \
+              -f per_page=1 > "$recovery_ci_runs"
+            if ! jq -e --arg sha "$main_commit" \
+              'any(.workflow_runs[]; .head_sha == $sha and .conclusion == "success")' \
+              "$recovery_ci_runs" >/dev/null; then
+              echo "resume workflow commit has no completed successful main CI run: $main_commit" >&2
+              rm -f "$recovery_ci_runs"
+              exit 1
+            fi
+            rm -f "$recovery_ci_runs"
           fi
 
           ci_runs=$(mktemp)
@@ -100,82 +223,73 @@ jobs:
             rm -f "$ci_runs"
             exit 1
           fi
+          ci_run_id=$(jq -r --arg sha "$tag_commit" '
+            .workflow_runs[] |
+            select(.head_sha == $sha and .conclusion == "success") |
+            .id
+          ' "$ci_runs")
+          case "$ci_run_id" in
+            *[!0-9]*|'') echo "successful CI run ID is invalid" >&2; rm -f "$ci_runs"; exit 1 ;;
+          esac
           rm -f "$ci_runs"
+
+          ci_native_artifact_id=""
+          if [ "$resume" != true ]; then
+            ci_artifacts=$(mktemp)
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run_id}/artifacts" \
+              -f per_page=100 > "$ci_artifacts"
+            native_count=$(jq --arg sha "$tag_commit" --argjson run "$ci_run_id" '[
+              .artifacts[] |
+              select(
+                (.name | startswith("native-linux-x64-attempt-")) and
+                .expired == false and
+                .workflow_run.id == $run and
+                .workflow_run.head_sha == $sha
+              )
+            ] | length' "$ci_artifacts")
+            if [ "$native_count" -lt 1 ]; then
+              echo "successful CI run must contain an unexpired native Linux x64 artifact for $tag_commit" >&2
+              rm -f "$ci_artifacts"
+              exit 1
+            fi
+            ci_native_artifact_id=$(jq -r --arg sha "$tag_commit" --argjson run "$ci_run_id" '
+              [
+                .artifacts[] |
+                select(
+                  (.name | startswith("native-linux-x64-attempt-")) and
+                  .expired == false and
+                  .workflow_run.id == $run and
+                  .workflow_run.head_sha == $sha
+                )
+              ] |
+              max_by(.id) |
+              .id
+            ' "$ci_artifacts")
+            case "$ci_native_artifact_id" in
+              *[!0-9]*|'') echo "CI native artifact ID is invalid" >&2; rm -f "$ci_artifacts"; exit 1 ;;
+            esac
+            rm -f "$ci_artifacts"
+          fi
 
           {
             echo "tag=$RELEASE_TAG"
             echo "version=$version"
             echo "commit=$tag_commit"
+            echo "resume=$resume"
+            echo "resume_artifact_id=$resume_artifact_id"
+            echo "ci_run_id=$ci_run_id"
+            echo "ci_native_artifact_id=$ci_native_artifact_id"
           } >> "$GITHUB_OUTPUT"
           echo "release $RELEASE_TAG ($version) at $tag_commit"
 
-  quality-gate:
-    name: Required release quality gate
-    needs: version-check
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.version-check.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - run: npm install --global "npm@${NPM_VERSION}" "@yarnpkg/cli-dist@${YARN_VERSION}"
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          install: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, nightly-2026-09-04 for branch coverage
-        with:
-          toolchain: ${{ env.RUST_COVERAGE_TOOLCHAIN }}
-          components: llvm-tools-preview
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy, llvm-tools-preview
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --all-targets --all-features --locked
-      - name: RustSec dependency audit
-        run: scripts/dependency-audit.sh
-      - run: cargo build --locked --release
-        env:
-          HARDGATE_BUILD_GIT_SHA: ${{ needs.version-check.outputs.commit }}
-      - name: Validate the crates.io package without publishing
-        run: cargo publish --dry-run --locked
-      - run: node scripts/sync-npm-version.mjs --check --tag "${{ needs.version-check.outputs.tag }}"
-      - run: node scripts/check-npm-quality.mjs
-      - run: node tests/npm-wrapper.test.mjs
-        env:
-          HARDGATE_BINARY: target/release/hardgate
-      - run: node tests/npm-wrapper-regression.test.mjs
-        env:
-          HARDGATE_BINARY: target/release/hardgate
-      - run: node tests/consumer_matrix.mjs
-        env:
-          HARDGATE_BINARY: target/release/hardgate
-      - run: node tests/release_contract.test.mjs
-      - run: node tests/release_contract.install.test.mjs
-      - run: node tests/release_contract.package.test.mjs
-      - run: node tests/release_contract.abi.test.mjs
-      - run: node tests/release_contract.sbom.test.mjs
-      - name: Hardgate complete configured self/orchestration/evidence gate
-        run: scripts/self-gate.sh
-
   build:
     name: Build ${{ matrix.target }}
-    needs: [version-check, quality-gate]
+    needs: [version-check]
+    if: needs.version-check.outputs.resume != 'true'
     strategy:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             musl: true
@@ -237,11 +351,26 @@ jobs:
           name: binary-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/hardgate
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
   package:
     name: Package and verify release artifacts
-    needs: [version-check, quality-gate, build]
+    needs: [version-check, build]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        (
+          (
+            needs.version-check.outputs.resume == 'true' &&
+            needs.build.result == 'skipped'
+          ) ||
+          (
+            needs.version-check.outputs.resume != 'true' &&
+            needs.build.result == 'success'
+          )
+        )
+      }}
     runs-on: ubuntu-24.04
     outputs:
       bundle_artifact_id: ${{ steps.upload_bundle.outputs.artifact-id }}
@@ -254,13 +383,42 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
+      - if: needs.version-check.outputs.resume != 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - if: needs.version-check.outputs.resume != 'true'
+        name: Download the five cross-platform binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          pattern: binary-*
           path: build-binaries
-      - name: Create deterministic archives and SBOM
+          digest-mismatch: error
+      - if: needs.version-check.outputs.resume != 'true'
+        name: Download the native binary verified by main CI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.version-check.outputs.ci_native_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.version-check.outputs.ci_run_id }}
+          path: build-binaries/binary-x86_64-unknown-linux-gnu
+          digest-mismatch: error
+      - if: needs.version-check.outputs.resume != 'true'
+        name: Restore the native binary executable mode
+        run: chmod 755 build-binaries/binary-x86_64-unknown-linux-gnu/hardgate
+      - if: needs.version-check.outputs.resume == 'true'
+        name: Download the previously verified release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.version-check.outputs.resume_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+          path: dist
+          digest-mismatch: error
+      - if: needs.version-check.outputs.resume != 'true'
+        name: Create deterministic archives and SBOM
         env:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
@@ -280,8 +438,10 @@ jobs:
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
-      # Recovery must use "Re-run failed jobs" so this successful immutable
-      # checkpoint and the six build artifacts remain available in the run.
+      # Use "Re-run failed jobs" for ordinary recovery so this immutable
+      # checkpoint remains available. If the workflow definition itself needs
+      # repair, dispatch the fixed workflow with the failed run's
+      # resume_run_id; version-check binds that bundle back to this signed SHA.
       - id: upload_bundle
         name: Upload verified release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -289,7 +449,7 @@ jobs:
           name: release-bundle
           path: dist/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
   attest:
     name: Attest verified release artifacts
@@ -340,7 +500,7 @@ jobs:
 
   publication-preflight:
     name: Validate publication prerequisites
-    needs: [version-check, quality-gate]
+    needs: [version-check]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -350,8 +510,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
       - run: npm install --global "npm@${NPM_VERSION}"
-      # Cargo has no non-mutating remote credential check. The quality gate's
-      # dry run validates the package; the single publish job performs auth.
+      # Cargo has no non-mutating remote credential check. Main CI's dry run
+      # validates the package; the single publish job performs authentication.
       - name: Require the crates.io publication credential
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -376,7 +536,7 @@ jobs:
 
   github-release:
     name: Publish verified GitHub Release
-    needs: [version-check, quality-gate, package, attest, publication-preflight]
+    needs: [version-check, package, attest, publication-preflight]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -479,7 +639,7 @@ jobs:
 
   publish-crates:
     name: Publish verified crate
-    needs: [version-check, quality-gate, package, github-release]
+    needs: [version-check, package, github-release]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -508,7 +668,7 @@ jobs:
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
           crate_probe() {
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
+            status=$(curl --location --silent --show-error --user-agent "$HARDGATE_CRATES_IO_USER_AGENT" --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
               rm -f "$body"
               return 2
             }
@@ -579,10 +739,14 @@ jobs:
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
+          # crates.io permits at most one API request per second. The publish
+          # path naturally exceeds this; the already-published path needs an
+          # explicit gap between its state and identity probes.
+          sleep 1
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
           crate_probe() {
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
+            status=$(curl --location --silent --show-error --user-agent "$HARDGATE_CRATES_IO_USER_AGENT" --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
               rm -f "$body"
               return 2
             }
@@ -642,7 +806,7 @@ jobs:
 
   publish-npm:
     name: Publish platform packages, then wrapper
-    needs: [version-check, quality-gate, package, github-release, publish-crates]
+    needs: [version-check, package, github-release, publish-crates]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1013,7 +1177,7 @@ jobs:
           crate_probe() {
             api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
+            status=$(curl --location --silent --show-error --user-agent "$HARDGATE_CRATES_IO_USER_AGENT" --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
               rm -f "$body"
               return 2
             }

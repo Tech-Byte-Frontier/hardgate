@@ -28,6 +28,8 @@ assertWorkflowIncludes(
   "CI",
   `
 actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
 dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
 pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b
 oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -35,6 +37,7 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
 scripts/dependency-audit.sh
+cargo publish --dry-run --locked
 scripts/self-gate.sh
 CARGO_AUDIT_VERSION: 0.22.2
 CARGO_LLVM_COV_VERSION: 0.9.0
@@ -44,6 +47,12 @@ NPM_VERSION: 12.0.2
 PNPM_VERSION: 11.25.0
 YARN_VERSION: 4.18.0
 BUN_VERSION: 1.4.0
+actions: read
+native_artifact_id
+artifact-ids: \${{ needs.rust.outputs.native_artifact_id }}
+digest-mismatch: error
+SOURCE_DATE_EPOCH: 0
+retention-days: 30
 components: rustfmt, clippy, llvm-tools-preview
 node scripts/check-npm-quality.mjs
 node tests/npm-wrapper.test.mjs
@@ -69,27 +78,11 @@ oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
 actions: read
 group: hardgate-release
-CARGO_AUDIT_VERSION: 0.22.2
-CARGO_LLVM_COV_VERSION: 0.9.0
 NODE_VERSION: 26.8.1
 NPM_VERSION: 12.0.2
 PNPM_VERSION: 11.25.0
 YARN_VERSION: 4.18.0
 BUN_VERSION: 1.4.0
-cargo fmt --all --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-targets --all-features --locked
-scripts/dependency-audit.sh
-scripts/self-gate.sh
-node scripts/check-npm-quality.mjs
-RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
-node tests/npm-wrapper.test.mjs
-node tests/npm-wrapper-regression.test.mjs
-node tests/release_contract.install.test.mjs
-node tests/release_contract.package.test.mjs
-node tests/release_contract.abi.test.mjs
-node tests/consumer_matrix.mjs
-HARDGATE_BINARY: target/release/hardgate
 git cat-file -t "$RELEASE_TAG"
 gpg.ssh.allowedSignersFile=.github/release-allowed-signers
 verify-tag "$RELEASE_TAG"
@@ -108,10 +101,9 @@ scripts/release-sbom.mjs
 scripts/release-sbom-verify.mjs
 scripts/sync-npm-version.mjs --check --tag
 cargo publish --locked
-cargo publish --dry-run --locked
 publication-preflight:
 npm whoami --registry=https://registry.npmjs.org
-needs: [version-check, quality-gate, package, attest, publication-preflight]
+needs: [version-check, package, attest, publication-preflight]
 https://crates.io/api/v1/crates/hardgate/
 version"]["num
 actions/attest
@@ -151,6 +143,17 @@ HARDGATE_CURL_CONNECT_TIMEOUT: 10
 HARDGATE_CURL_MAX_TIME: 20
 HARDGATE_REGISTRY_ATTEMPTS: 10
 HARDGATE_REGISTRY_DELAY: 10
+HARDGATE_CRATES_IO_USER_AGENT: "hardgate-release (https://github.com/Tech-Byte-Frontier/hardgate)"
+--user-agent "$HARDGATE_CRATES_IO_USER_AGENT"
+resume_run_id:
+resume_artifact_id
+Download the previously verified release bundle
+run-id: \${{ inputs.resume_run_id }}
+pattern: binary-*
+ci_native_artifact_id
+ci_run_id
+native-linux-x64-attempt-
+retention-days: 30
 release_error=$(mktemp)
 release_exists=0
 unable to determine whether GitHub release
@@ -167,15 +170,26 @@ wait_for_latest_tag()
 
 const ciSelfGate = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
 const ciNpmWrapper = ci.slice(ci.indexOf("  npm-wrapper:"), ci.indexOf("  hardgate-self:"));
-const releaseQualityGate = release.slice(release.indexOf("  quality-gate:"), release.indexOf("  build:"));
+const ciRust = ci.slice(ci.indexOf("  rust:"), ci.indexOf("  npm-wrapper:"));
 assert.match(ciNpmWrapper, /node tests\/release_contract\.sbom\.test\.mjs/, "SBOM runtime contract must reuse the CI job with pinned Node and Cargo");
-const crateDryRunStep = releaseQualityGate.slice(
-  releaseQualityGate.indexOf("- name: Validate the crates.io package without publishing"),
-  releaseQualityGate.indexOf("- run: node scripts/sync-npm-version.mjs"),
+assert.match(ciRust, /cargo build --locked --release/, "CI must build the shared native release binary once");
+assert.equal((ci.match(/cargo build --locked --release/g) ?? []).length, 1, "CI must not duplicate the native release build across jobs");
+assert.equal((release.match(/cargo build --locked --release/g) ?? []).length, 1, "release must contain only the five-target matrix build command");
+assert.match(ciRust, /native_artifact_id:[\s\S]*?steps\.upload_native\.outputs\.artifact-id/, "CI must expose the exact shared binary artifact ID");
+const crateDryRunStep = ciRust.slice(
+  ciRust.indexOf("- name: Validate the crates.io package without publishing"),
+  ciRust.indexOf("- name: Build the shared native release binary"),
 );
-assert.match(crateDryRunStep, /cargo publish --dry-run --locked/, "release quality must validate the packaged crate");
+assert.match(crateDryRunStep, /cargo publish --dry-run --locked/, "main CI must validate the packaged crate before release promotion");
 assert.doesNotMatch(crateDryRunStep, /CARGO_REGISTRY_TOKEN|NODE_AUTH_TOKEN/, "package dry run must not expose publication credentials to build scripts");
-for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release quality-gate", releaseQualityGate]]) {
+for (const [label, section] of [["CI npm-wrapper", ciNpmWrapper], ["CI hardgate-self", ciSelfGate]]) {
+  assert.match(section, /needs: rust/, `${label} must wait for the shared native binary`);
+  assert.match(section, /artifact-ids: \$\{\{ needs\.rust\.outputs\.native_artifact_id \}\}/, `${label} must download the shared binary by artifact ID`);
+  assert.match(section, /digest-mismatch: error/, `${label} must enforce the artifact digest`);
+  assert.match(section, /chmod 755 target\/release\/hardgate/, `${label} must restore the executable mode`);
+  assert.doesNotMatch(section, /cargo build --locked --release/, `${label} must not rebuild the shared native binary`);
+}
+for (const [label, section] of [["CI hardgate-self", ciSelfGate]]) {
   const coverageToolchain = section.indexOf("toolchain: ${{ env.RUST_COVERAGE_TOOLCHAIN }}");
   const stableToolchain = section.indexOf("toolchain: ${{ env.RUST_TOOLCHAIN }}");
   assert.ok(coverageToolchain >= 0, `${label} must install the pinned coverage toolchain`);
@@ -186,9 +200,34 @@ for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release qual
     `${label} coverage toolchain must include llvm-tools-preview`,
   );
 }
+for (const duplicateQualityCommand of [
+  "cargo fmt --all --check",
+  "cargo clippy --all-targets --all-features --locked -- -D warnings",
+  "cargo test --all-targets --all-features --locked",
+  "scripts/dependency-audit.sh",
+  "scripts/self-gate.sh",
+]) {
+  assert.ok(!release.includes(duplicateQualityCommand), `release must trust exact successful CI evidence instead of rerunning ${duplicateQualityCommand}`);
+}
 
 assert.doesNotMatch(release, /--clobber|overwrite:\s*true/, "immutable release assets and workflow artifacts must never be overwritten in place");
-assert.match(release, /Recovery must use "Re-run failed jobs"/, "release recovery must document the artifact-safe rerun mode");
+assert.match(release, /Use "Re-run failed jobs" for ordinary recovery/, "release recovery must document the artifact-safe rerun mode");
+assert.match(release, /workflow definition itself needs[\s\S]*?resume_run_id/, "release recovery must document verified cross-run bundle reuse");
+const cratesApiCurlLines = release
+  .split("\n")
+  .filter((line) => line.includes("status=$(curl") && line.includes('"$api"'));
+assert.equal(cratesApiCurlLines.length, 3, "release must have exactly three crates.io API probes");
+for (const line of cratesApiCurlLines) {
+  assert.ok(
+    line.includes('--user-agent "$HARDGATE_CRATES_IO_USER_AGENT"'),
+    `crates.io API probe lacks the required descriptive User-Agent: ${line.trim()}`,
+  );
+}
+assert.match(
+  release,
+  /HARDGATE_CRATES_IO_USER_AGENT:\s*"hardgate-release \(https:\/\/github\.com\/Tech-Byte-Frontier\/hardgate\)"/,
+  "crates.io User-Agent must identify Hardgate and provide a project contact URL",
+);
 assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
 assert.doesNotMatch(release, /https:\/\/crates\.io\/api\/v1\/me/, "crates.io /api/v1/me is cookie-only and cannot validate a publish token");
 assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");
@@ -199,6 +238,7 @@ const registryDelay = Number(release.match(/HARDGATE_REGISTRY_DELAY:\s*(\d+)/)?.
 const curlMaxTime = Number(release.match(/HARDGATE_CURL_MAX_TIME:\s*(\d+)/)?.[1]);
 assert.ok(Number.isInteger(registryAttempts) && Number.isInteger(registryDelay) && Number.isInteger(curlMaxTime));
 assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDelay <= 300, "each registry wait must fit within five minutes");
+assert.match(release, /already-published path needs an[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
 assert.doesNotMatch(
   launcher,

@@ -28,17 +28,18 @@ assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/,
 const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
 const publishCratesJob = release.slice(release.indexOf("  publish-crates:"), release.indexOf("  publish-npm:"));
 const publishNpmJob = release.slice(release.indexOf("  publish-npm:"), release.indexOf("  verify-channels:"));
-const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  quality-gate:"));
+const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  build:"));
 includesAll(
   versionCheckJob,
   [
     "GH_TOKEN: ${{ github.token }}",
     "RUN_ATTEMPT: ${{ github.run_attempt }}",
+    "RESUME_RUN_ID: ${{ inputs.resume_run_id }}",
     'verify-tag "$RELEASE_TAG"',
     "refs/remotes/origin/main",
-    'if [ "$RUN_ATTEMPT" -le 1 ]',
+    'if [ "$resume" != true ] && [ "$RUN_ATTEMPT" -le 1 ]',
     'git merge-base --is-ancestor "$tag_commit" "$main_commit"',
-    "is recovering signed release",
+    "recovering signed release",
     "actions/workflows/ci.yml/runs",
     "-X GET",
     "-f branch=main",
@@ -47,13 +48,30 @@ includesAll(
     '-f head_sha="$tag_commit"',
     "-f per_page=1",
     "release commit has no completed successful main CI run",
+    'if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_SHA" != "$main_commit" ]',
+    "resume workflow commit has no completed successful main CI run",
+    'startswith("native-linux-x64-attempt-")',
+    "max_by(.id)",
+    "ci_native_artifact_id",
+    "ci_run_id",
+    'if [ "$EVENT_NAME" != workflow_dispatch ]',
+    'if [ "$RESUME_RUN_ID" = "$CURRENT_RUN_ID" ]',
+    '(.path | split("@")[0]) == ".github/workflows/release.yml"',
+    '.event == "push"',
+    '.conclusion == "failure"',
+    '"Package and verify release artifacts"',
+    '.name == "release-bundle"',
+    '.expired == false',
+    ".workflow_run.head_sha == $sha",
+    ".workflow_run.id == $run",
+    "resume_artifact_id",
   ],
-  "signed main-tip release precondition",
+  "signed main-tip and artifact-bound resume precondition",
 );
 assert.match(
   versionCheckJob,
-  /if \[ "\$tag_commit" != "\$main_commit" \]; then\s+if \[ "\$RUN_ATTEMPT" -le 1 \] \|\| ! git merge-base --is-ancestor "\$tag_commit" "\$main_commit"; then/,
-  "only an ancestor-tag rerun may recover after main advances",
+  /if \[ "\$tag_commit" != "\$main_commit" \]; then\s+if ! git merge-base --is-ancestor "\$tag_commit" "\$main_commit"; then[\s\S]*?if \[ "\$resume" != true \] && \[ "\$RUN_ATTEMPT" -le 1 \]; then/,
+  "only a verified bundle resume or an ancestor-tag rerun may recover after main advances",
 );
 const versionPreconditionOrder = [
   'verify-tag "$RELEASE_TAG"',
@@ -86,7 +104,7 @@ const publicationPreflightJob = release.slice(
 includesAll(
   publicationPreflightJob,
   [
-    "needs: [version-check, quality-gate]",
+    "needs: [version-check]",
     "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}",
     "CARGO_REGISTRY_TOKEN is required for crates.io publication",
     "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}",
@@ -96,7 +114,7 @@ includesAll(
 );
 assert.match(
   githubReleaseJob,
-  /needs: \[version-check, quality-gate, package, attest, publication-preflight\]/,
+  /needs: \[version-check, package, attest, publication-preflight\]/,
   "GitHub publication must wait for attestation and registry preflight",
 );
 for (const [label, job] of [
