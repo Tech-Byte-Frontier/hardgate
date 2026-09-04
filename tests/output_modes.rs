@@ -20,6 +20,7 @@ fn report_with_violations() -> GateReport {
         lines_b: (3, 10),
         tokens: 60,
         lines: 8,
+        fingerprint: "fixture-fingerprint".to_string(),
         message: "clone".to_string(),
         recommendation: "Extract helper.".to_string(),
     });
@@ -71,6 +72,10 @@ fn test_json_embeds_summary_and_top_files() {
     assert_eq!(parsed["summary"]["ast_violations"], 1);
     assert!(parsed["top_files"].as_array().unwrap().len() >= 2);
     assert_eq!(parsed["clone_violations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        parsed["clone_violations"][0]["fingerprint"],
+        "fixture-fingerprint"
+    );
 }
 
 #[test]

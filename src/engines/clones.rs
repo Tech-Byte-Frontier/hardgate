@@ -3,8 +3,9 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
+mod fingerprint;
 mod tokenizer;
+use fingerprint::{clone_fingerprint, hash_token};
 use tokenizer::{Token, tokenize};
 
 /// One duplicated block shared between two locations, with span sizes.
@@ -16,6 +17,10 @@ pub struct CloneViolation {
     pub lines_b: (usize, usize),
     pub tokens: usize,
     pub lines: usize,
+    /// Stable FNV-1a fingerprint of the canonical file pair and normalized
+    /// clone tokens. It intentionally excludes physical line locations.
+    #[serde(default)]
+    pub fingerprint: String,
     pub message: String,
     pub recommendation: String,
 }
@@ -33,11 +38,13 @@ struct TokenLocation {
 #[derive(Debug, Clone)]
 struct RawCloneMatch {
     file_a: PathBuf,
+    stream_idx_a: usize,
     start_a: usize,
     end_a: usize,
     start_idx_a: usize,
     end_idx_a: usize,
     file_b: PathBuf,
+    stream_idx_b: usize,
     start_b: usize,
     end_b: usize,
     start_idx_b: usize,
@@ -137,7 +144,6 @@ impl CloneDetector {
                 Some((rel_path.to_path_buf(), tokenize(content)))
             })
             .collect();
-
         for (stream_idx, (rel_path, tokens)) in token_streams.iter().enumerate() {
             let mut state = CloneIndexState {
                 window_map: &mut window_map,
@@ -156,8 +162,7 @@ impl CloneDetector {
                 break;
             }
         }
-
-        coalesce_matches(raw_matches, self.min_tokens, self.min_lines)
+        coalesce_matches(raw_matches, self.min_tokens, self.min_lines, &token_streams)
     }
 
     fn index_file_windows(&self, input: FileWindowInput<'_>, state: &mut CloneIndexState) {
@@ -170,17 +175,14 @@ impl CloneDetector {
         if tokens.len() < self.min_tokens {
             return;
         }
-
         const BASE: u64 = 31337;
         let mut rolling_hash = init_rolling_hash(&tokens[..self.min_tokens], BASE);
         let pow_base = calc_pow_base(self.min_tokens - 1, BASE);
-
         let mut i = 0;
         loop {
             let start_line = tokens[i].line;
             let end_line = tokens[i + self.min_tokens - 1].line;
             let line_span = end_line.saturating_sub(start_line) + 1;
-
             if line_span >= self.min_lines {
                 let loc = TokenLocation {
                     file: rel_path.to_path_buf(),
@@ -200,11 +202,9 @@ impl CloneDetector {
                     return;
                 }
             }
-
             if i + self.min_tokens >= tokens.len() {
                 break;
             }
-
             let old_token_hash = hash_token(&tokens[i].kind);
             let new_token_hash = hash_token(&tokens[i + self.min_tokens].kind);
             rolling_hash = rolling_hash
@@ -253,8 +253,8 @@ fn compare_existing_windows(
 ) {
     for previous in existing {
         let same_file = previous.file == check.location.file;
-        let too_close =
-            same_file && (check.location.start_line <= previous.end_line + check.min_lines);
+        let too_close = same_file
+            && (check.location.start_line <= previous.end_line.saturating_add(check.min_lines));
         if !too_close && token_sequences_match(previous, check.location, check.token_streams) {
             raw_matches.push(raw_clone_match(previous, check.location));
             if raw_matches.len() >= MAX_RAW_MATCHES {
@@ -265,52 +265,55 @@ fn compare_existing_windows(
 }
 
 fn raw_clone_match(previous: &TokenLocation, location: &TokenLocation) -> RawCloneMatch {
+    let (a, b) = if location_ordering(previous, location).is_le() {
+        (previous, location)
+    } else {
+        (location, previous)
+    };
     RawCloneMatch {
-        file_a: previous.file.clone(),
-        start_a: previous.start_line,
-        end_a: previous.end_line,
-        start_idx_a: previous.start_idx,
-        end_idx_a: previous.end_idx,
-        file_b: location.file.clone(),
-        start_b: location.start_line,
-        end_b: location.end_line,
-        start_idx_b: location.start_idx,
-        end_idx_b: location.end_idx,
+        file_a: a.file.clone(),
+        stream_idx_a: a.stream_idx,
+        start_a: a.start_line,
+        end_a: a.end_line,
+        start_idx_a: a.start_idx,
+        end_idx_a: a.end_idx,
+        file_b: b.file.clone(),
+        stream_idx_b: b.stream_idx,
+        start_b: b.start_line,
+        end_b: b.end_line,
+        start_idx_b: b.start_idx,
+        end_idx_b: b.end_idx,
     }
 }
-
+fn location_ordering(left: &TokenLocation, right: &TokenLocation) -> std::cmp::Ordering {
+    left.file
+        .cmp(&right.file)
+        .then(left.stream_idx.cmp(&right.stream_idx))
+        .then(left.start_idx.cmp(&right.start_idx))
+}
 fn token_sequences_match(
     left: &TokenLocation,
     right: &TokenLocation,
     streams: &[(PathBuf, Vec<Token>)],
 ) -> bool {
-    let Some((_, left_tokens)) = streams.get(left.stream_idx) else {
-        return false;
-    };
-    let Some((_, right_tokens)) = streams.get(right.stream_idx) else {
-        return false;
-    };
-    let Some(left_slice) = left_tokens.get(left.start_idx..=left.end_idx) else {
-        return false;
-    };
-    let Some(right_slice) = right_tokens.get(right.start_idx..=right.end_idx) else {
-        return false;
-    };
-    left_slice
-        .iter()
-        .map(|token| token.kind.as_str())
-        .eq(right_slice.iter().map(|token| token.kind.as_str()))
+    token_slice(left.stream_idx, left.start_idx, left.end_idx, streams)
+        .zip(token_slice(
+            right.stream_idx,
+            right.start_idx,
+            right.end_idx,
+            streams,
+        ))
+        .is_some_and(|(left, right)| token_kinds_match(left, right))
 }
-
 fn coalesce_matches(
     mut matches: Vec<RawCloneMatch>,
     min_tokens: usize,
     min_lines: usize,
+    token_streams: &[(PathBuf, Vec<Token>)],
 ) -> Vec<CloneViolation> {
     if matches.is_empty() {
         return Vec::new();
     }
-
     matches.sort_by(|a, b| {
         a.file_a
             .cmp(&b.file_a)
@@ -318,40 +321,63 @@ fn coalesce_matches(
             .then(a.start_a.cmp(&b.start_a))
             .then(a.start_b.cmp(&b.start_b))
     });
-
     let mut coalesced: Vec<RawCloneMatch> = Vec::new();
     for m in matches {
         let mut merged = false;
         if let Some(last) = coalesced.last_mut() {
-            if last.file_a == m.file_a
-                && last.file_b == m.file_b
-                && m.start_a <= last.end_a + 2
-                && m.start_b <= last.end_b + 2
-            {
-                last.end_a = last.end_a.max(m.end_a);
-                last.end_b = last.end_b.max(m.end_b);
-                last.end_idx_a = last.end_idx_a.max(m.end_idx_a);
-                last.end_idx_b = last.end_idx_b.max(m.end_idx_b);
-                last.start_idx_a = last.start_idx_a.min(m.start_idx_a);
-                last.start_idx_b = last.start_idx_b.min(m.start_idx_b);
+            let same_pair = last.file_a == m.file_a && last.file_b == m.file_b;
+            if matches_can_merge(last, &m, same_pair, token_streams) {
+                merge_match(last, &m);
                 merged = true;
+            } else if same_pair && ranges_overlap(last, &m) {
+                // Repeated token streams generate cross-product windows.
+                // Drop overlapping alignments rather than extending one side
+                // with an unverified sequence.
+                continue;
             }
         }
         if !merged {
             coalesced.push(m);
         }
     }
-
     coalesced
         .into_iter()
-        .filter_map(|c| build_violation(c, min_tokens, min_lines))
+        .filter_map(|c| build_violation(c, min_tokens, min_lines, token_streams))
         .collect()
 }
-
+fn ranges_overlap(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
+    let overlap_a = right.start_idx_a <= left.end_idx_a && right.end_idx_a >= left.start_idx_a;
+    let overlap_b = right.start_idx_b <= left.end_idx_b && right.end_idx_b >= left.start_idx_b;
+    overlap_a || overlap_b
+}
+fn matches_can_merge(
+    left: &RawCloneMatch,
+    right: &RawCloneMatch,
+    same_pair: bool,
+    streams: &[(PathBuf, Vec<Token>)],
+) -> bool {
+    same_pair
+        && left.stream_idx_a == right.stream_idx_a
+        && left.stream_idx_b == right.stream_idx_b
+        && right.start_a <= left.end_a.saturating_add(2)
+        && right.start_b <= left.end_b.saturating_add(2)
+        && right.start_idx_a <= left.end_idx_a.saturating_add(1)
+        && right.start_idx_b <= left.end_idx_b.saturating_add(1)
+        && merged_ranges_match(left, right, streams)
+}
+fn merge_match(left: &mut RawCloneMatch, right: &RawCloneMatch) {
+    left.end_a = left.end_a.max(right.end_a);
+    left.end_b = left.end_b.max(right.end_b);
+    left.end_idx_a = left.end_idx_a.max(right.end_idx_a);
+    left.end_idx_b = left.end_idx_b.max(right.end_idx_b);
+    left.start_idx_a = left.start_idx_a.min(right.start_idx_a);
+    left.start_idx_b = left.start_idx_b.min(right.start_idx_b);
+}
 fn build_violation(
     c: RawCloneMatch,
     min_tokens: usize,
     min_lines: usize,
+    token_streams: &[(PathBuf, Vec<Token>)],
 ) -> Option<CloneViolation> {
     let span_a = c.end_a.saturating_sub(c.start_a) + 1;
     let span_b = c.end_b.saturating_sub(c.start_b) + 1;
@@ -359,15 +385,16 @@ fn build_violation(
     if span < min_lines {
         return None;
     }
-    // Actual token span of the merged clone (windows overlap by min_tokens-1,
-    // so merged length = max_end - min_start + 1), not the config threshold.
-    let tokens_a = c.end_idx_a.saturating_sub(c.start_idx_a) + 1;
-    let tokens_b = c.end_idx_b.saturating_sub(c.start_idx_b) + 1;
-    let actual_tokens = tokens_a.max(tokens_b);
+    let tokens_a = token_slice(c.stream_idx_a, c.start_idx_a, c.end_idx_a, token_streams)?;
+    let tokens_b = token_slice(c.stream_idx_b, c.start_idx_b, c.end_idx_b, token_streams)?;
+    if !token_kinds_match(tokens_a, tokens_b) {
+        return None;
+    }
+    // Actual token span of the merged clone, not the config threshold.
+    let actual_tokens = tokens_a.len();
     if actual_tokens < min_tokens {
         return None;
     }
-
     Some(CloneViolation {
         file_a: c.file_a.clone(),
         lines_a: (c.start_a, c.end_a),
@@ -375,6 +402,7 @@ fn build_violation(
         lines_b: (c.start_b, c.end_b),
         tokens: actual_tokens,
         lines: span,
+        fingerprint: clone_fingerprint(&c.file_a, &c.file_b, tokens_a),
         message: format!(
             "Duplicate code clone ({} lines, ~{} tokens) between `{}:{}-{}` and `{}:{}-{}`",
             span,
@@ -393,12 +421,35 @@ fn build_violation(
         ),
     })
 }
-
-fn hash_token(kind: &str) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for byte in kind.as_bytes() {
-        h ^= *byte as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+fn merged_ranges_match(
+    left: &RawCloneMatch,
+    right: &RawCloneMatch,
+    token_streams: &[(PathBuf, Vec<Token>)],
+) -> bool {
+    token_slice(
+        left.stream_idx_a,
+        left.start_idx_a.min(right.start_idx_a),
+        left.end_idx_a.max(right.end_idx_a),
+        token_streams,
+    )
+    .zip(token_slice(
+        left.stream_idx_b,
+        left.start_idx_b.min(right.start_idx_b),
+        left.end_idx_b.max(right.end_idx_b),
+        token_streams,
+    ))
+    .is_some_and(|(left, right)| token_kinds_match(left, right))
+}
+fn token_slice(
+    stream_idx: usize,
+    start_idx: usize,
+    end_idx: usize,
+    streams: &[(PathBuf, Vec<Token>)],
+) -> Option<&[Token]> {
+    streams.get(stream_idx)?.1.get(start_idx..=end_idx)
+}
+fn token_kinds_match(left: &[Token], right: &[Token]) -> bool {
+    left.iter()
+        .map(|token| token.kind.as_str())
+        .eq(right.iter().map(|token| token.kind.as_str()))
 }
