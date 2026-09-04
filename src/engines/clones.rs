@@ -1,9 +1,11 @@
 use crate::config::CloneConfig;
-use crate::engines::util::strip_slash_comment;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+mod tokenizer;
+use tokenizer::{Token, tokenize};
 
 /// One duplicated block shared between two locations, with span sizes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,12 +31,6 @@ struct TokenLocation {
 }
 
 #[derive(Debug, Clone)]
-struct Token {
-    kind: String,
-    line: usize,
-}
-
-#[derive(Debug, Clone)]
 struct RawCloneMatch {
     file_a: PathBuf,
     start_a: usize,
@@ -51,6 +47,20 @@ struct RawCloneMatch {
 struct CloneIndexState<'a> {
     window_map: &'a mut HashMap<u64, Vec<TokenLocation>>,
     raw_matches: &'a mut Vec<RawCloneMatch>,
+}
+
+struct FileWindowInput<'a> {
+    tokens: &'a [Token],
+    rel_path: &'a Path,
+    stream_idx: usize,
+    token_streams: &'a [(PathBuf, Vec<Token>)],
+}
+
+struct WindowCheck<'a> {
+    location: &'a TokenLocation,
+    hash: u64,
+    min_lines: usize,
+    token_streams: &'a [(PathBuf, Vec<Token>)],
 }
 
 // Repeated generated constructs can create O(n^2) comparisons for one hash.
@@ -133,7 +143,15 @@ impl CloneDetector {
                 window_map: &mut window_map,
                 raw_matches: &mut raw_matches,
             };
-            self.index_file_windows(tokens, rel_path, stream_idx, &token_streams, &mut state);
+            self.index_file_windows(
+                FileWindowInput {
+                    tokens,
+                    rel_path,
+                    stream_idx,
+                    token_streams: &token_streams,
+                },
+                &mut state,
+            );
             if raw_matches.len() >= MAX_RAW_MATCHES {
                 break;
             }
@@ -142,14 +160,13 @@ impl CloneDetector {
         coalesce_matches(raw_matches, self.min_tokens, self.min_lines)
     }
 
-    fn index_file_windows(
-        &self,
-        tokens: &[Token],
-        rel_path: &Path,
-        stream_idx: usize,
-        token_streams: &[(PathBuf, Vec<Token>)],
-        state: &mut CloneIndexState,
-    ) {
+    fn index_file_windows(&self, input: FileWindowInput<'_>, state: &mut CloneIndexState) {
+        let FileWindowInput {
+            tokens,
+            rel_path,
+            stream_idx,
+            token_streams,
+        } = input;
         if tokens.len() < self.min_tokens {
             return;
         }
@@ -173,7 +190,12 @@ impl CloneDetector {
                     start_idx: i,
                     end_idx: i + self.min_tokens - 1,
                 };
-                check_and_record_window(&loc, rolling_hash, self.min_lines, token_streams, state);
+                state.check_and_record(WindowCheck {
+                    location: &loc,
+                    hash: rolling_hash,
+                    min_lines: self.min_lines,
+                    token_streams,
+                });
                 if state.raw_matches.len() >= MAX_RAW_MATCHES {
                     return;
                 }
@@ -194,6 +216,20 @@ impl CloneDetector {
     }
 }
 
+impl CloneIndexState<'_> {
+    fn check_and_record(&mut self, check: WindowCheck<'_>) {
+        if let Some(existing) = self.window_map.get_mut(&check.hash) {
+            compare_existing_windows(existing, &check, self.raw_matches);
+            if existing.len() < MAX_WINDOWS_PER_HASH {
+                existing.push(check.location.clone());
+            }
+        } else {
+            self.window_map
+                .insert(check.hash, vec![check.location.clone()]);
+        }
+    }
+}
+
 fn init_rolling_hash(slice: &[Token], base: u64) -> u64 {
     let mut h = 0u64;
     for t in slice {
@@ -210,40 +246,36 @@ fn calc_pow_base(exp: usize, base: u64) -> u64 {
     p
 }
 
-fn check_and_record_window(
-    loc: &TokenLocation,
-    hash: u64,
-    min_lines: usize,
-    token_streams: &[(PathBuf, Vec<Token>)],
-    state: &mut CloneIndexState,
+fn compare_existing_windows(
+    existing: &[TokenLocation],
+    check: &WindowCheck<'_>,
+    raw_matches: &mut Vec<RawCloneMatch>,
 ) {
-    if let Some(existing) = state.window_map.get_mut(&hash) {
-        for prev in existing.iter() {
-            let same_file = prev.file == loc.file;
-            let too_close = same_file && (loc.start_line <= prev.end_line + min_lines);
-            if !too_close && token_sequences_match(prev, loc, token_streams) {
-                state.raw_matches.push(RawCloneMatch {
-                    file_a: prev.file.clone(),
-                    start_a: prev.start_line,
-                    end_a: prev.end_line,
-                    start_idx_a: prev.start_idx,
-                    end_idx_a: prev.end_idx,
-                    file_b: loc.file.clone(),
-                    start_b: loc.start_line,
-                    end_b: loc.end_line,
-                    start_idx_b: loc.start_idx,
-                    end_idx_b: loc.end_idx,
-                });
-                if state.raw_matches.len() >= MAX_RAW_MATCHES {
-                    return;
-                }
+    for previous in existing {
+        let same_file = previous.file == check.location.file;
+        let too_close =
+            same_file && (check.location.start_line <= previous.end_line + check.min_lines);
+        if !too_close && token_sequences_match(previous, check.location, check.token_streams) {
+            raw_matches.push(raw_clone_match(previous, check.location));
+            if raw_matches.len() >= MAX_RAW_MATCHES {
+                return;
             }
         }
-        if existing.len() < MAX_WINDOWS_PER_HASH {
-            existing.push(loc.clone());
-        }
-    } else {
-        state.window_map.insert(hash, vec![loc.clone()]);
+    }
+}
+
+fn raw_clone_match(previous: &TokenLocation, location: &TokenLocation) -> RawCloneMatch {
+    RawCloneMatch {
+        file_a: previous.file.clone(),
+        start_a: previous.start_line,
+        end_a: previous.end_line,
+        start_idx_a: previous.start_idx,
+        end_idx_a: previous.end_idx,
+        file_b: location.file.clone(),
+        start_b: location.start_line,
+        end_b: location.end_line,
+        start_idx_b: location.start_idx,
+        end_idx_b: location.end_idx,
     }
 }
 
@@ -369,103 +401,4 @@ fn hash_token(kind: &str) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
-}
-
-fn tokenize(content: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    for (idx, line) in content.lines().enumerate() {
-        let line_num = idx + 1;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || is_comment_start(trimmed) {
-            continue;
-        }
-        // Strip trailing `//` comments outside string literals so inline
-        // comments don't pollute the rolling hash.
-        let code = strip_slash_comment(line);
-        tokenize_line(&code, line_num, &mut tokens);
-    }
-    tokens
-}
-
-fn is_comment_start(trimmed: &str) -> bool {
-    trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("/*")
-}
-
-fn tokenize_line(line: &str, line_num: usize, tokens: &mut Vec<Token>) {
-    let mut chars = line.chars().peekable();
-    while let Some(&c) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-            continue;
-        }
-        dispatch_char_lex(c, &mut chars, line_num, tokens);
-    }
-}
-
-fn dispatch_char_lex(
-    c: char,
-    chars: &mut std::iter::Peekable<std::str::Chars>,
-    line_num: usize,
-    tokens: &mut Vec<Token>,
-) {
-    if c.is_ascii_alphabetic() || c == '_' {
-        let word = lex_word(chars);
-        tokens.push(Token {
-            kind: word,
-            line: line_num,
-        });
-    } else if c.is_ascii_digit() {
-        lex_number(chars);
-        tokens.push(Token {
-            kind: "_LIT_".to_string(),
-            line: line_num,
-        });
-    } else if c == '"' || c == '\'' || c == '`' {
-        lex_string(chars, c);
-        tokens.push(Token {
-            kind: "_STR_".to_string(),
-            line: line_num,
-        });
-    } else {
-        chars.next();
-        tokens.push(Token {
-            kind: c.to_string(),
-            line: line_num,
-        });
-    }
-}
-
-fn lex_word(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
-    let mut word = String::new();
-    while let Some(&ch) = chars.peek() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            word.push(ch);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-    word
-}
-
-fn lex_number(chars: &mut std::iter::Peekable<std::str::Chars>) {
-    while let Some(&ch) = chars.peek() {
-        if ch.is_ascii_alphanumeric() || ch == '.' {
-            chars.next();
-        } else {
-            break;
-        }
-    }
-}
-
-fn lex_string(chars: &mut std::iter::Peekable<std::str::Chars>, quote: char) {
-    chars.next();
-    while let Some(&ch) = chars.peek() {
-        chars.next();
-        if ch == '\\' {
-            chars.next();
-        } else if ch == quote {
-            break;
-        }
-    }
 }

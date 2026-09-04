@@ -71,38 +71,11 @@ impl CoverageScorer {
         if content.trim().is_empty() {
             anyhow::bail!("LCOV report is empty");
         }
-        let mut map = HashMap::new();
-        let mut current = FileCoverage::default();
-        let mut in_file = false;
-
+        let mut records = LcovRecords::default();
         for line in content.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("SF:") {
-                if in_file {
-                    anyhow::bail!("LCOV record started before the previous record ended");
-                }
-                if rest.trim().is_empty() {
-                    anyhow::bail!("LCOV source path is empty");
-                }
-                current = FileCoverage::default();
-                current.file_path = PathBuf::from(rest);
-                in_file = true;
-            } else if trimmed == "end_of_record" && in_file {
-                map.insert(current.file_path.clone(), current.clone());
-                in_file = false;
-            } else if in_file {
-                parse_lcov_metric_line(&mut current, trimmed)?;
-            }
+            records.ingest(line.trim())?;
         }
-
-        if in_file {
-            anyhow::bail!("LCOV report ended before `end_of_record`");
-        }
-        if map.is_empty() {
-            anyhow::bail!("LCOV report contains no source records");
-        }
-
-        Ok(map)
+        records.finish()
     }
 
     pub fn evaluate(
@@ -316,6 +289,59 @@ impl CoverageScorer {
     }
 }
 
+#[derive(Default)]
+struct LcovRecords {
+    completed: HashMap<PathBuf, FileCoverage>,
+    current: Option<FileCoverage>,
+}
+
+impl LcovRecords {
+    fn ingest(&mut self, line: &str) -> anyhow::Result<()> {
+        if let Some(path) = line.strip_prefix("SF:") {
+            return self.start(path);
+        }
+        if line == "end_of_record" {
+            return self.end();
+        }
+        if let Some(current) = self.current.as_mut() {
+            parse_lcov_metric_line(current, line)?;
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, path: &str) -> anyhow::Result<()> {
+        if self.current.is_some() {
+            anyhow::bail!("LCOV record started before the previous record ended");
+        }
+        if path.trim().is_empty() {
+            anyhow::bail!("LCOV source path is empty");
+        }
+        self.current = Some(FileCoverage {
+            file_path: PathBuf::from(path),
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn end(&mut self) -> anyhow::Result<()> {
+        let Some(current) = self.current.take() else {
+            anyhow::bail!("LCOV record ended without a matching source record");
+        };
+        self.completed.insert(current.file_path.clone(), current);
+        Ok(())
+    }
+
+    fn finish(self) -> anyhow::Result<HashMap<PathBuf, FileCoverage>> {
+        if self.current.is_some() {
+            anyhow::bail!("LCOV report ended before `end_of_record`");
+        }
+        if self.completed.is_empty() {
+            anyhow::bail!("LCOV report contains no source records");
+        }
+        Ok(self.completed)
+    }
+}
+
 fn parse_lcov_metric_line(cov: &mut FileCoverage, line: &str) -> anyhow::Result<()> {
     if let Some(rest) = line.strip_prefix("DA:") {
         parse_da_line(cov, rest)?;
@@ -342,22 +368,31 @@ fn parse_count_line(cov: &mut FileCoverage, line: &str) -> anyhow::Result<()> {
     let Some((tag, val_str)) = line.split_once(':') else {
         return Ok(());
     };
-    if !matches!(tag, "LF" | "LH" | "FNF" | "FNH" | "BRF" | "BRH") {
+    let Some(setter) = count_setter(tag) else {
         return Ok(());
-    }
+    };
     let Ok(val) = val_str.parse::<usize>() else {
         anyhow::bail!("Malformed LCOV {tag} count `{val_str}`");
     };
-    match tag {
-        "LF" => cov.lines_found = val,
-        "LH" => cov.lines_hit = val,
-        "FNF" => cov.functions_found = val,
-        "FNH" => cov.functions_hit = val,
-        "BRF" => cov.branches_found = val,
-        "BRH" => cov.branches_hit = val,
-        _ => {}
-    }
+    setter(cov, val);
     Ok(())
+}
+
+type CountSetter = fn(&mut FileCoverage, usize);
+
+const COUNT_SETTERS: &[(&str, CountSetter)] = &[
+    ("LF", |coverage, value| coverage.lines_found = value),
+    ("LH", |coverage, value| coverage.lines_hit = value),
+    ("FNF", |coverage, value| coverage.functions_found = value),
+    ("FNH", |coverage, value| coverage.functions_hit = value),
+    ("BRF", |coverage, value| coverage.branches_found = value),
+    ("BRH", |coverage, value| coverage.branches_hit = value),
+];
+
+fn count_setter(tag: &str) -> Option<CountSetter> {
+    COUNT_SETTERS
+        .iter()
+        .find_map(|(candidate, setter)| (*candidate == tag).then_some(*setter))
 }
 
 fn calculate_function_coverage_ratio(

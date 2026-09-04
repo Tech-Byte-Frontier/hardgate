@@ -1,5 +1,5 @@
 use super::check::{Emission, OutputOptions, emit_gate_report, print_empty_discovery};
-use super::evidence::record_evidence_failure;
+use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::static_gate::run_static_gate_scoped;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
@@ -90,9 +90,11 @@ pub fn verify_coverage(
         record_evidence_failure(
             report,
             config.gate.strict,
-            "coverage-report",
-            Path::new("<not-configured>"),
-            "Coverage is enabled, but no report path was provided.".to_string(),
+            EvidenceFailure {
+                step: "coverage-report",
+                target: Path::new("<not-configured>"),
+                message: "Coverage is enabled, but no report path was provided.".to_string(),
+            },
         );
         return;
     };
@@ -101,9 +103,11 @@ pub fn verify_coverage(
         record_evidence_failure(
             report,
             config.gate.strict,
-            "coverage-report",
-            p,
-            "Required coverage report was not found.".to_string(),
+            EvidenceFailure {
+                step: "coverage-report",
+                target: p,
+                message: "Required coverage report was not found.".to_string(),
+            },
         );
         return;
     }
@@ -117,9 +121,11 @@ pub fn verify_coverage(
             record_evidence_failure(
                 report,
                 config.gate.strict,
-                "coverage-report",
-                p,
-                format!("Failed to parse required coverage report: {e}"),
+                EvidenceFailure {
+                    step: "coverage-report",
+                    target: p,
+                    message: format!("Failed to parse required coverage report: {e}"),
+                },
             );
         }
     }
@@ -143,9 +149,11 @@ pub fn verify_mutation(
         record_evidence_failure(
             report,
             config.gate.strict,
-            "mutation-report",
-            Path::new("<not-configured>"),
-            "Mutation is enabled, but no report path was provided.".to_string(),
+            EvidenceFailure {
+                step: "mutation-report",
+                target: Path::new("<not-configured>"),
+                message: "Mutation is enabled, but no report path was provided.".to_string(),
+            },
         );
         return;
     };
@@ -153,9 +161,12 @@ pub fn verify_mutation(
         record_evidence_failure(
             report,
             config.gate.strict,
-            "mutation-report",
-            Path::new("<empty-report-list>"),
-            "Mutation is enabled, but the configured report list is empty.".to_string(),
+            EvidenceFailure {
+                step: "mutation-report",
+                target: Path::new("<empty-report-list>"),
+                message: "Mutation is enabled, but the configured report list is empty."
+                    .to_string(),
+            },
         );
         return;
     }
@@ -166,9 +177,11 @@ pub fn verify_mutation(
             record_evidence_failure(
                 report,
                 config.gate.strict,
-                "mutation-report",
-                p,
-                "Required mutation report was not found.".to_string(),
+                EvidenceFailure {
+                    step: "mutation-report",
+                    target: p,
+                    message: "Required mutation report was not found.".to_string(),
+                },
             );
             continue;
         }
@@ -178,9 +191,11 @@ pub fn verify_mutation(
                 record_evidence_failure(
                     report,
                     config.gate.strict,
-                    "mutation-report",
-                    p,
-                    format!("Failed to parse required mutation report: {e}"),
+                    EvidenceFailure {
+                        step: "mutation-report",
+                        target: p,
+                        message: format!("Failed to parse required mutation report: {e}"),
+                    },
                 );
             }
         }
