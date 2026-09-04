@@ -69,6 +69,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod discovery;
 pub mod engines;
+pub mod git_evidence;
 pub mod mcp;
 
 pub use config::{HardgateConfig, Preset};
@@ -76,4 +77,8 @@ pub use diagnostics::{GateReport, GateSummary, TopFileEntry};
 pub use discovery::{
     ClassifiedFile, DiscoverOptions, DiscoveryResult, FileRole, discover_files,
     discover_files_with_exclusions, filter_files_by_paths,
+};
+pub use git_evidence::{
+    ChangeSet, ChangedLineMap, ChangedLines, GitEvidence, ReferenceEvidence, RepositorySnapshot,
+    load_reference, touches,
 };
