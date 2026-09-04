@@ -5,6 +5,7 @@ use hardgate::engines::util::{
 #[test]
 fn quote_helpers_handle_escapes_and_utf8_boundaries() {
     assert!(!is_inside_string(""));
+    assert!(is_inside_string("prefix 'unterminated"));
     assert!(is_inside_string(r#"prefix "unterminated"#));
     assert!(!is_inside_string(r#"prefix "closed""#));
     assert!(!is_inside_string(r#"prefix 'escaped \''"#));
@@ -38,6 +39,41 @@ fn slash_comments_ignore_strings_escapes_and_backticks() {
 }
 
 #[test]
+fn slash_comments_handle_each_quote_state_and_code_backslashes() {
+    let cases = [
+        (
+            r#"const value = 'escaped \' // inside'; // trailing"#,
+            r#"const value = 'escaped \' // inside'; "#,
+        ),
+        (
+            r#"const value = "can't // inside"; // trailing"#,
+            r#"const value = "can't // inside"; "#,
+        ),
+        (
+            r#"const value = `can't say " // inside`; // trailing"#,
+            r#"const value = `can't say " // inside`; "#,
+        ),
+        (
+            r#"const value = 'say "tick ` // inside'; // trailing"#,
+            r#"const value = 'say "tick ` // inside'; "#,
+        ),
+        (
+            r#"const value = "tick ` // inside"; // trailing"#,
+            r#"const value = "tick ` // inside"; "#,
+        ),
+        (
+            r#"const value = `escaped \` // inside`; // trailing"#,
+            r#"const value = `escaped \` // inside`; "#,
+        ),
+        (r#"value \ // trailing"#, r#"value \ "#),
+    ];
+
+    for (input, expected) in cases {
+        assert_eq!(strip_slash_comment(input), expected, "input: {input}");
+    }
+}
+
+#[test]
 fn hash_comments_ignore_strings_and_preserve_rust_attributes() {
     assert_eq!(
         strip_line_comment(r##"value = "# not a comment" # trailing"##),
@@ -61,5 +97,20 @@ fn hash_comments_ignore_strings_and_preserve_rust_attributes() {
         "  #![no_std]",
     ] {
         assert_eq!(strip_line_comment(source), source, "{source}");
+    }
+}
+
+#[test]
+fn hash_comments_require_a_boundary_before_the_marker() {
+    let cases = [
+        ("value # trailing", "value "),
+        ("value#trailing", "value#trailing"),
+        ("value [# not a comment", "value [# not a comment"),
+        ("value !# not a comment", "value !# not a comment"),
+        ("value## not a comment", "value## not a comment"),
+    ];
+
+    for (input, expected) in cases {
+        assert_eq!(strip_line_comment(input), expected, "input: {input}");
     }
 }
