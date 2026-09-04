@@ -31,9 +31,14 @@ fn baseline_deleting_target_returns_runner_error_and_restores_exact_entry() {
 fn playwright_failure_evidence_uses_framework_context() {
     let result = run_mutant_script(
         "mutation-runner-playwright-context",
-        "sh -c \"printf 'playwright\\n\\n1 failed' >&2; exit 1\"".to_string(),
+        "sh -c \"printf 'playwright\n\n1 failed' >&2; exit 1\"".to_string(),
     );
-    assert_eq!(result.outcome, MutantOutcome::Killed);
+    assert_eq!(
+        result.outcome,
+        MutantOutcome::Killed,
+        "diagnostic: {}",
+        result.diagnostic
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
