@@ -23,6 +23,12 @@ fn write_config(tag: &str, body: &str) -> (PathBuf, PathBuf) {
     (dir, path)
 }
 
+fn assert_invalid_config(tag: &str, body: &str) {
+    let (dir, path) = write_config(tag, body);
+    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn role_generated_and_legacy_validation_rejects_unsafe_edges() {
     let mut roles = RolePoliciesConfig::default();
@@ -68,37 +74,23 @@ fn role_generated_and_legacy_validation_rejects_unsafe_edges() {
 
 #[test]
 fn config_validation_covers_nested_globs_and_numeric_rejections() {
-    let (dir, path) = write_config("empty-gate", "[gate]\npreset = \"custom\"\nname = \" \"\n");
-    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let (dir, path) = write_config(
+    assert_invalid_config("empty-gate", "[gate]\npreset = \"custom\"\nname = \" \"\n");
+    assert_invalid_config(
         "bad-percent",
         "[gate]\npreset = \"custom\"\n\n[coverage]\nmin_line_percent = 101.0\n",
     );
-    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let (dir, path) = write_config(
+    assert_invalid_config(
         "nan-percent",
         "[gate]\npreset = \"custom\"\n\n[coverage]\nmin_line_percent = nan\n",
     );
-    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let (dir, path) = write_config(
+    assert_invalid_config(
         "bad-crap",
         "[gate]\npreset = \"custom\"\n\n[coverage]\nmax_crap_score = -1.0\n",
     );
-    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let (dir, path) = write_config(
+    assert_invalid_config(
         "nan-crap",
         "[gate]\npreset = \"custom\"\n\n[coverage]\nmax_crap_score = nan\n",
     );
-    assert!(HardgateConfig::load_or_default(Some(&path)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
 
     let (dir, path) = write_config(
         "nested-globs",
