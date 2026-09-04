@@ -158,7 +158,7 @@ function assertProcessFailures(temp, cwd) {
   const descendantPidFile = path.join(temp, "descendant.pid");
   const previousPidFile = process.env.DESCENDANT_PID;
   process.env.DESCENDANT_PID = descendantPidFile;
-  const descendant = runCheck(writeFakeBinary(temp, "descendant-timeout"), cwd, { expectPass: true, expectedExit: 0, timeout: 40 });
+  const descendant = runCheck(writeFakeBinary(temp, "descendant-timeout"), cwd, { expectPass: true, expectedExit: 0, timeout: 2_000 });
   if (previousPidFile === undefined) delete process.env.DESCENDANT_PID; else process.env.DESCENDANT_PID = previousPidFile;
   assert.deepEqual({ status: descendant.status, reasonCode: descendant.reasonCode, timedOut: descendant.timedOut, exitCode: descendant.exitCode, signal: descendant.signal }, { status: "fail", reasonCode: "timeout", timedOut: true, exitCode: null, signal: null });
   const descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
