@@ -349,3 +349,11 @@ fn lcov_parser_rejects_impossible_function_detail_hits() {
         ),
     );
 }
+
+#[test]
+fn lcov_parser_rejects_missing_detail_delimiters() {
+    let config = detail_config(None, None);
+    for details in ["FNDA:1\n", "BRDA:1\n", "BRDA:1,0\n", "FN:1\n"] {
+        assert_invalid_lcov(&config, &detail_report(details, ""));
+    }
+}
