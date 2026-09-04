@@ -1,6 +1,9 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "common/fs_git.rs"]
+mod fs_git;
 
+use fs_git::{commit_baseline, init_repo, write};
 use hardgate::commands::mutate::effective_mutation_target;
 use hardgate::config::{ClassificationRule, HardgateConfig};
 use hardgate::discovery::FileRole;
@@ -55,32 +58,6 @@ impl Drop for FixtureRoot {
     }
 }
 
-fn write(root: &Path, path: &str, content: &str) {
-    let target = root.join(path);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    std::fs::write(target, content).unwrap();
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
-}
-
-fn init_repo(root: &Path) {
-    git(root, &["init", "-q"]);
-    git(root, &["config", "user.email", "hardgate@example.invalid"]);
-    git(root, &["config", "user.name", "Hardgate Test"]);
-    git(root, &["config", "commit.gpgsign", "false"]);
-    git(root, &["add", "-A"]);
-    git(root, &["commit", "-qm", "baseline"]);
-}
-
 fn run_mutate(root: &Path, scope: Option<&Path>, diff: bool) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hardgate"));
     command.arg("mutate");
@@ -109,6 +86,7 @@ fn full_mutation_without_targets_fails_but_diff_is_an_explicit_noop() {
     let root = FixtureRoot::new("mutation-target-empty");
     write(&root, "hardgate.toml", MUTATION_CONFIG);
     init_repo(&root);
+    commit_baseline(&root, "baseline");
 
     let full = run_mutate(&root, None, false);
     assert!(!full.status.success(), "{}", diagnostic(&full));

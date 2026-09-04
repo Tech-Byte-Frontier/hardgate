@@ -89,6 +89,83 @@ max_nesting_depth = 20
     )
 }
 
+fn diff_fixture(
+    tag: &str,
+    baseline_source: &str,
+    current_source: &str,
+    coverage: &str,
+) -> std::path::PathBuf {
+    let root = tempdir(tag);
+    write(
+        &root,
+        "hardgate.toml",
+        &base_config(
+            r#"[coverage]
+enabled = true
+report = "coverage.info"
+min_line_percent = 90.0
+"#,
+        ),
+    );
+    write(&root, "src/lib.rs", baseline_source);
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "baseline"]);
+    write(&root, "src/lib.rs", current_source);
+    write(&root, "coverage.info", coverage);
+    root
+}
+
+fn failed_diff_report(root: &Path) -> Value {
+    let output = run(root, &["check", "--diff", "--format", "json"]);
+    assert!(!output.status.success());
+    json(&output)
+}
+
+fn malformed_legacy_fixture(tag: &str, strict: bool) -> std::path::PathBuf {
+    let mut config = base_config(
+        r#"[legacy]
+reference_branch = "HEAD"
+ratchet = true
+"#,
+    );
+    config = config.replace("max_bytes = 100000", "max_bytes = 1");
+    if !strict {
+        config = config.replace("strict = true", "strict = false");
+    }
+    let root = tempdir(tag);
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "malformed baseline"]);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    root
+}
+
+fn malformed_legacy_reports(root: &Path) -> [Value; 2] {
+    ["check", "verify"].map(|command| failed_report(root, command))
+}
+
+fn assert_malformed_legacy_report(report: &Value) {
+    assert!(
+        report["orchestration_violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| violation["step"] == "legacy-ratchet"),
+        "invalid baseline evidence must block the ratchet"
+    );
+    assert!(
+        report["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|advisory| advisory.as_str().unwrap().contains("grandfathered=0")),
+        "an untrusted advisory baseline must not grandfather debt"
+    );
+}
+
 #[test]
 fn generated_freshness_runs_for_check_and_verify_and_reports_success() {
     let root = tempdir("cli-generated");
@@ -172,30 +249,15 @@ enabled = true
 
 #[test]
 fn check_diff_reports_uncovered_and_missing_changed_source_lines() {
-    let root = tempdir("cli-diff-coverage");
-    let config = base_config(
-        r#"[coverage]
-enabled = true
-report = "coverage.info"
-min_line_percent = 90.0
-"#,
-    );
-    write(&root, "hardgate.toml", &config);
-    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
-    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 43 }\n");
-    write(&root, "src/new.rs", "pub fn new_value() -> i32 { 7 }\n");
-    write(
-        &root,
-        "coverage.info",
+    let root = diff_fixture(
+        "cli-diff-coverage",
+        "pub fn answer() -> i32 { 42 }\n",
+        "pub fn answer() -> i32 { 43 }\n",
         "SF:src/lib.rs\nDA:1,0\nLF:1\nLH:0\nend_of_record\n",
     );
+    write(&root, "src/new.rs", "pub fn new_value() -> i32 { 7 }\n");
 
-    let output = run(&root, &["check", "--diff", "--format", "json"]);
-    assert!(!output.status.success());
-    let report = json(&output);
+    let report = failed_diff_report(&root);
     let violations = report["coverage_violations"].as_array().unwrap();
     assert!(
         violations
@@ -211,33 +273,14 @@ min_line_percent = 90.0
 
 #[test]
 fn check_diff_requires_da_for_changed_code_but_ignores_comments_and_braces() {
-    let root = tempdir("cli-diff-missing-da");
-    let config = base_config(
-        r#"[coverage]
-enabled = true
-report = "coverage.info"
-min_line_percent = 90.0
-"#,
-    );
-    write(&root, "hardgate.toml", &config);
-    write(&root, "src/lib.rs", "pub fn answer() -> i32 {\n    41\n}\n");
-    init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
-    write(
-        &root,
-        "src/lib.rs",
+    let root = diff_fixture(
+        "cli-diff-missing-da",
+        "pub fn answer() -> i32 {\n    41\n}\n",
         "pub fn answer() -> i32 {\n    // changed comment\n    let value = 42;\n    value\n}\n",
-    );
-    write(
-        &root,
-        "coverage.info",
         "SF:src/lib.rs\nDA:1,1\nDA:4,1\nLF:2\nLH:2\nend_of_record\n",
     );
 
-    let output = run(&root, &["check", "--diff", "--format", "json"]);
-    assert!(!output.status.success());
-    let report = json(&output);
+    let report = failed_diff_report(&root);
     let violations = report["coverage_violations"].as_array().unwrap();
     assert!(violations.iter().any(|violation| {
         violation["metric"] == "Missing Diff Coverage"
@@ -413,23 +456,9 @@ ratchet = true
 
 #[test]
 fn malformed_legacy_baseline_blocks_check_and_verify_without_grandfathering_debt() {
-    let root = tempdir("cli-legacy-malformed-baseline");
-    let mut config = base_config(
-        r#"[legacy]
-reference_branch = "HEAD"
-ratchet = true
-"#,
-    );
-    config = config.replace("max_bytes = 100000", "max_bytes = 1");
-    write(&root, "hardgate.toml", &config);
-    write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
-    init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "malformed baseline"]);
-    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    let root = malformed_legacy_fixture("cli-legacy-malformed-baseline", true);
 
-    for command in ["check", "verify"] {
-        let report = failed_report(&root, command);
+    for report in malformed_legacy_reports(&root) {
         assert!(
             report["budget_violations"]
                 .as_array()
@@ -438,59 +467,15 @@ ratchet = true
                 .any(|violation| violation["file"] == "src/lib.rs"),
             "current static debt must remain when the baseline is malformed"
         );
-        assert!(
-            report["orchestration_violations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|violation| violation["step"] == "legacy-ratchet"),
-            "malformed baseline must block the ratchet"
-        );
-        assert!(
-            report["advisories"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|advisory| advisory.as_str().unwrap().contains("grandfathered=0")),
-            "malformed baseline must not grandfather any debt"
-        );
+        assert_malformed_legacy_report(&report);
     }
 }
 
 #[test]
 fn malformed_legacy_baseline_is_blocking_even_when_current_roles_are_advisory() {
-    let root = tempdir("cli-legacy-advisory-malformed-baseline");
-    let config = base_config(
-        r#"[legacy]
-reference_branch = "HEAD"
-ratchet = true
-"#,
-    )
-    .replace("strict = true", "strict = false");
-    write(&root, "hardgate.toml", &config);
-    write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
-    init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "malformed advisory baseline"]);
-    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    let root = malformed_legacy_fixture("cli-legacy-advisory-malformed-baseline", false);
 
-    for command in ["check", "verify"] {
-        let report = failed_report(&root, command);
-        assert!(
-            report["orchestration_violations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|violation| violation["step"] == "legacy-ratchet"),
-            "invalid baseline evidence must not inherit advisory role severity"
-        );
-        assert!(
-            report["advisories"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|advisory| advisory.as_str().unwrap().contains("grandfathered=0")),
-            "an untrusted advisory baseline must not grandfather debt"
-        );
+    for report in malformed_legacy_reports(&root) {
+        assert_malformed_legacy_report(&report);
     }
 }

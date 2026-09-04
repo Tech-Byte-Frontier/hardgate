@@ -1,28 +1,15 @@
+#[path = "common/legacy.rs"]
+mod legacy;
+use legacy::changes;
+
 use hardgate::GateReport;
 use hardgate::adoption::apply_legacy_ratchet;
 use hardgate::engines::{
     BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
     SuppressionViolation,
 };
-use hardgate::git_evidence::{ChangeSet, ChangedLineMap};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-
-fn changes(lines: &[(&str, &[usize])], files: &[&str], renames: &[(&str, &str)]) -> ChangeSet {
-    let mut changed_lines = ChangedLineMap::new();
-    for (path, numbers) in lines {
-        changed_lines.insert(PathBuf::from(path), numbers.iter().copied().collect());
-    }
-    ChangeSet {
-        merge_base: "abc123-merge-base".to_string(),
-        changed_lines,
-        changed_files: files.iter().map(PathBuf::from).collect(),
-        rename_lineage: renames
-            .iter()
-            .map(|(current, baseline)| (PathBuf::from(current), PathBuf::from(baseline)))
-            .collect(),
-    }
-}
 
 fn report() -> GateReport {
     GateReport::new("legacy".to_string())
@@ -125,8 +112,7 @@ fn unreferenced_file(file: &str) -> DeadCodeViolation {
     }
 }
 
-#[test]
-fn changed_hunks_block_matching_debt_in_every_static_vector() {
+fn static_debt_report() -> GateReport {
     let mut baseline = report();
     baseline.budget_violations.push(budget("src/a.rs", 100));
     baseline
@@ -142,12 +128,18 @@ fn changed_hunks_block_matching_debt_in_every_static_vector() {
     baseline
         .dead_code_violations
         .push(dead_code("src/a.rs", Some(1)));
+    baseline
+}
+
+#[test]
+fn changed_hunks_block_matching_debt_in_every_static_vector() {
+    let baseline = static_debt_report();
 
     let mut current = baseline.clone();
     let outcome = apply_legacy_ratchet(
         &mut current,
         &baseline,
-        &changes(
+        &legacy::changes(
             &[("src/a.rs", &[1, 2, 3, 4]), ("src/b.rs", &[10])],
             &["src/a.rs", "src/b.rs"],
             &[],
@@ -161,27 +153,13 @@ fn changed_hunks_block_matching_debt_in_every_static_vector() {
 
 #[test]
 fn unrelated_changed_file_does_not_block_untouched_equal_debt() {
-    let mut baseline = report();
-    baseline.budget_violations.push(budget("src/a.rs", 100));
-    baseline
-        .suppression_violations
-        .push(suppression("src/a.rs", 2));
-    baseline
-        .complexity_violations
-        .push(complexity("src/a.rs", 4, 10.0));
-    baseline.invariant_violations.push(invariant("src/a.rs", 3));
-    baseline
-        .clone_violations
-        .push(clone_violation("src/a.rs", (1, 5), "src/b.rs", (8, 12)));
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/a.rs", Some(1)));
+    let baseline = static_debt_report();
 
     let mut current = baseline.clone();
     let outcome = apply_legacy_ratchet(
         &mut current,
         &baseline,
-        &changes(&[("src/other.rs", &[9])], &["src/other.rs"], &[]),
+        &legacy::changes(&[("src/other.rs", &[9])], &["src/other.rs"], &[]),
     );
 
     assert_eq!(outcome.grandfathered, 6);

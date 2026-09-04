@@ -1,7 +1,10 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "common/fs_git.rs"]
+mod fs_git;
 
 use fs::tempdir;
+use fs_git::{commit_baseline, init_repo, write};
 use hardgate::discovery::{ClassifiedFile, FileRole};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -73,30 +76,6 @@ fn hardgate(root: &Path, args: &[&str]) -> Output {
         .expect("hardgate binary should run")
 }
 
-fn write(root: &Path, path: &str, content: &str) {
-    let target = root.join(path);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    std::fs::write(target, content).unwrap();
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
-}
-
-fn init_repo(root: &Path) {
-    git(root, &["init", "-q"]);
-    git(root, &["config", "user.email", "hardgate@example.invalid"]);
-    git(root, &["config", "user.name", "Hardgate Test"]);
-    git(root, &["config", "commit.gpgsign", "false"]);
-}
-
 fn mutation_config(extra: &str) -> String {
     BASE_CONFIG.replace(
         "[mutation]\nenabled = false",
@@ -147,8 +126,7 @@ fn calculate_total(values: &[i32]) -> i32 {
 "#;
     write(&root, "src/original.rs", copied);
     init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
+    commit_baseline(&root, "baseline");
     write(&root, "src/copied.rs", copied);
 
     let output = hardgate(&root, &["check", "--diff", "--format", "json"]);

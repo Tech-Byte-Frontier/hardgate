@@ -1,6 +1,9 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "common/fs_git.rs"]
+mod fs_git;
 
+use fs_git::{commit_baseline, init_repo, write};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
@@ -99,28 +102,23 @@ fn assert_tool_error(root: &Path, arguments: Value, expected: &str) {
     assert!(tool_error_text(&response).contains(expected));
 }
 
-fn write(root: &Path, path: &str, content: &str) {
-    let target = root.join(path);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    std::fs::write(target, content).unwrap();
-}
+fn assert_failed_source_scan(tag: &str, content: &[u8], expected_step: &str) {
+    let root = fs::tempdir(tag);
+    let path = root.join("src/broken.rs");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, content).unwrap();
 
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
-}
+    let response = call_tool(
+        &root,
+        "hardgate_check",
+        json!({ "paths": ["src/broken.rs"] }),
+    );
+    assert_ne!(response["result"]["isError"], true);
+    let text = tool_error_text(&response);
+    assert!(text.contains("Hardgate Failed"), "{text}");
+    assert!(text.contains(expected_step), "{text}");
 
-fn init_repo(root: &Path) {
-    git(root, &["init", "-q"]);
-    git(root, &["config", "user.email", "hardgate@example.invalid"]);
-    git(root, &["config", "user.name", "Hardgate Test"]);
-    git(root, &["config", "commit.gpgsign", "false"]);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -144,40 +142,12 @@ fn empty_scoped_directory_is_not_reported_as_a_pass() {
 
 #[test]
 fn read_failure_is_reported_as_a_failed_gate() {
-    let root = fs::tempdir("mcp-read-failure");
-    let path = root.join("src/broken.rs");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, [0xff]).unwrap();
-
-    let response = call_tool(
-        &root,
-        "hardgate_check",
-        json!({ "paths": ["src/broken.rs"] }),
-    );
-    assert_ne!(response["result"]["isError"], true);
-    let text = tool_error_text(&response);
-    assert!(text.contains("Hardgate Failed"), "{text}");
-    assert!(text.contains("read-source"), "{text}");
-
-    let _ = std::fs::remove_dir_all(root);
+    assert_failed_source_scan("mcp-read-failure", &[0xff], "read-source");
 }
 
 #[test]
 fn parser_failure_is_reported_as_a_failed_gate() {
-    let root = fs::tempdir("mcp-parser-failure");
-    write(&root, "src/broken.rs", "fn broken( {\n");
-
-    let response = call_tool(
-        &root,
-        "hardgate_check",
-        json!({ "paths": ["src/broken.rs"] }),
-    );
-    assert_ne!(response["result"]["isError"], true);
-    let text = tool_error_text(&response);
-    assert!(text.contains("Hardgate Failed"), "{text}");
-    assert!(text.contains("parse-source"), "{text}");
-
-    let _ = std::fs::remove_dir_all(root);
+    assert_failed_source_scan("mcp-parser-failure", b"fn broken( {\n", "parse-source");
 }
 
 #[test]
@@ -258,8 +228,7 @@ fn calculate_total(values: &[i32]) -> i32 {
     write(&root, "hardgate.toml", CLONE_CONFIG);
     write(&root, "src/original.rs", copied);
     init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
+    commit_baseline(&root, "baseline");
     write(&root, "src/copied.rs", copied);
 
     let response = call_tool(&root, "hardgate_check", json!({ "diff": true }));

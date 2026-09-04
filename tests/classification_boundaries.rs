@@ -6,6 +6,15 @@ fn role(path: &str) -> FileRole {
     ClassifiedFile::new(Path::new(path)).role
 }
 
+fn assert_source_paths(encoded_paths: &str) {
+    for path in encoded_paths.lines().filter(|path| !path.is_empty()) {
+        assert_eq!(role(path), FileRole::Source, "{path}");
+    }
+}
+
+const LOOKALIKE_DIRECTORY_PATHS: &str = include_str!("common/classification_directory_paths.txt");
+const LOOKALIKE_FILE_NAMES: &str = include_str!("common/classification_file_names.txt");
+
 #[test]
 fn builtins_retain_positive_role_conventions() {
     let cases = [
@@ -55,90 +64,12 @@ fn builtins_retain_positive_role_conventions() {
 
 #[test]
 fn lookalike_directory_components_remain_source() {
-    let paths = [
-        "src/not-generated/client.ts",
-        "src/not-gen/client.ts",
-        "src/regenerated/client.ts",
-        "src/not__generated__/client.ts",
-        "src/latest/button.tsx",
-        "src/contests/button.tsx",
-        "src/mockery/client.ts",
-        "src/storybooked/button.tsx",
-        "src/not-fixtures/state.tsx",
-        "src/fixtures-old/state.tsx",
-        "src/not-snapshots/state.tsx",
-        "src/not__fixtures__/state.tsx",
-        "src/not__snapshots__/state.tsx",
-        "src/not-tests/button.ts",
-        "src/not-test/button.ts",
-        "src/not-mocks/button.ts",
-        "src/not-stories/button.tsx",
-        "src/not__tests__/button.ts",
-        "src/not__mocks__/button.ts",
-        "src/not-migration/schema.sql",
-        "src/not-migrations/schema.sql",
-        "src/migrationary/schema.sql",
-        "src/not-node_modules/index.ts",
-        "src/not-target/index.rs",
-        "src/not-dist/index.js",
-        "src/not-build/index.ts",
-        "src/building/index.ts",
-        "src/not-vendor/index.rs",
-    ];
-
-    for path in paths {
-        assert_eq!(role(path), FileRole::Source, "{path}");
-    }
+    assert_source_paths(LOOKALIKE_DIRECTORY_PATHS);
 }
 
 #[test]
 fn lookalike_file_names_remain_source() {
-    let paths = [
-        "src/widget.snapshot.ts",
-        "src/widget.snapshots.ts",
-        "src/widget.testimony.ts",
-        "src/widget.testing.ts",
-        "src/widget.specimen.ts",
-        "src/widget.stories-old.tsx",
-        "src/widget.mocking.ts",
-        "src/generated.ts",
-        "src/gen.ts",
-        "src/__generated__.ts",
-        "src/fixtures.ts",
-        "src/snapshots.ts",
-        "src/test.ts",
-        "src/tests.ts",
-        "src/__tests__.ts",
-        "src/mocks.ts",
-        "src/__mocks__.ts",
-        "src/stories.tsx",
-        "src/__fixtures__.ts",
-        "src/__snapshots__.ts",
-        "src/migration.sql",
-        "src/migrations.sql",
-        "src/migration.ts",
-        "src/migrations.ts",
-        "src/config.ts",
-        "src/configs.ts",
-        "src/seedling.sql",
-        "src/reconfigure.ts",
-        "src/configured.ts",
-        "src/configurator.ts",
-        "src/configs-old/runtime.ts",
-        "src/not-config/runtime.ts",
-        "src/eslintrc.js",
-        "src/.eslintrcish.js",
-        ".eslintrcish.js",
-        "src/node_modules.ts",
-        "src/target.rs",
-        "src/dist.js",
-        "src/build.ts",
-        "src/vendor.rs",
-    ];
-
-    for path in paths {
-        assert_eq!(role(path), FileRole::Source, "{path}");
-    }
+    assert_source_paths(LOOKALIKE_FILE_NAMES);
 }
 
 #[test]
