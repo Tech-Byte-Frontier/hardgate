@@ -172,19 +172,15 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 #[cfg(test)]
 pub(crate) mod test_support {
+    use super::super::test_support::temp_root as shared_temp_root;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static NEXT_TEMP_ROOT: AtomicUsize = AtomicUsize::new(0);
     const WORKSPACE_PACKAGE: &str =
         r#"{"workspaces":["packages/*"],"scripts":{"test":"node root.mjs"}}"#;
+
     pub(crate) fn temp_root(label: &str) -> PathBuf {
-        let id = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("hardgate-js-{label}-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        root
+        shared_temp_root("hardgate-js", label)
     }
+
     pub(crate) fn write(root: &Path, path: &str, content: &str) {
         let target = root.join(path);
         if let Some(parent) = target.parent() {

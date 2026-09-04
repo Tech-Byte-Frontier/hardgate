@@ -2,6 +2,8 @@ use super::mutation_output::{
     MutationFailure, MutationSummaryContext, baseline_failure, finish_disabled_mutation,
     handle_no_targets, render_mutation_output, runtime_failure,
 };
+#[path = "mutate/baselines.rs"]
+mod baselines;
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
@@ -9,10 +11,9 @@ mod targets;
 
 use crate::config::HardgateConfig;
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
-use crate::engines::mutation::runner::BaselineRunContext;
 use crate::engines::{
-    AstMutant, AstMutationGenerator, BaselineOutcome, MutantExecutionResult, MutantOutcome,
-    MutationStats, NativeMutationRunner,
+    AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
+    NativeMutationRunner,
 };
 use anyhow::{Context, Result, bail};
 use colored::*;
@@ -21,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use baselines::{BaselineRun, run_unmutated_baselines};
 use targets::discover_targets;
 
 /// CLI options for `hardgate mutate`.
@@ -216,65 +218,6 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
 /// built-in role default and any configured role policy override.
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     targets::effective_mutation_target(path, config)
-}
-struct BaselineRun<'a> {
-    runner: &'a NativeMutationRunner,
-    command_files: &'a [PathBuf],
-    protected_files: &'a [PathBuf],
-    root: &'a Path,
-    json: bool,
-}
-
-fn run_unmutated_baselines(run: BaselineRun<'_>) -> Result<()> {
-    let protected = NativeMutationRunner::snapshot_baseline_sources(run.protected_files, run.root)
-        .map_err(|error| {
-            MutationFailure::new(
-                "baseline",
-                "source-integrity-error",
-                format!("failed to snapshot protected production sources before baseline: {error}"),
-            )
-        })?;
-    let mut commands = BTreeMap::new();
-    for file in run.command_files {
-        let plan = run
-            .runner
-            .resolve_baseline_plan(file, run.root, &protected)
-            .map_err(MutationFailure::from_runner_error)?;
-        commands
-            .entry((plan.working_dir.clone(), plan.command.clone()))
-            .or_insert_with(|| (file.clone(), plan));
-    }
-
-    if !run.json {
-        println!(
-            "{} running {} unmutated baseline command(s)...",
-            "note:".bold(),
-            commands.len().to_string().cyan()
-        );
-    }
-    for ((working_dir, command), (file, plan)) in commands {
-        if !run.json {
-            println!(
-                "   {} ({}) in {}",
-                command.dimmed(),
-                plan.selection.description().dimmed(),
-                working_dir.display()
-            );
-        }
-        let result = run
-            .runner
-            .run_resolved_baseline_with_sources(BaselineRunContext::new(
-                &file, run.root, &protected, plan,
-            ));
-        if result.outcome == BaselineOutcome::Passed {
-            if !run.json {
-                println!("      ... {}", "passed".green().bold());
-            }
-            continue;
-        }
-        return Err(baseline_failure(&result, &file));
-    }
-    Ok(())
 }
 fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();

@@ -1,5 +1,6 @@
 use super::run_mutant_batch;
 use crate::engines::mutation::runner::{BaselineSources, MutationRunnerError};
+use crate::engines::mutation::test_support::temp_root;
 use crate::engines::{AstMutant, BaselineExecutionResult, NativeMutationRunner};
 use std::path::{Path, PathBuf};
 
@@ -17,13 +18,6 @@ fn mutant(id: usize) -> AstMutant {
     }
 }
 
-fn test_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("hardgate-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
 fn snapshot_source(root: &Path, file: &str) -> BaselineSources {
     NativeMutationRunner::snapshot_baseline_sources(&[PathBuf::from(file)], root).unwrap()
 }
@@ -36,7 +30,7 @@ fn assert_runner_error(result: BaselineExecutionResult, marker: &Path) {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baselines_protect_every_production_target_before_mutants() {
-    let root = test_root("baseline-set");
+    let root = temp_root("hardgate", "baseline-set");
     let first = root.join("first.rs");
     let second = root.join("second.rs");
     std::fs::write(&first, b"true\n").unwrap();
@@ -64,7 +58,7 @@ fn baselines_protect_every_production_target_before_mutants() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_rejects_preexisting_hardlink_before_running_command() {
-    let root = test_root("baseline-hardlink");
+    let root = temp_root("hardgate", "baseline-hardlink");
     let target = root.join("target.rs");
     let peer = root.join("peer.rs");
     let marker = root.join("ran");
@@ -83,7 +77,7 @@ fn baseline_rejects_preexisting_hardlink_before_running_command() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_preflight_restores_external_change_before_running_command() {
-    let root = test_root("baseline-preflight");
+    let root = temp_root("hardgate", "baseline-preflight");
     let target = root.join("target.rs");
     let marker = root.join("ran");
     std::fs::write(&target, b"true\n").unwrap();
@@ -102,7 +96,7 @@ fn baseline_preflight_restores_external_change_before_running_command() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_resolution_failure_preserves_a_concurrent_source_edit() {
-    let root = test_root("baseline-resolution-integrity");
+    let root = temp_root("hardgate", "baseline-resolution-integrity");
     let target = root.join("target.ts");
     std::fs::write(&target, b"export const value = true;\n").unwrap();
     std::fs::write(root.join("package.json"), b"{\n").unwrap();
@@ -122,8 +116,8 @@ fn baseline_resolution_failure_preserves_a_concurrent_source_edit() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_restores_same_bytes_replacement_and_detaches_hardlink() {
-    let root = test_root("baseline-replacement");
-    let outside = test_root("baseline-replacement-peer");
+    let root = temp_root("hardgate", "baseline-replacement");
+    let outside = temp_root("hardgate", "baseline-replacement-peer");
     let target = root.join("target.rs");
     let peer = outside.join("peer.rs");
     std::fs::write(&target, b"true\n").unwrap();
@@ -148,8 +142,8 @@ fn baseline_restores_same_bytes_replacement_and_detaches_hardlink() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn batch_aborts_after_restore_failure_before_starting_later_mutants() {
-    let root = test_root("batch-restore");
-    let outside = test_root("batch-restore-outside");
+    let root = temp_root("hardgate", "batch-restore");
+    let outside = temp_root("hardgate", "batch-restore-outside");
     let nested = root.join("nested");
     let outside_target = outside.join("fixture.rs");
     let second_marker = root.join("second-mutant-started");
