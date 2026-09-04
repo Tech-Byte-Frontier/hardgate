@@ -69,6 +69,21 @@ fn assert_test_conventions() {
     }
 }
 
+#[test]
+fn rust_test_module_suffixes_are_test_role_only_for_rust() {
+    for path in ["tests.rs", "src/mutate_tests.rs", "src/runner-tests.rs"] {
+        assert_eq!(classify(path).role, FileRole::Test, "{path}");
+    }
+    for path in [
+        "src/tests.ts",
+        "src/mutate_tests.ts",
+        "src/runner-tests.py",
+        "src/latest.rs",
+    ] {
+        assert_eq!(classify(path).role, FileRole::Source, "{path}");
+    }
+}
+
 fn assert_fixture_conventions() {
     for path in [
         "tests/__fixtures__/state.snap",

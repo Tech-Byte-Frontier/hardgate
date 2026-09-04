@@ -19,15 +19,17 @@ trap 'exit 130' HUP INT TERM
 "$BINARY" check --all --dead-code --format agent
 
 # `hardgate.toml` keeps both evidence engines disabled for ordinary local
-# checks. Enable coverage first and require its real LCOV report; then enable
-# mutation for a deterministic production-source sample. `mutate` runs the
-# unmutated baseline before generating a non-empty mutant set.
+# checks. Enable coverage first and require its real Rust LCOV report for the
+# source/build-script scope; the full check above and consumer matrix below
+# cover the separately packaged npm wrapper. Then enable mutation for a
+# deterministic production-source sample. `mutate` runs the unmutated baseline
+# before generating a non-empty mutant set.
 awk '
   /^\[/ { section = $0 }
   section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
   { print }
 ' "$CONFIG_BACKUP" > hardgate.toml
-"$BINARY" verify --coverage-report coverage/lcov.info --format agent
+"$BINARY" verify --coverage-report coverage/lcov.info --format agent src build.rs
 
 awk '
   /^\[/ { section = $0 }

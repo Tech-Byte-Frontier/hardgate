@@ -236,7 +236,7 @@ mod tests {
     use crate::engines::mutation::js::{
         PackageManager, ResolvedTestPlan, TestFramework, TestSelection, resolve_js_test_plan,
     };
-    use crate::engines::mutation::js_tests::test_support::{temp_root, write};
+    use crate::engines::mutation::js_selection::test_support::{temp_root, write};
     use std::path::Path;
     fn plan(root: &Path, source: &str) -> ResolvedTestPlan {
         resolve_js_test_plan(&root.join(source), root).unwrap()

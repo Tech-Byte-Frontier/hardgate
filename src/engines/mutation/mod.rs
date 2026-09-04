@@ -3,7 +3,7 @@ pub mod generator;
 pub mod js;
 mod js_command;
 pub(crate) mod js_manifest;
-mod js_tests;
+mod js_selection;
 mod process;
 pub mod runner;
 pub(crate) mod target;

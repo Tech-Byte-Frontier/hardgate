@@ -9,10 +9,11 @@ use super::role_policy::classify_file;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
-use crate::engines::coverage::CoverageEvaluationScope;
+use crate::engines::coverage::{CoverageEvaluationScope, normalized_repository_key};
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
 use crate::git_evidence::ChangedLineMap;
 use anyhow::Result;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -64,7 +65,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     run_generated_freshness(&config, root, &mut report);
 
     let source_files = if config.coverage.enabled {
-        source_files_for_coverage(&files, &config, &mut report)
+        source_files_for_coverage(&files, &functions, root, &config, &mut report)
     } else {
         Vec::new()
     };
@@ -254,14 +255,29 @@ fn coverage_violations(
 
 pub(crate) fn source_files_for_coverage(
     files: &[PathBuf],
+    functions: &[FunctionMetrics],
+    root: &Path,
     config: &HardgateConfig,
     report: &mut GateReport,
 ) -> Vec<PathBuf> {
+    // Rust module/re-export files may be valid inventory sources without any
+    // executable mapping. Every non-Rust source remains required because its
+    // provider can expose executable lines without Hardgate function metrics.
+    let executable_rust_files: BTreeSet<String> = functions
+        .iter()
+        .filter_map(|function| normalized_repository_key(&function.file, root))
+        .collect();
     let mut source_files = Vec::new();
     for path in files {
         match classify_file(path, config) {
             Ok(classified) if classified.role == FileRole::Source => {
-                source_files.push(path.clone())
+                if is_rust_source(path)
+                    && !normalized_repository_key(path, root)
+                        .is_some_and(|key| executable_rust_files.contains(&key))
+                {
+                    continue;
+                }
+                source_files.push(path.clone());
             }
             Ok(_) => {}
             Err(error) => record_evidence_failure(
@@ -276,6 +292,142 @@ pub(crate) fn source_files_for_coverage(
         }
     }
     source_files
+}
+
+fn is_rust_source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_files_for_coverage;
+    use crate::config::{CoverageConfig, HardgateConfig};
+    use crate::diagnostics::GateReport;
+    use crate::engines::FunctionMetrics;
+    use crate::engines::coverage::{CoverageEvaluationScope, CoverageScorer, FileCoverage};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    fn coverage_config() -> HardgateConfig {
+        HardgateConfig {
+            coverage: CoverageConfig {
+                enabled: true,
+                report: None,
+                min_line_percent: Some(90.0),
+                min_function_percent: None,
+                min_branch_percent: None,
+                max_crap_score: None,
+                critical_paths: None,
+            },
+            ..HardgateConfig::default()
+        }
+    }
+
+    fn function(file: &str) -> FunctionMetrics {
+        FunctionMetrics {
+            name: "main".to_string(),
+            file: PathBuf::from(file),
+            start_line: 1,
+            end_line: 1,
+            lines: 1,
+            parameters: 0,
+            cyclomatic: 1,
+            cognitive: 0,
+            halstead_difficulty: 0.0,
+            max_nesting_depth: 0,
+            statements: 1,
+            abc_score: 0.0,
+            cognitive_breakdown: Vec::new(),
+            cyclomatic_breakdown: Vec::new(),
+        }
+    }
+
+    fn covered(path: &str) -> FileCoverage {
+        FileCoverage {
+            file_path: PathBuf::from(path),
+            lines_found: 1,
+            lines_hit: 1,
+            line_hits: HashMap::from([(1, 1)]),
+            ..FileCoverage::default()
+        }
+    }
+
+    #[test]
+    fn source_scope_skips_declaration_only_rust_and_requires_executable_rust() {
+        let config = coverage_config();
+        let files = vec![
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("./src/main.rs"),
+            PathBuf::from("src/value.js"),
+        ];
+        let functions = vec![function("src/main.rs")];
+        let mut report = GateReport::new("verify".to_string());
+        let source_files =
+            source_files_for_coverage(&files, &functions, Path::new("."), &config, &mut report);
+
+        assert_eq!(
+            source_files,
+            vec![
+                PathBuf::from("./src/main.rs"),
+                PathBuf::from("src/value.js")
+            ]
+        );
+        assert!(report.coverage_violations.is_empty());
+
+        let coverage_map =
+            HashMap::from([(PathBuf::from("src/value.js"), covered("src/value.js"))]);
+        let violations = CoverageScorer::new(&config.coverage).evaluate_for_sources(
+            &coverage_map,
+            &functions,
+            CoverageEvaluationScope {
+                root: Path::new("."),
+                source_files: Some(&source_files),
+            },
+        );
+        assert!(violations.iter().any(|violation| {
+            violation.metric == "Missing Source Coverage"
+                && violation.file == Path::new("./src/main.rs")
+        }));
+        assert!(!violations.iter().any(|violation| {
+            violation.metric == "Missing Source Coverage"
+                && violation.file == Path::new("src/lib.rs")
+        }));
+    }
+
+    #[test]
+    fn source_scope_keeps_missing_javascript_source_required() {
+        let config = coverage_config();
+        let files = vec![PathBuf::from("src/value.js")];
+        let mut report = GateReport::new("verify".to_string());
+        let source_files =
+            source_files_for_coverage(&files, &[], Path::new("."), &config, &mut report);
+        let violations = CoverageScorer::new(&config.coverage).evaluate_for_sources(
+            &HashMap::new(),
+            &[],
+            CoverageEvaluationScope {
+                root: Path::new("."),
+                source_files: Some(&source_files),
+            },
+        );
+        assert!(violations.iter().any(|violation| {
+            violation.metric == "Missing Source Coverage"
+                && violation.file == Path::new("src/value.js")
+        }));
+    }
+
+    #[test]
+    fn source_scope_uses_normalized_function_paths() {
+        let config = coverage_config();
+        let files = vec![PathBuf::from("src/main.rs")];
+        let root = std::env::current_dir().expect("test root");
+        let functions = vec![function(&root.join("src/main.rs").display().to_string())];
+        let mut report = GateReport::new("verify".to_string());
+        let source_files =
+            source_files_for_coverage(&files, &functions, Path::new("."), &config, &mut report);
+        assert_eq!(source_files, files);
+    }
 }
 
 /// Ingest mutation reports (Stryker, cargo-mutants, generic) and flag scores

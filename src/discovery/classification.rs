@@ -237,6 +237,14 @@ fn is_test(path: &str, file_name: &str) -> bool {
         || has_filename_token(file_name, "spec")
         || has_filename_token(file_name, "stories")
         || has_filename_token(file_name, "mock")
+        || is_rust_test_filename(file_name)
+}
+
+fn is_rust_test_filename(file_name: &str) -> bool {
+    extension(file_name) == "rs"
+        && (file_name == "tests.rs"
+            || file_name.ends_with("_tests.rs")
+            || file_name.ends_with("-tests.rs"))
 }
 
 fn is_migration(path: &str, file_name: &str) -> bool {

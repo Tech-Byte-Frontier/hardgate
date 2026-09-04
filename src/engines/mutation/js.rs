@@ -5,7 +5,7 @@ use super::js_manifest::{
     PackageMetadata, detect_manager, existing_metadata, find_workspace_root, load_packages,
     manager_for_package, test_script, workspace_test_script,
 };
-use super::js_tests::find_relevant_test;
+use super::js_selection::find_relevant_test;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};

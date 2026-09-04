@@ -63,6 +63,12 @@ Built-in role behavior:
 
 Tree-sitter targets are `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, and `.go`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
 
+Rust files named `tests.rs`, `*_tests.rs`, or `*-tests.rs` use the built-in
+test role convention; the suffix rule is limited to `.rs` so similarly named
+JavaScript, Python, and other files remain source unless another convention
+matches. The production JavaScript test selector is source-named and remains
+eligible for coverage.
+
 ### Node and Supabase conventions
 
 The JavaScript-family extensions (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`,
@@ -254,7 +260,7 @@ max_crap_score = 25.0
 critical_paths = ["src/core.ts"]
 ```
 
-Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check`, `check --all`, and `verify` resolve the report the same way: an explicit CLI path takes precedence over `coverage.report`; neither command auto-discovers conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
+Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. Source-role Rust files with no parsed executable functions (for example, declaration-only module files) do not require an LCOV source record; every Rust source with a parsed function and every non-Rust Source file remains required. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check`, `check --all`, and `verify` resolve the report the same way: an explicit CLI path takes precedence over `coverage.report`; neither command auto-discovers conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
 This repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch

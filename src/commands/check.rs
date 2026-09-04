@@ -159,7 +159,13 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
         .cli_report
         .clone()
         .or_else(|| request.config.coverage.report.clone());
-    let source_files = source_files_for_coverage(request.files, request.config, request.report);
+    let source_files = source_files_for_coverage(
+        request.files,
+        request.functions,
+        request.root,
+        request.config,
+        request.report,
+    );
     let scope = CoverageScope {
         source_files: &source_files,
         root: request.root,

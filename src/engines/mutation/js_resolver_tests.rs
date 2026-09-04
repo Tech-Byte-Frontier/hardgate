@@ -1,4 +1,4 @@
-use super::super::js_tests::test_support::{temp_root, write};
+use super::super::js_selection::test_support::{temp_root, write};
 use super::{PackageManager, TestSelection, resolve_js_test_plan};
 use std::path::Path;
 
