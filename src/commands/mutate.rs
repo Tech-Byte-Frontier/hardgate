@@ -1,6 +1,6 @@
 use super::mutation_output::{
-    MutationFailure, MutationSummaryContext, baseline_failure, finish_disabled_mutation,
-    handle_no_targets, render_mutation_output, runtime_failure,
+    MutationFailure, MutationSummaryContext, finish_disabled_mutation, handle_no_targets,
+    render_mutation_output, runtime_failure,
 };
 #[path = "mutate/baselines.rs"]
 mod baselines;
