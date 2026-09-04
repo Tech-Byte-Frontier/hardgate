@@ -1,4 +1,5 @@
 use super::fingerprint::hash_token;
+use super::repository_relative_path;
 use super::tokenizer::{Token, tokenize};
 use globset::GlobSet;
 use std::collections::{HashMap, HashSet};
@@ -115,12 +116,12 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
     } = options;
     let changed = changed_files
         .iter()
-        .map(|path| relative_path(path, root))
+        .map(|path| repository_relative_path(path, root))
         .collect::<HashSet<_>>();
     let mut inputs: Vec<(PathBuf, String)> = files
         .iter()
         .filter_map(|(abs_path, content)| {
-            let rel_path = relative_path(abs_path, root);
+            let rel_path = repository_relative_path(abs_path, root);
             if exclude_glob.is_some_and(|exclude| exclude.is_match(&rel_path)) {
                 return None;
             }
@@ -160,10 +161,6 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
         token_streams,
         raw_matches,
     })
-}
-
-fn relative_path(path: &Path, root: &Path) -> PathBuf {
-    path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
 
 fn index_file_windows(

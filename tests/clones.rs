@@ -15,7 +15,7 @@ fn test_clone_detector() {
     let detector = CloneDetector::new(&clone_config());
     let files = clone_pair("src/a.rs", "src/b.rs");
 
-    let violations = detector.detect_clones(&files, Path::new("."));
+    let violations = detector.detect_clones(&files, Path::new(".")).unwrap();
     assert_eq!(violations.len(), 1);
     assert_eq!(violations[0].file_a, PathBuf::from("src/a.rs"));
     assert_eq!(violations[0].file_b, PathBuf::from("src/b.rs"));
@@ -36,7 +36,12 @@ fn test_clone_detector_excludes_advisory() {
     assert_eq!(excluded[0], &PathBuf::from("src/excluded/b.rs"));
 
     // The excluded file takes its clone out of scope.
-    assert!(detector.detect_clones(&files, Path::new(".")).is_empty());
+    assert!(
+        detector
+            .detect_clones(&files, Path::new("."))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -53,7 +58,7 @@ fn test_clone_actual_tokens_not_threshold() {
             format!("fn bar() {{\n{body}\n}}"),
         ),
     ];
-    let violations = detector.detect_clones(&pair, Path::new("."));
+    let violations = detector.detect_clones(&pair, Path::new(".")).unwrap();
     assert_eq!(violations.len(), 1);
     assert!(
         violations[0].tokens >= 25,
@@ -178,6 +183,52 @@ fn checked_detector_reports_below_cap_clones() {
 }
 
 #[test]
+fn absolute_changed_paths_are_normalized_and_prioritized() {
+    let detector = cap_test_detector();
+    let root = Path::new(".");
+    let absolute_root = std::env::current_dir().unwrap();
+    let changed_path = absolute_root.join("src/z-changed.rs");
+    let changed_path_with_dot = absolute_root.join("./src/z-changed.rs");
+    let original_path = absolute_root.join("src/a-original.rs");
+    let unchanged_path = absolute_root.join("src/m-unchanged.rs");
+    let copied = one_token_lines(100, "token_");
+    let clone_files = vec![
+        (changed_path.clone(), copied.clone()),
+        (original_path.clone(), copied.clone()),
+    ];
+    for root in [root, absolute_root.as_path()] {
+        let violations = detector
+            .detect_clones_checked_with_changed_files(
+                &clone_files,
+                root,
+                std::slice::from_ref(&changed_path_with_dot),
+            )
+            .unwrap();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].file_a, PathBuf::from("src/a-original.rs"));
+        assert_eq!(violations[0].file_b, PathBuf::from("src/z-changed.rs"));
+    }
+    let files = vec![
+        (changed_path.clone(), copied.clone()),
+        (original_path, copied),
+        (unchanged_path, "same\n".repeat(65)),
+    ];
+
+    let error = detector
+        .detect_clones_checked_with_changed_files(
+            &files,
+            root,
+            std::slice::from_ref(&changed_path_with_dot),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CloneIndexError::HashWindowCapacityExceeded { ref file, .. }
+            if file == Path::new("src/m-unchanged.rs")
+    ));
+}
+
+#[test]
 fn static_snapshot_turns_hash_truncation_into_required_evidence() {
     let mut config = HardgateConfig::default();
     config.roles.source.clone_min_lines = Some(1);
@@ -298,7 +349,7 @@ min_tokens = 1
 
 fn first_fingerprint(files: &[(PathBuf, String)]) -> String {
     let detector = CloneDetector::new(&clone_config());
-    let violations = detector.detect_clones(files, Path::new("."));
+    let violations = detector.detect_clones(files, Path::new(".")).unwrap();
     assert_eq!(
         violations.len(),
         1,
@@ -358,7 +409,7 @@ fn test_fingerprint_changes_with_normalized_token_content() {
 fn test_fingerprint_is_serialized_and_legacy_payloads_default() {
     let files = clone_pair("src/a.rs", "src/b.rs");
     let detector = CloneDetector::new(&clone_config());
-    let violation = detector.detect_clones(&files, Path::new("."))[0].clone();
+    let violation = detector.detect_clones(&files, Path::new(".")).unwrap()[0].clone();
     let encoded = serde_json::to_value(&violation).unwrap();
     assert_eq!(encoded["fingerprint"], violation.fingerprint);
 

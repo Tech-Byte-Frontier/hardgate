@@ -31,7 +31,6 @@ struct WarningBatch<T, F> {
 pub(crate) fn classify_file(path: &Path, config: &HardgateConfig) -> Result<ClassifiedFile> {
     ClassifiedFile::new_with_config(path, &config.classification)
 }
-
 pub(crate) fn classify_files(
     paths: &[PathBuf],
     config: &HardgateConfig,
@@ -54,7 +53,6 @@ pub(crate) fn severity(config: &HardgateConfig, role: FileRole) -> Severity {
             Severity::Warning
         })
 }
-
 pub(crate) fn effective_file_budgets(config: &HardgateConfig, role: FileRole) -> FileBudgets {
     let mut budgets = config.budgets.files.clone();
     let Some(policy) = config.roles.for_role(role) else {
@@ -492,8 +490,10 @@ fn record_clone_exclusion_advisory(
     ));
 }
 fn clone_touches_files(violation: &CloneViolation, files: &[PathBuf], root: &Path) -> bool {
+    let file_a = crate::engines::clones::repository_relative_path(&violation.file_a, root);
+    let file_b = crate::engines::clones::repository_relative_path(&violation.file_b, root);
     files.iter().any(|path| {
-        let rel = path.strip_prefix(root).unwrap_or(path);
-        rel == violation.file_a || rel == violation.file_b
+        let changed = crate::engines::clones::repository_relative_path(path, root);
+        changed == file_a || changed == file_b
     })
 }

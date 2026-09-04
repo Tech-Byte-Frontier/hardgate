@@ -10,6 +10,67 @@ pub use index::CloneIndexError;
 use index::{CloneIndexOptions, RawCloneMatch, build_index, token_kinds_match, token_slice};
 use tokenizer::Token;
 
+/// Return a stable repository-relative key without touching the filesystem.
+/// Lexical normalization keeps deleted or otherwise nonexistent paths safe to
+/// compare while treating `./src/a.rs`, `src/a.rs`, and an absolute path under
+/// a relative `.` root as the same repository path.
+pub(crate) fn repository_relative_path(path: &Path, root: &Path) -> PathBuf {
+    let normalized_path = normalize_path(path);
+    let normalized_root = normalize_path(root);
+    if normalized_path.is_absolute() {
+        let absolute_root = if normalized_root.is_absolute() {
+            Some(normalized_root.clone())
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| normalize_path(&cwd.join(&normalized_root)))
+        };
+        if let Some(absolute_root) = absolute_root
+            && let Ok(relative) = normalized_path.strip_prefix(&absolute_root)
+        {
+            return normalize_path(relative);
+        }
+        return normalized_path;
+    }
+    if normalized_root.as_os_str().is_empty() {
+        return normalized_path;
+    }
+    normalized_path
+        .strip_prefix(&normalized_root)
+        .map(normalize_path)
+        .unwrap_or(normalized_path)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        append_component(&mut normalized, component);
+    }
+    normalized
+}
+
+fn append_component(normalized: &mut PathBuf, component: std::path::Component<'_>) {
+    match component {
+        std::path::Component::CurDir => {}
+        std::path::Component::ParentDir => normalize_parent(normalized),
+        _ => normalized.push(component.as_os_str()),
+    }
+}
+
+fn normalize_parent(path: &mut PathBuf) {
+    if parent_can_pop(path) {
+        path.pop();
+    } else if !path.is_absolute() {
+        path.push("..");
+    }
+}
+
+fn parent_can_pop(path: &Path) -> bool {
+    path.components()
+        .next_back()
+        .is_some_and(|last| matches!(last, std::path::Component::Normal(_)))
+}
+
 /// One duplicated block shared between two locations, with span sizes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloneViolation {
@@ -64,8 +125,8 @@ impl CloneDetector {
         files
             .iter()
             .filter_map(|(abs_path, _)| {
-                let rel_path = abs_path.strip_prefix(root).unwrap_or(abs_path);
-                if exclude.is_match(rel_path) {
+                let rel_path = repository_relative_path(abs_path, root);
+                if exclude.is_match(&rel_path) {
                     Some(abs_path)
                 } else {
                     None
@@ -79,10 +140,14 @@ impl CloneDetector {
     }
 
     /// Rolling-hash clone detection over token streams, honoring excludes.
-    /// This compatibility wrapper returns no findings when the checked index
-    /// reports dropped evidence; gate code always uses the checked API.
-    pub fn detect_clones(&self, files: &[(PathBuf, String)], root: &Path) -> Vec<CloneViolation> {
-        self.detect_clones_checked(files, root).unwrap_or_default()
+    /// The result is explicit so index truncation can never become a silent
+    /// empty-success response.
+    pub fn detect_clones(
+        &self,
+        files: &[(PathBuf, String)],
+        root: &Path,
+    ) -> Result<Vec<CloneViolation>, CloneIndexError> {
+        self.detect_clones_checked(files, root)
     }
 
     /// Build a complete clone index and return an explicit error if a bounded
