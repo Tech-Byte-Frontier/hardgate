@@ -227,7 +227,7 @@ fn resolver_ancestor_and_extension_helpers_cover_edges() {
     );
     assert_eq!(
         ancestor_dirs(Path::new("/tmp/file"), Path::new("/root")),
-        vec![PathBuf::from("/tmp/file"), PathBuf::from("/tmp")]
+        vec![PathBuf::from("/tmp/file")]
     );
 
     for extension in ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "JS"] {
