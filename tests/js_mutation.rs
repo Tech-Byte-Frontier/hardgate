@@ -9,6 +9,7 @@ use hardgate::engines::mutation::{
     TestFramework, TestSelection,
 };
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 fn write(root: &Path, path: &str, content: &str) {
     let target = root.join(path);
@@ -32,6 +33,63 @@ fn write_bun_fixture(root: &Path, package_json: &str, source_path: &str, source:
     write(root, "package.json", package_json);
     write(root, "bun.lockb", "lock\n");
     write(root, source_path, source);
+}
+
+fn write_mutation_config(root: &Path, timeout_secs: u64, max_mutants: usize) {
+    write(
+        root,
+        "hardgate.toml",
+        &format!(
+            "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\nmin_score = 0.0\ntimeout_secs = {timeout_secs}\nmax_mutants = {max_mutants}\n"
+        ),
+    );
+}
+
+fn write_full_suite_package(root: &Path) {
+    write(
+        root,
+        "package.json",
+        r#"{"packageManager":"bun@1.1.0","scripts":{"test":"node scripts/test.mjs"}}"#,
+    );
+    write(root, "bun.lockb", "lock\n");
+    write(
+        root,
+        "scripts/test.mjs",
+        "import { writeFileSync } from 'node:fs'; writeFileSync('baseline.marker', 'ran');\n",
+    );
+}
+
+fn run_mutation(root: &Path, scope: &str, max_mutants: usize) -> Output {
+    let max_mutants = max_mutants.to_string();
+    Command::new(env!("CARGO_BIN_EXE_hardgate"))
+        .args(["mutate", "--scoped", scope, "--max-mutants", &max_mutants])
+        .current_dir(root)
+        .output()
+        .expect("hardgate binary should run")
+}
+
+fn assert_full_suite_timeout_error(output: &Output) {
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("full-suite"), "{diagnostic}");
+    assert!(diagnostic.contains("timeout_secs >= 60"), "{diagnostic}");
+}
+
+fn assert_full_suite_rejected(root: &Path, scope: &str) {
+    let output = run_mutation(root, scope, 1);
+    assert_full_suite_timeout_error(&output);
+    assert!(!root.join("baseline.marker").exists());
+}
+
+#[cfg(unix)]
+fn write_executable(root: &Path, path: &str, content: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    write(root, path, content);
+    let target = root.join(path);
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(target, permissions).unwrap();
 }
 
 struct ExpectedPlan {
@@ -277,43 +335,61 @@ fn role_policy_overrides_mutation_target_and_invalid_classification_is_error() {
 #[test]
 fn full_suite_timeout_error_is_reported_before_baseline() {
     let root = fs::tempdir("js-full-suite-timeout");
+    write_mutation_config(&root, 59, 1);
+    write_full_suite_package(&root);
+    write(&root, "src/scale.ts", "export const scale = true;\n");
+    assert_full_suite_rejected(&root, "src/scale.ts");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_max_mutants_uses_selected_relevant_test_root() {
+    let root = fs::tempdir("js-selected-relevant");
+    write_mutation_config(&root, 10, 1);
     write_files(
         &root,
         &[
             (
-                "hardgate.toml",
-                r#"
-[gate]
-preset = "custom"
-
-[mutation]
-enabled = true
-timeout_secs = 59
-max_mutants = 1
-"#,
-            ),
-            (
                 "package.json",
-                r#"{"packageManager":"bun@1.1.0","scripts":{"test":"node scripts/test.mjs"}}"#,
+                r#"{"packageManager":"pnpm@9.0.0","scripts":{"test":"vitest run"}}"#,
             ),
-            ("bun.lockb", "lock\n"),
-            ("src/scale.ts", "export const scale = true;\n"),
-            (
-                "scripts/test.mjs",
-                "import { writeFileSync } from 'node:fs'; writeFileSync('baseline.marker', 'ran');\n",
-            ),
+            ("pnpm-lock.yaml", "lockfileVersion: 9\n"),
+            ("src/App.tsx", "export const App = true;\n"),
+            ("src/App.test.tsx", "test('App', () => {});\n"),
+            ("src/Widget.tsx", "export const Widget = true;\n"),
         ],
     );
+    write_executable(
+        &root,
+        "node_modules/.bin/pnpm",
+        "#!/bin/sh\nprintf '%s' \"$*\" >> pnpm-invocations\nexit 0\n",
+    );
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hardgate"))
-        .args(["mutate", "--scoped", "src/scale.ts"])
-        .current_dir(&root)
-        .output()
-        .expect("hardgate binary should run");
-    assert!(!output.status.success());
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(diagnostic.contains("full-suite"), "{diagnostic}");
-    assert!(diagnostic.contains("timeout_secs >= 60"), "{diagnostic}");
-    assert!(!root.join("baseline.marker").exists());
+    let output = run_mutation(&root, "src", 1);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let invocations = std::fs::read_to_string(root.join("pnpm-invocations")).unwrap();
+    assert!(
+        invocations.contains("test -- src/App.test.tsx"),
+        "{invocations}"
+    );
+    assert!(!invocations.contains("Widget"), "{invocations}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn directory_max_mutants_keeps_selected_full_suite_guard() {
+    let root = fs::tempdir("js-selected-full-suite");
+    write_mutation_config(&root, 59, 1);
+    write_full_suite_package(&root);
+    write(&root, "src/Alpha.ts", "export const alpha = true;\n");
+    write(&root, "src/Zed.ts", "export const zed = true;\n");
+    write(&root, "tests/Zed.test.ts", "test('zed', () => {});\n");
+
+    assert_full_suite_rejected(&root, "src");
     let _ = std::fs::remove_dir_all(root);
 }

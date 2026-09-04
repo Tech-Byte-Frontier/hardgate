@@ -55,13 +55,14 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .clone()
         .or_else(|| config.mutation.test_cmd.clone());
     let max_count = resolve_max_mutants(&opts, &config)?;
-    let timeout = resolve_timeout(&opts, &config, &target_files, root)?;
-    let runner = NativeMutationRunner::new(timeout, test_cmd);
-    run_unmutated_baselines(&runner, &target_files, root)?;
     let mutants = generate_target_mutants(&target_files, max_count)?;
     if mutants.is_empty() {
         bail!("no viable AST mutation points were found in the selected production sources");
     }
+    let selected_files = selected_mutant_files(&mutants);
+    let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
+    let runner = NativeMutationRunner::new(timeout, test_cmd);
+    run_unmutated_baselines(&runner, &selected_files, root)?;
     print_mutant_notice(mutants.len(), timeout);
     let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
     finish_mutation_run(MutationRun {
@@ -72,14 +73,12 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         start_time,
     })
 }
-
 fn print_disabled_mutation() {
     println!(
         "{} mutation testing is disabled by `[mutation].enabled = false`.",
         "note:".green().bold()
     );
 }
-
 fn print_generation_notice(files: &[PathBuf], diff: bool) {
     println!(
         "{} generating AST mutations across {} source files (diff: {})...",
@@ -88,7 +87,6 @@ fn print_generation_notice(files: &[PathBuf], diff: bool) {
         diff
     );
 }
-
 fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<usize> {
     let max_count = opts
         .max_mutants
@@ -99,7 +97,6 @@ fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<
     }
     Ok(max_count)
 }
-
 fn resolve_timeout(
     opts: &MutateOptions,
     config: &HardgateConfig,
@@ -145,7 +142,6 @@ fn automatic_full_suite_timeout(
         .map(|plan| plan.recommended_timeout_secs)
         .max()
 }
-
 fn print_mutant_notice(count: usize, timeout: u64) {
     println!(
         "{} running {} mutants (timeout: {}s per mutant)...",
@@ -154,7 +150,6 @@ fn print_mutant_notice(count: usize, timeout: u64) {
         timeout
     );
 }
-
 fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
     let score = run.stats.score_percent();
     let min_score = run.config.mutation.min_score.unwrap_or(85.0);
@@ -176,7 +171,6 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
         std::process::exit(1)
     }
 }
-
 fn discover_targets(
     opts: &MutateOptions,
     config: &HardgateConfig,
@@ -217,7 +211,6 @@ fn discover_targets(
     })?;
     filter_production_sources(files, config)
 }
-
 fn filter_production_sources(files: Vec<PathBuf>, config: &HardgateConfig) -> Result<Vec<PathBuf>> {
     let mut targets = Vec::new();
     for path in files {
@@ -228,14 +221,12 @@ fn filter_production_sources(files: Vec<PathBuf>, config: &HardgateConfig) -> Re
     }
     Ok(targets)
 }
-
 /// Resolve whether a path is an effective native mutation target under the
 /// built-in role default and any configured role policy override.
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
     Ok(is_effective_mutation_target(&classified, config))
 }
-
 fn run_unmutated_baselines(
     runner: &NativeMutationRunner,
     files: &[PathBuf],
@@ -271,7 +262,6 @@ fn run_unmutated_baselines(
     }
     Ok(())
 }
-
 fn baseline_failure(result: &BaselineExecutionResult, file: &Path) -> anyhow::Error {
     let diagnostic = if result.diagnostic.trim().is_empty() {
         "no diagnostic output".to_string()
@@ -296,6 +286,16 @@ fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<As
         all.extend(mutator.generate_mutants(file, &content));
     }
     Ok(select_representative_mutants(all, max_count))
+}
+
+fn selected_mutant_files(mutants: &[AstMutant]) -> Vec<PathBuf> {
+    let mut files = mutants
+        .iter()
+        .map(|mutant| mutant.file.clone())
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
 }
 
 pub fn select_representative_mutants(
@@ -484,15 +484,15 @@ fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> boo
 }
 
 fn print_no_targets(diff: bool) {
-    if diff {
-        println!(
-            "{} no git-modified files found for mutation testing.",
-            "note:".green().bold()
-        );
-    } else {
-        println!(
-            "{} no source files found for mutation testing.",
-            "warning:".yellow().bold()
-        );
-    }
+    let (label, message) = match diff {
+        true => (
+            "note:".green().bold(),
+            "no git-modified files found for mutation testing",
+        ),
+        false => (
+            "warning:".yellow().bold(),
+            "no source files found for mutation testing",
+        ),
+    };
+    println!("{label} {message}.");
 }
