@@ -83,6 +83,12 @@ static/dead-code findings without widening explicit paths.
 
 No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation. If `[mutation].enabled = false`, it prints a disabled-policy note and succeeds without target discovery, baseline execution, or mutants; target/no-target rules apply only when enabled.
 
+Inventory is broader than AST parser support. Under the preset role severities,
+parser-unsupported files that remain source or migration (for example CSS,
+GraphQL, or SQL) block as `unsupported-source`; accepting one requires an
+explicit, truthful classification or role-policy decision rather than false
+function metrics.
+
 Native `mutate` is compiled for Linux and macOS targets, including all six
 prebuilt/npm binaries above. Source builds targeting another operating system
 fail closed before baseline or source writes because robust process-group

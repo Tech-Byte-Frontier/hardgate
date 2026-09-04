@@ -34,7 +34,15 @@ Tree-sitter parsing covers:
 | Python | `.py` |
 | Go | `.go` |
 
-The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats remain visible to classification and applicable safety rules but do not receive function metrics. Markdown (`.md`) is not a built-in inventory extension.
+The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`,
+`.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats
+remain visible to classification and applicable safety rules but do not
+receive function metrics. Inventory is not a claim of parser support: with
+the preset role severities, a parser-unsupported file that remains classified
+as source or migration blocks with `unsupported-source`. This includes
+handwritten CSS, GraphQL, and non-migration SQL unless the project makes an
+explicit, truthful classification or role-policy decision. Markdown (`.md`)
+is not a built-in inventory extension.
 
 ### Node and Supabase conventions
 

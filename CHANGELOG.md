@@ -27,6 +27,10 @@ Migration notes:
   C/C++ is not advertised as supported. Native mutation is compiled into the
   six Linux/macOS prebuilt/npm binaries; other target operating systems fail
   closed before mutation execution or source writes.
+- Inventory is broader than AST support. Parser-unsupported files that remain
+  source or migration (including CSS, GraphQL, and SQL) block as
+  `unsupported-source` under preset role severities; accepting them requires
+  an explicit classification or role-policy decision.
 - Prebuilt, npm, and shell-installer distribution is exactly six Linux/macOS
   target artifacts. Remove references to `hardgate-win32-x64`, Homebrew, or
   cargo-dist from existing automation; they are not v0.5.0 release channels.

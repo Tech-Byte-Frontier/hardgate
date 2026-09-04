@@ -63,6 +63,12 @@ Built-in role behavior:
 
 Tree-sitter targets are `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, and `.go`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
 
+Inventory-only does not mean silently accepted. A file that remains in the
+source or migration role without parser support is an `unsupported-source`
+finding; the preset severities make it blocking. Projects must reclassify such
+a file only when another role is truthful, or deliberately change the
+applicable role policy. Classification never adds parser support.
+
 Rust files named `tests.rs`, `*_tests.rs`, or `*-tests.rs` use the built-in
 test role convention; the suffix rule is limited to `.rs` so similarly named
 JavaScript, Python, and other files remain source unless another convention
