@@ -18,57 +18,85 @@ pub(super) fn discover_targets(
     root: &Path,
 ) -> Result<Vec<PathBuf>> {
     let canonical_root = canonical_repository_root(root)?;
-    let files = match opts.scoped.as_deref() {
-        Some(scope) => {
-            let canonical_scope = canonical_scope(scope, &canonical_root)?;
-            if canonical_scope.is_file() {
-                let classified =
-                    ClassifiedFile::new_with_config(&canonical_scope, &config.classification)?;
-                if !is_effective_mutation_target(&classified, config) {
-                    let builtin_role = ClassifiedFile::new(&canonical_scope).role;
-                    bail!(
-                        "refusing to mutate `{}` because it is classified as {:?}, not production source (built-in role {:?})",
-                        scope.display(),
-                        classified.role,
-                        builtin_role,
-                    );
-                }
-                if !classified.ast_supported {
-                    bail!(
-                        "refusing to mutate `{}` because Hardgate has no AST mutator for its file type",
-                        scope.display()
-                    );
-                }
-                return Ok(vec![repository_relative(
-                    &canonical_scope,
-                    &canonical_root,
-                )?]);
-            }
-            if canonical_scope.is_dir() {
-                discover_files(DiscoverOptions {
-                    root: &canonical_scope,
-                    diff_only: false,
-                    exclusions: &config.budgets.files.exclusions.paths,
-                })?
-            } else {
-                bail!(
-                    "Mutation scope is neither a file nor a directory: `{}`",
-                    scope.display()
-                )
-            }
-        }
-        None => discover_files(DiscoverOptions {
-            root: &canonical_root,
-            diff_only: opts.diff,
-            exclusions: &config.budgets.files.exclusions.paths,
-        })?,
-    };
+    let files = discover_scope_or_repository(opts, config, &canonical_root)?;
     filter_production_sources(files, config, &canonical_root)
 }
 
 pub(super) fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     let classified = ClassifiedFile::new_with_config(path, &config.classification)?;
     Ok(is_effective_mutation_target(&classified, config))
+}
+
+fn discover_scope_or_repository(
+    opts: &MutateOptions,
+    config: &HardgateConfig,
+    canonical_root: &Path,
+) -> Result<Vec<PathBuf>> {
+    match opts.scoped.as_deref() {
+        Some(scope) => discover_scoped_files(scope, canonical_root, config),
+        None => discover_files(DiscoverOptions {
+            root: canonical_root,
+            diff_only: opts.diff,
+            exclusions: &config.budgets.files.exclusions.paths,
+        }),
+    }
+}
+
+fn discover_scoped_files(
+    scope: &Path,
+    canonical_root: &Path,
+    config: &HardgateConfig,
+) -> Result<Vec<PathBuf>> {
+    let canonical_scope = canonical_scope(scope, canonical_root)?;
+    if canonical_scope.is_file() {
+        return scoped_file_target(scope, &canonical_scope, canonical_root, config);
+    }
+    if !canonical_scope.is_dir() {
+        bail!(
+            "Mutation scope is neither a file nor a directory: `{}`",
+            scope.display()
+        );
+    }
+    discover_files(DiscoverOptions {
+        root: &canonical_scope,
+        diff_only: false,
+        exclusions: &config.budgets.files.exclusions.paths,
+    })
+}
+
+fn scoped_file_target(
+    scope: &Path,
+    canonical_scope: &Path,
+    canonical_root: &Path,
+    config: &HardgateConfig,
+) -> Result<Vec<PathBuf>> {
+    let classified = ClassifiedFile::new_with_config(canonical_scope, &config.classification)?;
+    ensure_scoped_file_target(scope, canonical_scope, &classified, config)?;
+    Ok(vec![repository_relative(canonical_scope, canonical_root)?])
+}
+
+fn ensure_scoped_file_target(
+    scope: &Path,
+    canonical_scope: &Path,
+    classified: &ClassifiedFile,
+    config: &HardgateConfig,
+) -> Result<()> {
+    if !is_effective_mutation_target(classified, config) {
+        let builtin_role = ClassifiedFile::new(canonical_scope).role;
+        bail!(
+            "refusing to mutate `{}` because it is classified as {:?}, not production source (built-in role {:?})",
+            scope.display(),
+            classified.role,
+            builtin_role,
+        );
+    }
+    if !classified.ast_supported {
+        bail!(
+            "refusing to mutate `{}` because Hardgate has no AST mutator for its file type",
+            scope.display()
+        );
+    }
+    Ok(())
 }
 
 fn filter_production_sources(
@@ -180,18 +208,18 @@ fn normalize_absolute(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(component.as_os_str()),
             Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir => pop_or_keep_parent(&mut normalized),
+            _ => normalized.push(component.as_os_str()),
         }
     }
     normalized
+}
+
+fn pop_or_keep_parent(path: &mut PathBuf) {
+    if !path.pop() {
+        path.push("..");
+    }
 }
 
 fn normalize_relative(path: &Path) -> PathBuf {
