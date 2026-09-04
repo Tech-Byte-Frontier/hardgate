@@ -290,7 +290,8 @@ jobs:
             "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
           )
           release_error=$(mktemp)
-          if gh release view "$RELEASE_TAG" --json tagName >/dev/null 2>"$release_error"; then
+          release_metadata=""
+          if release_metadata=$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease 2>"$release_error"); then
             release_exists=1
           else
             status=$?
@@ -307,6 +308,18 @@ jobs:
           fi
           rm -f "$release_error"
           if [ "$release_exists" -eq 1 ]; then
+            release_tag=$(printf '%s\n' "$release_metadata" | jq -r '.tagName')
+            release_is_draft=$(printf '%s\n' "$release_metadata" | jq -r '.isDraft')
+            release_is_prerelease=$(printf '%s\n' "$release_metadata" | jq -r '.isPrerelease')
+            test "$release_tag" = "$RELEASE_TAG"
+            if ! test "$release_is_draft" = false; then
+              echo "existing GitHub release $RELEASE_TAG is a draft; refusing to mutate it" >&2
+              exit 1
+            fi
+            if ! test "$release_is_prerelease" = false; then
+              echo "existing GitHub release $RELEASE_TAG is a prerelease; refusing to mutate it" >&2
+              exit 1
+            fi
             existing=$(mktemp -d)
             trap 'rm -rf "$existing"' EXIT
             asset_names=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
@@ -714,8 +727,15 @@ jobs:
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
-          release_tag=$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)
+          release_metadata=$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease)
+          release_tag=$(printf '%s\n' "$release_metadata" | jq -r '.tagName')
+          release_is_draft=$(printf '%s\n' "$release_metadata" | jq -r '.isDraft')
+          release_is_prerelease=$(printf '%s\n' "$release_metadata" | jq -r '.isPrerelease')
+          latest_release_tag=$(gh release view --json tagName --jq .tagName)
           test "$release_tag" = "$RELEASE_TAG"
+          test "$release_is_draft" = false
+          test "$release_is_prerelease" = false
+          test "$latest_release_tag" = "$RELEASE_TAG"
           assets=(
             hardgate-linux-x64.tar.gz
             hardgate-linux-x64-musl.tar.gz
@@ -768,6 +788,54 @@ jobs:
               404) rm -f "$body"; return 1 ;;
               *) rm -f "$body"; return 3 ;;
             esac
+          }
+          # The unversioned registry document is authoritative for
+          # dist-tags.latest; exact-version probes alone cannot prove the
+          # package is the current release channel.
+          npm_latest_probe() {
+            name="$1"
+            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist-tags"]["latest"])' < "$body") || {
+                  rm -f "$body"
+                  return 3
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
+                return 0
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 3 ;;
+            esac
+          }
+          wait_for_latest_tag() {
+            name="$1"
+            wanted="$2"
+            status=2
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+              if actual=$(npm_latest_probe "$name"); then
+                if [ "$actual" = "$wanted" ]; then
+                  printf '%s\n' "$actual"
+                  return 0
+                fi
+                echo "npm dist-tags.latest for $name is $actual; expected $wanted" >&2
+                status=4
+              else
+                status=$?
+                case "$status" in
+                  1|2) ;;
+                  *) return "$status" ;;
+                esac
+              fi
+              [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+            done
+            return "$status"
           }
           wait_for_registry_version() {
             retry_absent="$1"
@@ -835,8 +903,10 @@ jobs:
           test "$(wait_for_crate_version 1)" = "$RELEASE_VERSION"
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             test "$(wait_for_registry_version 1 "$pkg" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
+            test "$(wait_for_latest_tag "$pkg" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
           done
           test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
+          test "$(wait_for_latest_tag "@tech-byte-frontier/hardgate" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
 
           crate_root=$(mktemp -d)
           crate_installed=0

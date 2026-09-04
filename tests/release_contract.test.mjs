@@ -176,6 +176,14 @@ includesAll(release, [
   "release_error=$(mktemp)",
   "release_exists=0",
   "unable to determine whether GitHub release",
+  "tagName,isDraft,isPrerelease",
+  "test \"$release_is_draft\" = false",
+  "test \"$release_is_prerelease\" = false",
+  "latest_release_tag=$(gh release view --json tagName --jq .tagName)",
+  "test \"$latest_release_tag\" = \"$RELEASE_TAG\"",
+  "npm_latest_probe()",
+  "wait_for_latest_tag()",
+  "[\"dist-tags\"][\"latest\"]",
 ], "release");
 assert.doesNotMatch(release, /--clobber/, "immutable release assets must never be overwritten in place");
 assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
@@ -210,6 +218,56 @@ assert.match(release, /permissions:\s*\n\s+contents: read/, "release workflow de
 assert.match(release, /package:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only packaging may attest artifacts");
 assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
 assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
+const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
+includesAll(
+  githubReleaseJob,
+  [
+    "--json tagName,isDraft,isPrerelease",
+    'test "$release_tag" = "$RELEASE_TAG"',
+    'test "$release_is_draft" = false',
+    'test "$release_is_prerelease" = false',
+    "refusing to mutate it",
+  ],
+  "existing GitHub release state guard",
+);
+const finalReleaseBundleStep = release.slice(
+  release.indexOf("- name: Download and verify the complete release bundle"),
+  release.indexOf("- name: Verify published registry versions and runnable installs"),
+);
+includesAll(
+  finalReleaseBundleStep,
+  [
+    "--json tagName,isDraft,isPrerelease",
+    'test "$release_tag" = "$RELEASE_TAG"',
+    'test "$release_is_draft" = false',
+    'test "$release_is_prerelease" = false',
+    "latest_release_tag=$(gh release view --json tagName --jq .tagName)",
+    'test "$latest_release_tag" = "$RELEASE_TAG"',
+  ],
+  "current GitHub latest release guard",
+);
+const finalNpmVerificationStep = release.slice(
+  release.indexOf("- name: Verify published registry versions and runnable installs"),
+  release.indexOf("- name: Verify clean npm, pnpm, Yarn, and Bun consumers"),
+);
+includesAll(
+  finalNpmVerificationStep,
+  [
+    "npm_latest_probe()",
+    '"dist-tags"]["latest"]',
+    "wait_for_latest_tag()",
+    'wait_for_latest_tag "$pkg" "$RELEASE_VERSION"',
+    'wait_for_latest_tag "@tech-byte-frontier/hardgate" "$RELEASE_VERSION"',
+  ],
+  "final npm latest dist-tag verification",
+);
+const finalNpmPlatformLoop = finalNpmVerificationStep.slice(
+  finalNpmVerificationStep.indexOf("for pkg in hardgate-linux-x64"),
+  finalNpmVerificationStep.indexOf("crate_root=$(mktemp -d)"),
+);
+for (const packageName of platformPackages) {
+  assert.ok(finalNpmPlatformLoop.includes(packageName), `final npm verification must probe ${packageName}`);
+}
 const crateStateStep = release.slice(release.indexOf("id: crate-state"), release.indexOf("name: Publish crate when exact version is missing"));
 const cratePublishStep = release.slice(release.indexOf("name: Publish crate when exact version is missing"), release.indexOf("- name: Verify published crate identity without publish credentials"));
 const crateVerifyStep = release.slice(release.indexOf("- name: Verify published crate identity without publish credentials"), release.indexOf("  publish-npm:"));
