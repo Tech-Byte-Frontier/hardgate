@@ -266,7 +266,6 @@ fn role_policy_overrides_mutation_target_and_invalid_classification_is_error() {
     config.classification.rules.push(ClassificationRule {
         glob: "src/widget.ts".to_string(),
         role: FileRole::Test,
-        reason: None,
     });
     assert!(!effective_mutation_target(source, &config).unwrap());
 
