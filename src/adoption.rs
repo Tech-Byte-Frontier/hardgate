@@ -1,11 +1,14 @@
 //! Pure comparison of current static debt with a merge-base report.
 
+mod legacy_hunk;
+
 use crate::diagnostics::GateReport;
 use crate::engines::{
     BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
     SuppressionViolation,
 };
 use crate::git_evidence::ChangeSet;
+use legacy_hunk::LegacyFinding;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -128,6 +131,7 @@ fn ratchet_numeric<T, K, N, Key, Actual, Advisory>(
     ops: (Key, Actual, Advisory),
 ) -> Vec<String>
 where
+    T: LegacyFinding,
     K: Ord,
     N: Copy + PartialOrd,
     Key: Fn(&T, &BTreeMap<PathBuf, PathBuf>) -> K,
@@ -148,6 +152,9 @@ where
     }
     let mut advisories = Vec::new();
     current.retain(|violation| {
+        if violation.attributable(changes) {
+            return true;
+        }
         let key = key(violation, &changes.rename_lineage);
         let Some(values) = available.get_mut(&key) else {
             return true;
@@ -172,6 +179,7 @@ fn ratchet_multiset<T, K, Key, Advisory, Eligible>(
     ops: (Key, Advisory, Eligible),
 ) -> Vec<String>
 where
+    T: LegacyFinding,
     K: Ord,
     Key: Fn(&T, &BTreeMap<PathBuf, PathBuf>) -> K,
     Advisory: Fn(&T, &ChangeSet) -> String,
@@ -185,7 +193,7 @@ where
     }
     let mut advisories = Vec::new();
     current.retain(|violation| {
-        if !eligible(violation) {
+        if !eligible(violation) || violation.attributable(changes) {
             return true;
         }
         let key = key(violation, &changes.rename_lineage);
