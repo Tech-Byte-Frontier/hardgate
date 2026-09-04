@@ -422,10 +422,10 @@ fn append_context(message: &mut String, context: Option<String>) {
     message.push(']');
 }
 fn file_context(path: &Path, changes: &ChangeSet) -> Option<String> {
-    if let Some(lines) = changes.changed_lines.get(path) {
-        if let Some(first) = lines.iter().next() {
-            return Some(format!("changed file `{}` at line {first}", path.display()));
-        }
+    if let Some(lines) = changes.changed_lines.get(path)
+        && let Some(first) = lines.iter().next()
+    {
+        return Some(format!("changed file `{}` at line {first}", path.display()));
     }
     changes
         .changed_files

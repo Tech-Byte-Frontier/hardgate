@@ -288,10 +288,10 @@ fn find_declared_exports(content: &str) -> Vec<(usize, String)> {
             if let Some(sym) = cap.get(1) {
                 exports.push((line_num, sym.as_str().to_string()));
             }
-        } else if let Some(cap) = export_const_re.captures(line) {
-            if let Some(sym) = cap.get(1) {
-                exports.push((line_num, sym.as_str().to_string()));
-            }
+        } else if let Some(cap) = export_const_re.captures(line)
+            && let Some(sym) = cap.get(1)
+        {
+            exports.push((line_num, sym.as_str().to_string()));
         }
     }
     exports

@@ -192,16 +192,15 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
                 return summary;
             }
         };
-    if include_dead_code {
-        if let Err(error) =
+    if include_dead_code
+        && let Err(error) =
             run_dead_code_analysis(&baseline_config, &baseline_read, root, &mut baseline)
-        {
-            record_legacy_failure(
-                current,
-                &summary.reference,
-                format!("Unable to analyze the legacy baseline: {error}"),
-            );
-        }
+    {
+        record_legacy_failure(
+            current,
+            &summary.reference,
+            format!("Unable to analyze the legacy baseline: {error}"),
+        );
     }
     if !baseline.orchestration_violations.is_empty() {
         record_legacy_failure(

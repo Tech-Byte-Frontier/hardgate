@@ -234,12 +234,11 @@ fn direct_boolean_operator(node: Node, source: &[u8]) -> Option<&'static str> {
         if let Some(op) = classify_operator_token(child.kind()) {
             return Some(op);
         }
-        if child.child_count() == 0 {
-            if let Ok(t) = child.utf8_text(source) {
-                if let Some(op) = classify_operator_token(t) {
-                    return Some(op);
-                }
-            }
+        if child.child_count() == 0
+            && let Ok(t) = child.utf8_text(source)
+            && let Some(op) = classify_operator_token(t)
+        {
+            return Some(op);
         }
     }
     None

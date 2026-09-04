@@ -104,25 +104,25 @@ fn check_patterns(
     violations: &mut Vec<SuppressionViolation>,
 ) -> bool {
     for re in patterns {
-        if let Some(mat) = re.find(ctx.line) {
-            if is_valid_suppression_context(ctx.line, mat.start(), mat.as_str()) {
-                let msg = if is_custom {
-                    format!("Anti-gaming: forbidden token '{}'", mat.as_str())
-                } else {
-                    format!(
-                        "Anti-gaming: suppression pragma '{}' prohibited",
-                        mat.as_str()
-                    )
-                };
-                violations.push(SuppressionViolation {
-                    file: ctx.file.to_path_buf(),
-                    line_number: ctx.line_num,
-                    token: mat.as_str().to_string(),
-                    line_content: ctx.line.to_string(),
-                    message: msg,
-                });
-                return true;
-            }
+        if let Some(mat) = re.find(ctx.line)
+            && is_valid_suppression_context(ctx.line, mat.start(), mat.as_str())
+        {
+            let msg = if is_custom {
+                format!("Anti-gaming: forbidden token '{}'", mat.as_str())
+            } else {
+                format!(
+                    "Anti-gaming: suppression pragma '{}' prohibited",
+                    mat.as_str()
+                )
+            };
+            violations.push(SuppressionViolation {
+                file: ctx.file.to_path_buf(),
+                line_number: ctx.line_num,
+                token: mat.as_str().to_string(),
+                line_content: ctx.line.to_string(),
+                message: msg,
+            });
+            return true;
         }
     }
     false

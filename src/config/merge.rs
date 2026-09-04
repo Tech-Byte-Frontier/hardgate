@@ -201,10 +201,10 @@ fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets, raw: &toml::Tab
             }
         }
     }
-    if let Some(exclusions) = table.get("exclusions").and_then(toml::Value::as_table) {
-        if exclusions.contains_key("paths") {
-            base.exclusions.paths = user.exclusions.paths;
-        }
+    if let Some(exclusions) = table.get("exclusions").and_then(toml::Value::as_table)
+        && exclusions.contains_key("paths")
+    {
+        base.exclusions.paths = user.exclusions.paths;
     }
 }
 

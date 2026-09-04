@@ -105,10 +105,10 @@ fn validate_coverage(coverage: &CoverageConfig) -> Result<()> {
             ensure_percentage(value, field)?;
         }
     }
-    if let Some(value) = coverage.max_crap_score {
-        if !value.is_finite() || value < 0.0 {
-            bail!("coverage.max_crap_score must be finite and non-negative");
-        }
+    if let Some(value) = coverage.max_crap_score
+        && (!value.is_finite() || value < 0.0)
+    {
+        bail!("coverage.max_crap_score must be finite and non-negative");
     }
     Ok(())
 }

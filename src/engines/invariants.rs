@@ -65,10 +65,10 @@ impl InvariantsChecker {
             if !rule.from_glob.is_match(rel_path) {
                 continue;
             }
-            if let Some(ref exclude) = rule.exclude_glob {
-                if exclude.is_match(rel_path) {
-                    continue;
-                }
+            if let Some(ref exclude) = rule.exclude_glob
+                && exclude.is_match(rel_path)
+            {
+                continue;
             }
 
             self.scan_file_lines((rel_path, content), rule, &mut violations);
