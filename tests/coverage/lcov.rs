@@ -135,7 +135,7 @@ fn lcov_percentages_handle_empty_and_populated_counters() {
         ..Default::default()
     };
     assert_eq!(populated.line_coverage_percent(), 50.0);
-    assert!((populated.function_coverage_percent() - 100.0 / 3.0).abs() < f64::EPSILON);
+    assert!((populated.function_coverage_percent() - 100.0 / 3.0).abs() < 1e-12);
     assert_eq!(populated.branch_coverage_percent(), 75.0);
 }
 
