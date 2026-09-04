@@ -12,6 +12,15 @@ fn framed(headers: &[&str], body: &[u8]) -> Vec<u8> {
     input
 }
 
+fn assert_framing_error_before_body(input: Vec<u8>, expected_error: &str, unread: &[u8]) {
+    let mut reader = Cursor::new(input);
+    let error = read_mcp_message(&mut reader).expect_err("framing must fail closed");
+
+    assert!(error.to_string().contains(expected_error));
+    let consumed = reader.position() as usize;
+    assert_eq!(&reader.get_ref()[consumed..], unread);
+}
+
 #[test]
 fn normal_content_length_frame_reads_exact_body() {
     let body = br#"{"jsonrpc":"2.0","method":"ping"}"#;
@@ -39,35 +48,17 @@ fn duplicate_equal_content_lengths_are_accepted() {
 fn conflicting_duplicate_lengths_are_rejected_before_body_read() {
     let body = b"payload";
     let input = framed(&["Content-Length: 3", "Content-Length: 4"], body);
-    let mut reader = Cursor::new(input);
-    let error = read_mcp_message(&mut reader).expect_err("conflicting lengths must fail closed");
-
-    assert!(
-        error
-            .to_string()
-            .contains("Conflicting MCP Content-Length headers")
-    );
-    let consumed = reader.position() as usize;
-    assert_eq!(
-        &reader.get_ref()[consumed..],
+    assert_framing_error_before_body(
+        input,
+        "Conflicting MCP Content-Length headers",
         b"\r\npayload",
-        "the blank line and body must remain unread"
     );
 }
 
 #[test]
 fn malformed_content_length_is_rejected_before_body_read() {
     let input = framed(&["Content-Length: not-a-number"], b"{}");
-    let mut reader = Cursor::new(input);
-    let error = read_mcp_message(&mut reader).expect_err("malformed length must fail closed");
-
-    assert!(
-        error
-            .to_string()
-            .contains("Malformed MCP Content-Length header")
-    );
-    let consumed = reader.position() as usize;
-    assert_eq!(&reader.get_ref()[consumed..], b"\r\n{}");
+    assert_framing_error_before_body(input, "Malformed MCP Content-Length header", b"\r\n{}");
 }
 
 #[test]
