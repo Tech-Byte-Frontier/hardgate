@@ -1,7 +1,7 @@
-#[path = "support/fs.rs"]
-mod fs;
+#[path = "common/cli.rs"]
+mod cli;
 
-use fs::tempdir;
+use cli::{Fixture, json, run, stderr, stdout};
 use hardgate::GateReport;
 use hardgate::commands::{
     AnalyzeInput, OutputOptions, analyze_file_content, output_report, output_report_with_opts,
@@ -11,8 +11,7 @@ use hardgate::config::{ClassificationRule, HardgateConfig};
 use hardgate::discovery::FileRole;
 use hardgate::engines::{AntiGamingScanner, InvariantsChecker};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
 const BASE_CONFIG: &str = r#"[gate]
 name = "entrypoint-fixture"
@@ -39,65 +38,9 @@ enabled = false
 enabled = false
 "#;
 
-struct Fixture(PathBuf);
-
-impl Fixture {
-    fn new(tag: &str, config: &str) -> Self {
-        let root = tempdir(&format!("entrypoint-{tag}"));
-        std::fs::write(root.join("hardgate.toml"), config).unwrap();
-        Self(root)
-    }
-
-    fn write(&self, path: &str, content: &str) {
-        let target = self.0.join(path);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(target, content).unwrap();
-    }
-}
-
-impl AsRef<Path> for Fixture {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn run(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_hardgate"))
-        .current_dir(root)
-        .args(args)
-        .output()
-        .expect("hardgate binary should run")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn json(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "stdout should be exactly one JSON document: {error}; stdout={}; stderr={}",
-            stdout(output),
-            stderr(output)
-        )
-    })
-}
-
 #[test]
 fn check_json_flags_have_deterministic_precedence() {
-    let fixture = Fixture::new("json-precedence", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "json-precedence", BASE_CONFIG);
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     let full = run(
@@ -122,7 +65,7 @@ fn check_json_flags_have_deterministic_precedence() {
 
 #[test]
 fn check_missing_scope_is_a_structured_json_command_error() {
-    let fixture = Fixture::new("missing-scope", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "missing-scope", BASE_CONFIG);
     let output = run(
         fixture.as_ref(),
         &["check", "missing.rs", "--format", "json"],
@@ -143,7 +86,7 @@ fn check_missing_scope_is_a_structured_json_command_error() {
 
 #[test]
 fn diff_without_git_is_a_structured_json_command_error() {
-    let fixture = Fixture::new("diff-without-git", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "diff-without-git", BASE_CONFIG);
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     let output = run(fixture.as_ref(), &["check", "--diff", "--format", "json"]);
 
@@ -157,7 +100,7 @@ fn diff_without_git_is_a_structured_json_command_error() {
 
 #[test]
 fn verify_empty_explicit_scope_remains_a_successful_scoped_report() {
-    let fixture = Fixture::new("empty-scope", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "empty-scope", BASE_CONFIG);
     std::fs::create_dir(fixture.0.join("empty")).unwrap();
     let output = run(fixture.as_ref(), &["verify", "empty", "--format", "json"]);
 
@@ -180,7 +123,7 @@ fn verify_empty_explicit_scope_remains_a_successful_scoped_report() {
 
 #[test]
 fn scan_unsupported_source_has_consistent_failure_shapes() {
-    let fixture = Fixture::new("scan-unsupported", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "scan-unsupported", BASE_CONFIG);
     fixture.write(
         "migrations/001_init.sql",
         "create table users (id integer);\n",
@@ -220,7 +163,7 @@ fn scan_unsupported_source_has_consistent_failure_shapes() {
 
 #[test]
 fn scan_parse_failure_has_consistent_failure_shapes() {
-    let fixture = Fixture::new("scan-parse-failure", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "scan-parse-failure", BASE_CONFIG);
     fixture.write("src/broken.rs", "fn broken( {\n");
 
     for format in ["json", "agent", "terminal"] {
@@ -249,7 +192,7 @@ fn verify_empty_mutation_report_list_is_blocking_evidence() {
         "[mutation]\nenabled = false",
         "[mutation]\nenabled = true\nreports = []",
     );
-    let fixture = Fixture::new("empty-mutation-reports", &config);
+    let fixture = Fixture::with_config("entrypoint", "empty-mutation-reports", &config);
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     let output = run(fixture.as_ref(), &["verify", "--format", "json"]);
@@ -336,7 +279,7 @@ fn public_empty_discovery_printer_distinguishes_scope_and_diff() {
 
 #[test]
 fn invalid_output_format_is_rejected_before_gate_execution() {
-    let fixture = Fixture::new("invalid-format", BASE_CONFIG);
+    let fixture = Fixture::with_config("entrypoint", "invalid-format", BASE_CONFIG);
     let output = run(fixture.as_ref(), &["check", "--format", "yaml"]);
 
     assert!(!output.status.success());

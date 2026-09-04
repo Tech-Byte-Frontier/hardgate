@@ -1,13 +1,8 @@
 #[path = "common/cli.rs"]
 mod cli;
-#[path = "support/fs.rs"]
-mod fs;
 
-use cli::{json, run};
-use fs::tempdir;
+use cli::{Fixture, assert_success, json, run, stderr as stderr_text, stdout as output_text};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::process::Output;
 
 const CUSTOM_CONFIG: &str = r#"[gate]
 preset = "custom"
@@ -20,54 +15,9 @@ enabled = false
 enabled = false
 "#;
 
-struct Fixture(PathBuf);
-
-impl Fixture {
-    fn new(tag: &str) -> Self {
-        Self(tempdir(&format!("cli-commands-{tag}")))
-    }
-
-    fn write(&self, path: &str, content: &str) {
-        let target = self.0.join(path);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(target, content).unwrap();
-    }
-}
-
-impl AsRef<Path> for Fixture {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
-    }
-}
-
-fn output_text(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr_text(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn assert_success(output: &Output, context: &str) {
-    assert!(
-        output.status.success(),
-        "{context} failed: stdout={} stderr={}",
-        output_text(output),
-        stderr_text(output)
-    );
-}
-
 #[test]
 fn fmt_check_runs_configured_check_command() {
-    let fixture = Fixture::new("fmt-check");
+    let fixture = Fixture::new("cli-commands", "fmt-check");
     fixture.write(
         "hardgate.toml",
         r#"[gate]
@@ -88,7 +38,7 @@ timeout_secs = 2
 
 #[test]
 fn fmt_runs_write_command_and_falls_back_to_check_command() {
-    let fixture = Fixture::new("fmt-success");
+    let fixture = Fixture::new("cli-commands", "fmt-success");
     fixture.write(
         "hardgate.toml",
         r#"[gate]
@@ -110,7 +60,7 @@ timeout_secs = 2
         output_text(&output).contains("format [sh -c 'printf formatted > formatted.txt'] passed")
     );
 
-    let fallback = Fixture::new("fmt-fallback");
+    let fallback = Fixture::new("cli-commands", "fmt-fallback");
     fallback.write(
         "hardgate.toml",
         r#"[gate]
@@ -128,7 +78,7 @@ timeout_secs = 2
 
 #[test]
 fn fmt_without_command_warns_and_exits_successfully() {
-    let fixture = Fixture::new("fmt-none");
+    let fixture = Fixture::new("cli-commands", "fmt-none");
     fixture.write("hardgate.toml", CUSTOM_CONFIG);
 
     let output = run(fixture.as_ref(), &["fmt", "--check"]);
@@ -138,7 +88,7 @@ fn fmt_without_command_warns_and_exits_successfully() {
 
 #[test]
 fn fmt_failure_reports_command_output_and_exits_nonzero() {
-    let fixture = Fixture::new("fmt-failure");
+    let fixture = Fixture::new("cli-commands", "fmt-failure");
     fixture.write(
         "hardgate.toml",
         r#"[gate]
@@ -181,7 +131,7 @@ fn init_uses_strict_agent_by_default_and_supports_each_preset() {
     ];
 
     for (tag, preset, config_value, debug_name) in cases {
-        let fixture = Fixture::new(&format!("init-{tag}"));
+        let fixture = Fixture::new("cli-commands", &format!("init-{tag}"));
         let args = preset.map_or_else(|| vec!["init"], |value| vec!["init", "--preset", value]);
         let output = run(fixture.as_ref(), &args);
         assert_success(&output, &format!("init {tag}"));
@@ -193,7 +143,7 @@ fn init_uses_strict_agent_by_default_and_supports_each_preset() {
 
 #[test]
 fn init_never_overwrites_an_existing_config() {
-    let fixture = Fixture::new("init-no-overwrite");
+    let fixture = Fixture::new("cli-commands", "init-no-overwrite");
     let original = "[gate]\nname = \"keep-me\"\n";
     fixture.write("hardgate.toml", original);
 
@@ -208,7 +158,7 @@ fn init_never_overwrites_an_existing_config() {
 
 #[test]
 fn empty_check_and_verify_render_every_output_mode() {
-    let fixture = Fixture::new("empty-gates");
+    let fixture = Fixture::new("cli-commands", "empty-gates");
     fixture.write("hardgate.toml", CUSTOM_CONFIG);
 
     for command in ["check", "verify"] {
@@ -234,7 +184,7 @@ fn empty_check_and_verify_render_every_output_mode() {
 
 #[test]
 fn scan_missing_file_returns_structured_json_error() {
-    let fixture = Fixture::new("scan-missing");
+    let fixture = Fixture::new("cli-commands", "scan-missing");
     fixture.write("hardgate.toml", CUSTOM_CONFIG);
 
     let output = run(
