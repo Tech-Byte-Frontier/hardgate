@@ -30,6 +30,17 @@ fn assert_invalid_config(tag: &str, body: &str) {
 }
 
 #[test]
+fn config_read_errors_keep_the_path_context() {
+    let (dir, path) = write_config("unreadable", "");
+    std::fs::write(&path, [0xff]).unwrap();
+
+    let error = HardgateConfig::load_or_default(Some(&path)).unwrap_err();
+    assert!(error.to_string().contains("Failed to read config file"));
+    assert!(error.to_string().contains("hardgate.toml"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn role_generated_and_legacy_validation_rejects_unsafe_edges() {
     let mut roles = RolePoliciesConfig::default();
     roles.source.max_abc = Some(1.5);
