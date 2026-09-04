@@ -2,6 +2,9 @@ use super::super::js_selection::test_support::{temp_root, write};
 use super::{PackageManager, TestSelection, resolve_js_test_plan};
 use std::path::Path;
 
+#[path = "../../../tests/support/js_resolver.rs"]
+mod js_resolver_support;
+
 fn workspace_error(root: &Path, reason: &str) -> String {
     resolve_js_test_plan(&root.join("src/value.ts"), root)
         .expect_err(reason)
@@ -35,31 +38,14 @@ fn resolver_error(root: &Path, expected: &str) -> String {
 
 #[test]
 fn source_escape_is_rejected_before_manifest_inspection() {
-    let root = temp_root("source-root");
-    write(&root, "package.json", r#"{"packageManager":"npm@10"}"#);
-    let outside = temp_root("source-outside");
-    write(&outside, "package.json", "{\n");
-    write(&outside, "src/value.ts", "export const value = true;\n");
-    let check = |source: &Path| {
-        let error = resolve_js_test_plan(source, &root)
-            .expect_err("external absolute source must fail closed");
-        let message = error.to_string();
-        assert!(message.contains("outside repository root"), "{message}");
-        assert!(
-            !message.contains("malformed JavaScript package manifest"),
-            "{message}"
-        );
-    };
-    check(&outside.join("src/value.ts"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        symlink(outside.join("src/value.ts"), root.join("src/escape.ts")).unwrap();
-        check(&root.join("src/escape.ts"));
-    }
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(outside);
+    js_resolver_support::assert_source_escape_rejected(
+        |label| temp_root("js-resolver", label),
+        |source, root| {
+            resolve_js_test_plan(source, root)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    );
 }
 
 #[test]
