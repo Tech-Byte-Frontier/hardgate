@@ -145,6 +145,45 @@ fn test_mutation_report_rejects_malformed_and_empty_shapes() {
 }
 
 #[test]
+fn test_mutation_report_rejects_malformed_nested_shapes() {
+    let tmp = tempdir("mut-invalid-nested");
+    let keeper = gatekeeper();
+    for (name, content) in [
+        // The root and Stryker `files` field must both be objects.
+        ("root-array.json", "[]"),
+        ("stryker-files-array.json", r#"{"files": []}"#),
+        // Each Stryker file entry must be an object with an array of mutants.
+        ("stryker-file-array.json", r#"{"files": {"a.rs": []}}"#),
+        (
+            "stryker-mutants-object.json",
+            r#"{"files": {"a.rs": {"mutants": {}}}}"#,
+        ),
+        // Every outcome must be an object carrying its format-specific status.
+        (
+            "stryker-mutant-null.json",
+            r#"{"files": {"a.rs": {"mutants": [null]}}}"#,
+        ),
+        (
+            "stryker-mutant-missing-status.json",
+            r#"{"files": {"a.rs": {"mutants": [{}]}}}"#,
+        ),
+        ("cargo-outcomes-object.json", r#"{"outcomes": {}}"#),
+        ("cargo-outcome-null.json", r#"{"outcomes": [null]}"#),
+        (
+            "cargo-outcome-missing-summary.json",
+            r#"{"outcomes": [{}]}"#,
+        ),
+    ] {
+        let path = write_report(&tmp, name, content);
+        assert!(
+            keeper.evaluate_report(&path).is_err(),
+            "{name} should be rejected"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_mutation_report_integrity_outcomes_are_blocking() {
     let tmp = tempdir("mut-integrity");
     let keeper = gatekeeper();
