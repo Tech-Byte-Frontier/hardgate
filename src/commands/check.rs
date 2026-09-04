@@ -4,7 +4,8 @@ use super::gate_evidence::{
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
 };
 use super::verify::{
-    CoverageVerification, verify_coverage, verify_coverage_with_diff, verify_mutation,
+    CoverageScope, CoverageVerification, source_files_for_coverage, verify_coverage_with_scope,
+    verify_mutation,
 };
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
@@ -155,12 +156,21 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
         return Ok(());
     }
     let coverage_report = find_coverage_report(request.config, request.cli_report.clone());
+    let source_files = source_files_for_coverage(request.files, request.config, request.report);
+    let scope = CoverageScope {
+        source_files: &source_files,
+        root: request.root,
+    };
     if !request.diff {
-        verify_coverage(
-            request.config,
-            coverage_report,
-            request.functions,
-            request.report,
+        verify_coverage_with_scope(
+            CoverageVerification {
+                config: request.config,
+                cli_report: coverage_report,
+                functions: request.functions,
+                changed_lines: None,
+                report: request.report,
+            },
+            scope,
         );
         return Ok(());
     }
@@ -176,13 +186,16 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
         None if request.config.legacy.ratchet => Some(Default::default()),
         None => load_changed_lines_for_coverage(&mut request)?,
     };
-    verify_coverage_with_diff(CoverageVerification {
-        config: request.config,
-        cli_report: coverage_report,
-        functions: request.functions,
-        changed_lines: changed_lines.as_ref(),
-        report: request.report,
-    });
+    verify_coverage_with_scope(
+        CoverageVerification {
+            config: request.config,
+            cli_report: coverage_report,
+            functions: request.functions,
+            changed_lines: changed_lines.as_ref(),
+            report: request.report,
+        },
+        scope,
+    );
     Ok(())
 }
 

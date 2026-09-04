@@ -7,12 +7,13 @@ mod metrics;
 use fs::tempdir;
 
 use hardgate::commands::verify::{
-    CoverageVerification, verify_coverage, verify_coverage_with_diff,
+    CoverageScope, CoverageVerification, verify_coverage, verify_coverage_with_diff,
+    verify_coverage_with_scope,
 };
 use hardgate::config::{CoverageConfig, HardgateConfig};
 use hardgate::diagnostics::GateReport;
 use hardgate::engines::CoverageScorer;
-use hardgate::engines::coverage::FileCoverage;
+use hardgate::engines::coverage::{CoverageEvaluationScope, FileCoverage};
 use hardgate::git_evidence::ChangedLineMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -337,4 +338,360 @@ fn verify_diff_mode_respects_disabled_policy() {
     assert!(report.coverage_violations.is_empty());
     assert!(report.orchestration_violations.is_empty());
     assert!(report.advisories.is_empty());
+}
+
+fn assert_invalid_lcov(config: &CoverageConfig, body: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let tag = format!(
+        "lcov-adversarial-{}",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let tmp = tempdir(&tag);
+    let path = tmp.join("report.info");
+    std::fs::write(&path, body).unwrap();
+    assert!(
+        CoverageScorer::new(config).parse_lcov(&path).is_err(),
+        "LCOV unexpectedly parsed: {body}"
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    for body in [
+        "LF:1\n",
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\n",
+        "SF:src/lib.rs\nLF:0\nLH:0\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:0,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1,checksum,extra\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nLF:2\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:0\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:./src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/./lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+    ] {
+        assert_invalid_lcov(&config, body);
+    }
+}
+
+#[test]
+fn lcov_parser_requires_paired_function_and_branch_counts_when_floors_enabled() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: Some(1.0),
+        min_branch_percent: Some(1.0),
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    assert_invalid_lcov(
+        &config,
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nFNF:1\nFNH:2\nBRF:1\nBRH:1\nend_of_record\n",
+    );
+    assert_invalid_lcov(
+        &config,
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nFNF:1\nFNH:1\nBRF:1\nend_of_record\n",
+    );
+    assert_invalid_lcov(
+        &config,
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nFNF:1\nFNH:1\nBRF:1\nBRH:2\nend_of_record\n",
+    );
+}
+
+#[test]
+fn zero_denominators_are_blocking_for_every_enabled_global_floor() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: Some(1.0),
+        min_branch_percent: Some(1.0),
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let scorer = CoverageScorer::new(&config);
+    let map = HashMap::from([(
+        PathBuf::from("src/lib.rs"),
+        FileCoverage {
+            file_path: PathBuf::from("src/lib.rs"),
+            ..Default::default()
+        },
+    )]);
+    let source = [PathBuf::from("src/lib.rs")];
+    let violations = scorer.evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: Path::new("."),
+            source_files: Some(&source),
+        },
+    );
+    for metric in [
+        "Global Line Coverage",
+        "Global Function Coverage",
+        "Global Branch Coverage",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.metric == metric && v.actual == 0.0)
+        );
+    }
+}
+
+#[test]
+fn hostile_counter_addition_is_reported_without_wrapping() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let scorer = CoverageScorer::new(&config);
+    let max = usize::MAX;
+    let map = HashMap::from([
+        (
+            PathBuf::from("src/one.rs"),
+            FileCoverage {
+                file_path: PathBuf::from("src/one.rs"),
+                lines_found: max,
+                ..Default::default()
+            },
+        ),
+        (
+            PathBuf::from("src/two.rs"),
+            FileCoverage {
+                file_path: PathBuf::from("src/two.rs"),
+                lines_found: 1,
+                ..Default::default()
+            },
+        ),
+    ]);
+    let sources = [PathBuf::from("src/one.rs"), PathBuf::from("src/two.rs")];
+    let violations = scorer.evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: Path::new("."),
+            source_files: Some(&sources),
+        },
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.metric == "Coverage Count Overflow")
+    );
+}
+
+#[test]
+fn test_and_generated_records_cannot_dilute_source_floor() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(90.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let scorer = CoverageScorer::new(&config);
+    let map = HashMap::from([
+        (
+            PathBuf::from("src/lib.rs"),
+            coverage("src/lib.rs", &[(1, 0)]),
+        ),
+        (
+            PathBuf::from("tests/lib.rs"),
+            coverage("tests/lib.rs", &[(1, 1), (2, 1), (3, 1)]),
+        ),
+    ]);
+    let source = [PathBuf::from("src/lib.rs")];
+    let violations = scorer.evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: Path::new("."),
+            source_files: Some(&source),
+        },
+    );
+    let global = violations
+        .iter()
+        .find(|violation| violation.metric == "Global Line Coverage")
+        .expect("source line floor should fail");
+    assert_eq!(global.actual, 0.0);
+}
+
+#[test]
+fn duplicate_normalized_report_paths_are_ambiguous() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let scorer = CoverageScorer::new(&config);
+    let map = HashMap::from([
+        (
+            PathBuf::from("/repo/src/lib.rs"),
+            coverage("/repo/src/lib.rs", &[(1, 1)]),
+        ),
+        (
+            PathBuf::from("src/lib.rs"),
+            coverage("src/lib.rs", &[(1, 1)]),
+        ),
+    ]);
+    let source = [PathBuf::from("src/lib.rs")];
+    let violations = scorer.evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: Path::new("/repo"),
+            source_files: Some(&source),
+        },
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Missing Source Coverage")
+    );
+}
+
+#[test]
+fn compatibility_diff_matching_never_uses_first_ambiguous_record() {
+    let scorer = strict_scorer();
+    let map = HashMap::from([
+        (
+            PathBuf::from("one/src/lib.rs"),
+            coverage("one/src/lib.rs", &[(1, 1)]),
+        ),
+        (
+            PathBuf::from("two/src/lib.rs"),
+            coverage("two/src/lib.rs", &[(1, 1)]),
+        ),
+    ]);
+    let violations = scorer.evaluate_diff_coverage(&map, &changed("src/lib.rs", &[1]));
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].metric, "Missing Diff Coverage");
+}
+
+#[test]
+fn scoped_source_matching_rejects_suffix_only_paths() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let scorer = CoverageScorer::new(&config);
+    let map = coverage_map("packages/other/src/lib.rs", &[(1, 1)]);
+    let source = [PathBuf::from("src/lib.rs")];
+    let violations = scorer.evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: Path::new("."),
+            source_files: Some(&source),
+        },
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Missing Source Coverage")
+    );
+}
+
+#[test]
+fn absolute_report_paths_under_root_match_exact_sources() {
+    let root = tempdir("coverage-absolute");
+    let source = root.join("src/lib.rs");
+    let map = coverage_map(&source.display().to_string(), &[(1, 1)]);
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(90.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let violations = CoverageScorer::new(&config).evaluate_for_sources(
+        &map,
+        &[],
+        CoverageEvaluationScope {
+            root: &root,
+            source_files: Some(std::slice::from_ref(&source)),
+        },
+    );
+    assert!(
+        violations
+            .iter()
+            .all(|violation| violation.metric != "Missing Source Coverage")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn strict_diff_reports_code_lines_missing_from_da() {
+    let config = verify_config();
+    let scorer = CoverageScorer::new(&config.coverage);
+    let map = coverage_map("src/lib.rs", &[(1, 1)]);
+    let lines = changed("src/lib.rs", &[1, 2]);
+    let violations = scorer.evaluate_diff_coverage_strict(&map, &lines, Path::new("."));
+    assert!(
+        violations
+            .iter()
+            .any(|v| { v.metric == "Missing Diff Coverage" && v.message.contains("2") })
+    );
+}
+
+#[test]
+fn scoped_verify_keeps_source_inventory_and_root() {
+    let tmp = tempdir("verify-scoped");
+    let report_path = tmp.join("lcov.info");
+    write_verify_report(&report_path);
+    let source = vec![PathBuf::from("src/calc.rs")];
+    let mut report = GateReport::new("verify".to_string());
+    verify_coverage_with_scope(
+        CoverageVerification {
+            config: &verify_config(),
+            cli_report: Some(report_path.display().to_string()),
+            functions: &[],
+            changed_lines: None,
+            report: &mut report,
+        },
+        CoverageScope {
+            source_files: &source,
+            root: Path::new("."),
+        },
+    );
+    assert!(
+        report
+            .coverage_violations
+            .iter()
+            .any(|violation| violation.metric == "Global Line Coverage")
+    );
+    let _ = std::fs::remove_dir_all(tmp);
 }

@@ -5,8 +5,11 @@ use super::gate_evidence::{
     GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
     run_static_gate_or_empty,
 };
+use super::role_policy::classify_file;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
+use crate::discovery::FileRole;
+use crate::engines::coverage::CoverageEvaluationScope;
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
 use crate::git_evidence::ChangedLineMap;
 use anyhow::Result;
@@ -36,6 +39,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
 
     let GateRun {
         mut report,
+        files,
         empty,
         read_results,
         functions,
@@ -59,11 +63,23 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     );
     run_generated_freshness(&config, root, &mut report);
 
-    verify_coverage(
-        &config,
-        opts.coverage_report.clone(),
-        &functions,
-        &mut report,
+    let source_files = if config.coverage.enabled {
+        source_files_for_coverage(&files, &config, &mut report)
+    } else {
+        Vec::new()
+    };
+    verify_coverage_with_scope(
+        CoverageVerification {
+            config: &config,
+            cli_report: opts.coverage_report.clone(),
+            functions: &functions,
+            changed_lines: None,
+            report: &mut report,
+        },
+        CoverageScope {
+            source_files: &source_files,
+            root,
+        },
     );
     verify_mutation(&config, opts.mutation_report.clone(), &mut report);
 
@@ -109,6 +125,12 @@ pub struct CoverageVerification<'a> {
     pub report: &'a mut GateReport,
 }
 
+/// Current Source-role inventory used to keep report scoring production-only.
+pub struct CoverageScope<'a> {
+    pub source_files: &'a [PathBuf],
+    pub root: &'a Path,
+}
+
 /// Ingest an lcov report and flag functions breaching coverage/CRAP floors.
 /// Enabled coverage is required evidence regardless of static gate strictness.
 pub fn verify_coverage(
@@ -132,10 +154,22 @@ pub fn verify_coverage_with_diff(mut request: CoverageVerification<'_>) {
     if !request.config.coverage.enabled {
         return;
     }
-    evaluate_coverage_report(&mut request);
+    evaluate_coverage_report(&mut request, None);
 }
 
-fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
+/// Internal root/inventory-aware coverage verification used by `check` and
+/// `verify`. The compatibility wrappers above intentionally remain unchanged.
+pub fn verify_coverage_with_scope(mut request: CoverageVerification<'_>, scope: CoverageScope<'_>) {
+    if !request.config.coverage.enabled {
+        return;
+    }
+    evaluate_coverage_report(&mut request, Some(scope));
+}
+
+fn evaluate_coverage_report(
+    request: &mut CoverageVerification<'_>,
+    scope: Option<CoverageScope<'_>>,
+) {
     let cov_path = request
         .cli_report
         .as_deref()
@@ -167,7 +201,7 @@ fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
     }
     let scorer = CoverageScorer::new(&request.config.coverage);
     match scorer.parse_lcov(p) {
-        Ok(cov_map) => append_coverage_violations(request, &scorer, &cov_map),
+        Ok(cov_map) => append_coverage_violations(request, &scorer, &cov_map, scope),
         Err(e) => {
             record_evidence_failure(
                 request.report,
@@ -186,12 +220,62 @@ fn append_coverage_violations(
     request: &mut CoverageVerification<'_>,
     scorer: &CoverageScorer,
     coverage_map: &std::collections::HashMap<PathBuf, crate::engines::coverage::FileCoverage>,
+    scope: Option<CoverageScope<'_>>,
 ) {
-    let violations = match request.changed_lines {
-        Some(lines) => scorer.evaluate_diff_coverage(coverage_map, lines),
-        None => scorer.evaluate(coverage_map, request.functions, Path::new(".")),
-    };
+    let violations = coverage_violations(request, scorer, coverage_map, scope);
     request.report.coverage_violations.extend(violations);
+}
+
+fn coverage_violations(
+    request: &CoverageVerification<'_>,
+    scorer: &CoverageScorer,
+    coverage_map: &std::collections::HashMap<PathBuf, crate::engines::coverage::FileCoverage>,
+    scope: Option<CoverageScope<'_>>,
+) -> Vec<crate::engines::coverage::CoverageViolation> {
+    if let Some(lines) = request.changed_lines {
+        return scorer.evaluate_diff_coverage_strict(
+            coverage_map,
+            lines,
+            scope.as_ref().map_or(Path::new("."), |scope| scope.root),
+        );
+    }
+    match scope {
+        Some(scope) => scorer.evaluate_for_sources(
+            coverage_map,
+            request.functions,
+            CoverageEvaluationScope {
+                root: scope.root,
+                source_files: Some(scope.source_files),
+            },
+        ),
+        None => scorer.evaluate(coverage_map, request.functions, Path::new(".")),
+    }
+}
+
+pub(crate) fn source_files_for_coverage(
+    files: &[PathBuf],
+    config: &HardgateConfig,
+    report: &mut GateReport,
+) -> Vec<PathBuf> {
+    let mut source_files = Vec::new();
+    for path in files {
+        match classify_file(path, config) {
+            Ok(classified) if classified.role == FileRole::Source => {
+                source_files.push(path.clone())
+            }
+            Ok(_) => {}
+            Err(error) => record_evidence_failure(
+                report,
+                true,
+                EvidenceFailure {
+                    step: "classify-source",
+                    target: path,
+                    message: format!("Unable to classify source for coverage: {error}"),
+                },
+            ),
+        }
+    }
+    source_files
 }
 
 /// Ingest mutation reports (Stryker, cargo-mutants, generic) and flag scores

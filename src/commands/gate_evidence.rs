@@ -6,7 +6,11 @@ use crate::adoption::apply_legacy_ratchet;
 use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
-use crate::engines::{FunctionMetrics, run_generated_freshness as execute_generated_freshness};
+use crate::engines::{
+    FunctionMetrics,
+    coverage::{normalized_repository_key, retain_code_lines},
+    run_generated_freshness as execute_generated_freshness,
+};
 use crate::git_evidence::{ChangedLineMap, ReferenceEvidence, load_reference};
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -276,45 +280,39 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
     let selected: BTreeSet<String> = request
         .selected_files
         .iter()
-        .map(|path| normalized_key(path, request.root))
+        .filter_map(|path| normalized_repository_key(path, request.root))
         .collect();
     let mut source_files = BTreeSet::new();
-    for (path, _) in request.read_results {
-        let key = normalized_key(path, request.root);
+    let mut source_contents = std::collections::BTreeMap::new();
+    for (path, content) in request.read_results {
+        let Some(key) = normalized_repository_key(path, request.root) else {
+            continue;
+        };
         if !selected.contains(&key) {
             continue;
         }
         let classified = classify_file(path, request.config)?;
         if classified.ast_supported && classified.role == FileRole::Source {
-            source_files.insert(key);
+            source_files.insert(key.clone());
+            source_contents.entry(key).or_insert(content.as_str());
         }
     }
 
     Ok(request
         .changed_lines
         .iter()
-        .filter(|(path, _)| source_files.contains(&normalized_key(path, request.root)))
-        .map(|(path, lines)| (path.clone(), lines.clone()))
+        .filter_map(|(path, lines)| {
+            let key = normalized_repository_key(path, request.root)?;
+            if !source_files.contains(&key) {
+                return None;
+            }
+            let filtered = source_contents
+                .get(&key)
+                .map(|content| retain_code_lines(content, lines))
+                .unwrap_or_else(|| lines.clone());
+            (!filtered.is_empty()).then_some((path.clone(), filtered))
+        })
         .collect())
-}
-
-fn normalized_key(path: &Path, root: &Path) -> String {
-    let root_absolute = root.canonicalize().ok();
-    let candidate = if path.is_absolute() {
-        root_absolute
-            .as_deref()
-            .and_then(|absolute| path.strip_prefix(absolute).ok())
-            .unwrap_or(path)
-    } else {
-        path
-    };
-    let mut parts = Vec::new();
-    for component in candidate.components() {
-        if let std::path::Component::Normal(part) = component {
-            parts.push(part.to_string_lossy().into_owned());
-        }
-    }
-    parts.join("/")
 }
 
 #[cfg(test)]
@@ -324,6 +322,21 @@ mod tests {
     use crate::git_evidence::ChangedLineMap;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
+
+    fn filtered(
+        changed_lines: &ChangedLineMap,
+        selected_files: &[PathBuf],
+        read_results: &[(PathBuf, String)],
+    ) -> ChangedLineMap {
+        filter_changed_lines(ChangedLineFilter {
+            changed_lines,
+            selected_files,
+            read_results,
+            config: &HardgateConfig::default(),
+            root: Path::new("."),
+        })
+        .unwrap()
+    }
 
     #[test]
     fn changed_lines_are_limited_to_read_source_files() {
@@ -337,17 +350,28 @@ mod tests {
             (PathBuf::from("./src/lib.rs"), "fn source() {}".to_string()),
             (PathBuf::from("tests/lib.rs"), "fn test() {}".to_string()),
         ];
-        let filtered = filter_changed_lines(ChangedLineFilter {
-            changed_lines: &changed,
-            selected_files: &selected,
-            read_results: &read,
-            config: &HardgateConfig::default(),
-            root: Path::new("."),
-        })
-        .unwrap();
+        let filtered = filtered(&changed, &selected, &read);
         assert_eq!(
             filtered,
             BTreeMap::from([(PathBuf::from("src/lib.rs"), BTreeSet::from([1]))])
+        );
+    }
+
+    #[test]
+    fn changed_lines_drop_comments_and_delimiter_only_lines() {
+        let changed = ChangedLineMap::from([(
+            PathBuf::from("src/lib.rs"),
+            BTreeSet::from([1, 2, 3, 4, 5, 6]),
+        )]);
+        let selected = vec![PathBuf::from("src/lib.rs")];
+        let read = vec![(
+            PathBuf::from("src/lib.rs"),
+            "// comment\n}\nlet answer = 42;\n/* block */\nanswer += 1;\n}\n".to_string(),
+        )];
+        let filtered = filtered(&changed, &selected, &read);
+        assert_eq!(
+            filtered,
+            BTreeMap::from([(PathBuf::from("src/lib.rs"), BTreeSet::from([3, 5]),)])
         );
     }
 }

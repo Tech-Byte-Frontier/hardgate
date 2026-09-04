@@ -210,6 +210,107 @@ min_line_percent = 90.0
 }
 
 #[test]
+fn check_diff_requires_da_for_changed_code_but_ignores_comments_and_braces() {
+    let root = tempdir("cli-diff-missing-da");
+    let config = base_config(
+        r#"[coverage]
+enabled = true
+report = "coverage.info"
+min_line_percent = 90.0
+"#,
+    );
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 {\n    41\n}\n");
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "baseline"]);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn answer() -> i32 {\n    // changed comment\n    let value = 42;\n    value\n}\n",
+    );
+    write(
+        &root,
+        "coverage.info",
+        "SF:src/lib.rs\nDA:1,1\nDA:4,1\nLF:2\nLH:2\nend_of_record\n",
+    );
+
+    let output = run(&root, &["check", "--diff", "--format", "json"]);
+    assert!(!output.status.success());
+    let report = json(&output);
+    let violations = report["coverage_violations"].as_array().unwrap();
+    assert!(violations.iter().any(|violation| {
+        violation["metric"] == "Missing Diff Coverage"
+            && violation["message"].as_str().unwrap().contains("3")
+    }));
+    assert!(!violations.iter().any(|violation| {
+        violation["metric"] == "Missing Diff Coverage"
+            && violation["message"].as_str().unwrap().contains("2")
+    }));
+}
+
+#[test]
+fn verify_coverage_scores_only_current_source_role_records() {
+    let root = tempdir("cli-source-only-coverage");
+    let config = base_config(
+        r#"[coverage]
+enabled = true
+report = "coverage.info"
+min_line_percent = 90.0
+"#,
+    );
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    write(
+        &root,
+        "tests/lib.rs",
+        "pub fn test_helper() -> i32 { 42 }\n",
+    );
+    write(
+        &root,
+        "coverage.info",
+        "SF:src/lib.rs\nDA:1,0\nLF:1\nLH:0\nend_of_record\nSF:tests/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+    );
+
+    let report = failed_report(&root, "verify");
+    let global = report["coverage_violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|violation| violation["metric"] == "Global Line Coverage")
+        .expect("source floor should be evaluated");
+    assert_eq!(global["actual"], 0.0);
+}
+
+#[test]
+fn malformed_coverage_report_is_blocking_orchestration_evidence() {
+    let root = tempdir("cli-malformed-coverage");
+    let config = base_config(
+        r#"[coverage]
+enabled = true
+report = "coverage.info"
+min_line_percent = 90.0
+"#,
+    );
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    write(
+        &root,
+        "coverage.info",
+        "SF:src/lib.rs\nDA:1,wat\nend_of_record\n",
+    );
+
+    let report = failed_report(&root, "verify");
+    assert!(
+        report["orchestration_violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| violation["step"] == "coverage-report")
+    );
+}
+
+#[test]
 fn required_coverage_report_cannot_be_skipped_when_no_source_exists() {
     let root = tempdir("cli-empty-required-report");
     write(
