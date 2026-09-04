@@ -8,6 +8,7 @@ import {
   launcher,
   platformPackages,
   release,
+  releaseAllowedSigners,
 } from "./release_contract.sources.mjs";
 
 function assertWorkflowIncludes(text, label, snippets) {
@@ -66,6 +67,8 @@ actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
 pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b
 oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+actions: read
+group: hardgate-release
 CARGO_AUDIT_VERSION: 0.22.2
 CARGO_LLVM_COV_VERSION: 0.9.0
 NODE_VERSION: 26.8.1
@@ -88,6 +91,11 @@ node tests/release_contract.abi.test.mjs
 node tests/consumer_matrix.mjs
 HARDGATE_BINARY: target/release/hardgate
 git cat-file -t "$RELEASE_TAG"
+gpg.ssh.allowedSignersFile=.github/release-allowed-signers
+verify-tag "$RELEASE_TAG"
+refs/remotes/origin/main
+actions/workflows/ci.yml/runs
+release commit has no completed successful main CI run
 fail-fast: true
 SOURCE_DATE_EPOCH=0
 SHA256SUMS
@@ -100,6 +108,10 @@ scripts/release-sbom.mjs
 scripts/release-sbom-verify.mjs
 scripts/sync-npm-version.mjs --check --tag
 cargo publish --locked
+cargo publish --dry-run --locked
+publication-preflight:
+npm whoami --registry=https://registry.npmjs.org
+needs: [version-check, quality-gate, package, publication-preflight]
 https://crates.io/api/v1/crates/hardgate/
 version"]["num
 actions/attest
@@ -152,6 +164,12 @@ wait_for_latest_tag()
 
 const ciSelfGate = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
 const releaseQualityGate = release.slice(release.indexOf("  quality-gate:"), release.indexOf("  build:"));
+const crateDryRunStep = releaseQualityGate.slice(
+  releaseQualityGate.indexOf("- name: Validate the crates.io package without publishing"),
+  releaseQualityGate.indexOf("- run: node scripts/sync-npm-version.mjs"),
+);
+assert.match(crateDryRunStep, /cargo publish --dry-run --locked/, "release quality must validate the packaged crate");
+assert.doesNotMatch(crateDryRunStep, /CARGO_REGISTRY_TOKEN|NODE_AUTH_TOKEN/, "package dry run must not expose publication credentials to build scripts");
 for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release quality-gate", releaseQualityGate]]) {
   const coverageToolchain = section.indexOf("toolchain: ${{ env.RUST_COVERAGE_TOOLCHAIN }}");
   const stableToolchain = section.indexOf("toolchain: ${{ env.RUST_TOOLCHAIN }}");
@@ -166,6 +184,7 @@ for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release qual
 
 assert.doesNotMatch(release, /--clobber/, "immutable release assets must never be overwritten in place");
 assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
+assert.doesNotMatch(release, /https:\/\/crates\.io\/api\/v1\/me/, "crates.io /api/v1/me is cookie-only and cannot validate a publish token");
 assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");
 assert.doesNotMatch(release, /^[ \t]*registry_version\(\)/m, "registry waits must not multiply nested retry loops");
 includesAll(release, ["retry_absent", "return 3", "release_error=$(mktemp)", "release_exists=0", "refusing to create or mutate it"], "status-aware release waits");
@@ -194,10 +213,82 @@ includesAll(
   "launcher signal handling",
 );
 assert.match(release, /permissions:\s*\n\s+contents: read/, "release workflow default token must be read-only");
+assert.match(
+  release,
+  /^permissions:\n  contents: read\n  actions: read$/m,
+  "release preconditions need read-only Actions API access",
+);
+assert.match(release, /concurrency:[\s\S]*?group: hardgate-release\s/, "all release tags must share one publication lock");
+assert.doesNotMatch(release, /group: hardgate-release-\$\{\{/, "release concurrency must not be isolated per tag");
+assert.match(
+  release,
+  /concurrency:\n(?:  #[^\n]*\n)*  group: hardgate-release\n  cancel-in-progress: false/,
+  "an in-flight publication must never be cancelled by another tag",
+);
 assert.match(release, /package:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only packaging may attest artifacts");
 assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
 assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
 const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
+const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  quality-gate:"));
+includesAll(
+  versionCheckJob,
+  [
+    "GH_TOKEN: ${{ github.token }}",
+    'verify-tag "$RELEASE_TAG"',
+    "refs/remotes/origin/main",
+    "actions/workflows/ci.yml/runs",
+    "-X GET",
+    "-f branch=main",
+    "-f event=push",
+    "-f status=success",
+    '-f head_sha="$tag_commit"',
+    "-f per_page=1",
+    "release commit has no completed successful main CI run",
+  ],
+  "signed main-tip release precondition",
+);
+const versionPreconditionOrder = [
+  'verify-tag "$RELEASE_TAG"',
+  'tag_commit=$(git rev-parse "${RELEASE_TAG}^{commit}")',
+  "git fetch --no-tags origin",
+  'if [ "$tag_commit" != "$main_commit" ]',
+  "actions/workflows/ci.yml/runs",
+  "echo \"tag=$RELEASE_TAG\"",
+].map((snippet) => versionCheckJob.indexOf(snippet));
+assert.ok(
+  versionPreconditionOrder.every((position, index) => position >= 0 && (index === 0 || position > versionPreconditionOrder[index - 1])),
+  "signature, main-tip, and successful-CI checks must precede release outputs",
+);
+const activeAllowedSigners = releaseAllowedSigners
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith("#"));
+assert.equal(activeAllowedSigners.length, 1, "release signer allowlist must contain exactly one active key");
+assert.match(
+  activeAllowedSigners[0],
+  /^\S+ ssh-(?:rsa|ed25519) [A-Za-z0-9+/]+={0,3}$/,
+  "release signer allowlist must contain a principal and a valid SSH public-key record",
+);
+const publicationPreflightJob = release.slice(
+  release.indexOf("  publication-preflight:"),
+  release.indexOf("  github-release:"),
+);
+includesAll(
+  publicationPreflightJob,
+  [
+    "needs: [version-check, quality-gate]",
+    "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}",
+    "CARGO_REGISTRY_TOKEN is required for crates.io publication",
+    "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}",
+    "npm whoami --registry=https://registry.npmjs.org",
+  ],
+  "publication preflight",
+);
+assert.match(
+  githubReleaseJob,
+  /needs: \[version-check, quality-gate, package, publication-preflight\]/,
+  "GitHub publication must wait for registry preflight",
+);
 includesAll(
   githubReleaseJob,
   [
@@ -268,7 +359,7 @@ assert.doesNotMatch(crateStateStep, /CARGO_REGISTRY_TOKEN/, "crate probes must n
 assert.match(cratePublishStep, /CARGO_REGISTRY_TOKEN:[\s\S]*?cargo publish --locked/, "crate token must scope only publication");
 assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?CARGO_REGISTRY_TOKEN=\"\$publish_token\" cargo publish --locked/, "crate token must be process-scoped");
 assert.doesNotMatch(crateVerifyStep, /CARGO_REGISTRY_TOKEN/, "crate verification must not inherit publish credentials");
-for (const job of ["version-check", "package", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
+for (const job of ["version-check", "package", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
   assert.match(release, new RegExp(`${job}:[\\s\\S]*?runs-on: ubuntu-24\\.04`), `${job} should use the current x64 Linux runner`);
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");

@@ -73,7 +73,7 @@ assert.equal((release.match(/target:/g) ?? []).length, targets.length, "release 
 
 assert.match(release, /needs:\s*\[version-check, quality-gate\]/, "build must wait for quality");
 assert.match(release, /package:[\s\S]*needs:\s*\[version-check, quality-gate, build\]/, "packaging must wait for all builds");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, quality-gate, package\]/, "GitHub publication must wait for verification");
+assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, quality-gate, package, publication-preflight\]/, "GitHub publication must wait for verification and registry preflight");
 assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, quality-gate, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
 assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, github-release, publish-crates, publish-npm\]/, "final channel verification must wait for every publication");
 const platformPublish = release.indexOf("Publish and verify each platform package in order");

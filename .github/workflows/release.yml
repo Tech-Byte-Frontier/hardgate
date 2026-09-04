@@ -13,11 +13,14 @@ on:
         type: string
 
 concurrency:
-  group: hardgate-release-${{ inputs.tag || github.ref_name }}
+  # Registry latest tags are process-global, so different release tags must
+  # never publish concurrently.
+  group: hardgate-release
   cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -60,15 +63,41 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
           tag_commit=$(git rev-parse "${RELEASE_TAG}^{commit}")
           head_commit=$(git rev-parse HEAD)
           test "$tag_commit" = "$head_commit"
           if [ "$EVENT_NAME" = push ]; then test "$tag_commit" = "$GITHUB_SHA"; fi
           version=$(node scripts/release-version.mjs --tag "$RELEASE_TAG")
           node scripts/sync-npm-version.mjs --check --tag "$RELEASE_TAG"
+
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          main_commit=$(git rev-parse refs/remotes/origin/main)
+          if [ "$tag_commit" != "$main_commit" ]; then
+            echo "release tag must point at the exact origin/main tip ($main_commit), not $tag_commit" >&2
+            exit 1
+          fi
+
+          ci_runs=$(mktemp)
+          gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f branch=main \
+            -f event=push \
+            -f status=success \
+            -f head_sha="$tag_commit" \
+            -f per_page=1 > "$ci_runs"
+          if ! jq -e --arg sha "$tag_commit" \
+            'any(.workflow_runs[]; .head_sha == $sha and .conclusion == "success")' \
+            "$ci_runs" >/dev/null; then
+            echo "release commit has no completed successful main CI run: $tag_commit" >&2
+            rm -f "$ci_runs"
+            exit 1
+          fi
+          rm -f "$ci_runs"
+
           {
             echo "tag=$RELEASE_TAG"
             echo "version=$version"
@@ -113,6 +142,8 @@ jobs:
       - run: cargo build --locked --release
         env:
           HARDGATE_BUILD_GIT_SHA: ${{ needs.version-check.outputs.commit }}
+      - name: Validate the crates.io package without publishing
+        run: cargo publish --dry-run --locked
       - run: node scripts/sync-npm-version.mjs --check --tag "${{ needs.version-check.outputs.tag }}"
       - run: node scripts/check-npm-quality.mjs
       - run: node tests/npm-wrapper.test.mjs
@@ -264,9 +295,45 @@ jobs:
           subject-path: dist/*.tar.gz
           sbom-path: dist/hardgate-${{ needs.version-check.outputs.version }}.sbom.cdx.json
 
+  publication-preflight:
+    name: Validate publication prerequisites
+    needs: [version-check, quality-gate]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global "npm@${NPM_VERSION}"
+      # Cargo has no non-mutating remote credential check. The quality gate's
+      # dry run validates the package; the single publish job performs auth.
+      - name: Require the crates.io publication credential
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "CARGO_REGISTRY_TOKEN is required for crates.io publication" >&2
+            exit 1
+          fi
+      - name: Authenticate the npm publication credential
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is required for npm publication" >&2
+            exit 1
+          fi
+          # This proves registry authentication. Granular write scope and 2FA
+          # eligibility are authoritatively checked only by npm publish.
+          npm whoami --registry=https://registry.npmjs.org >/dev/null
+
   github-release:
     name: Publish verified GitHub Release
-    needs: [version-check, quality-gate, package]
+    needs: [version-check, quality-gate, package, publication-preflight]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

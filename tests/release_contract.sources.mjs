@@ -11,6 +11,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 export const ci = read(".github/workflows/ci.yml");
 export const release = read(".github/workflows/release.yml");
+export const releaseAllowedSigners = read(".github/release-allowed-signers");
 export const installer = read("scripts/install.sh");
 export const packageScript = read("scripts/release-package.mjs");
 export const checksumScript = read("scripts/release-checksums.mjs");
