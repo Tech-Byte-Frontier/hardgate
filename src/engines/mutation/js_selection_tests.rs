@@ -3,7 +3,15 @@ use super::super::js::{
 };
 use super::super::js_manifest::valid_pnpm_workspace_content;
 use super::test_support::{temp_root, write, write_workspace_fixture};
+use super::{
+    deduplicate_paths, find_direct_test, find_nested_entry, find_nested_test, find_relevant_test,
+    ordered_extensions, test_names,
+};
 use std::path::Path;
+
+fn cleanup(root: impl AsRef<Path>) {
+    let _ = std::fs::remove_dir_all(root);
+}
 
 fn plan(root: &Path) -> ResolvedTestPlan {
     resolve_js_test_plan(&root.join("src/value.ts"), root).unwrap()
@@ -228,4 +236,118 @@ fn pnpm_workspace_yaml_requires_scalar_package_patterns() {
     ] {
         assert!(!valid_pnpm_workspace_content(content), "{content}");
     }
+}
+
+#[test]
+fn selector_matches_unusual_source_extensions_in_priority_order() {
+    let root = temp_root("extension-order");
+    write(&root, "src/value.coffee", "export const value = true;\n");
+    write(&root, "tests/value.spec.mjs", "test('value', () => {});\n");
+
+    assert_eq!(ordered_extensions(Some("TS")).first(), Some(&"ts"));
+    assert_eq!(ordered_extensions(Some("coffee")).len(), 8);
+    assert_eq!(ordered_extensions(None).first(), Some(&"js"));
+    assert_eq!(test_names("value", None)[0], "value.test.js");
+    assert_eq!(
+        find_relevant_test(&root.join("src/value.coffee"), &root, None),
+        Some(root.join("tests/value.spec.mjs"))
+    );
+
+    cleanup(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn nested_selector_ignores_pruned_directories_boundaries_and_outside_links() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("nested-pruning");
+    let outside = temp_root("nested-outside");
+    write(&root, "src/value.ts", "export const value = true;\n");
+    write(&root, "tests/aaa.txt", "not a test\n");
+    for directory in ["node_modules", "vendor"] {
+        write(
+            &root,
+            &format!("tests/{directory}/value.test.ts"),
+            "test('outside', () => {});\n",
+        );
+    }
+    write(&root, "tests/package-boundary/package.json", "{}\n");
+    write(
+        &root,
+        "tests/package-boundary/value.test.ts",
+        "test('boundary', () => {});\n",
+    );
+    write(
+        &root,
+        "tests/valid/value.spec.ts",
+        "test('value', () => {});\n",
+    );
+    write(&outside, "value.test.ts", "test('outside', () => {});\n");
+    std::fs::create_dir_all(root.join("tests/external")).unwrap();
+    symlink(
+        outside.join("value.test.ts"),
+        root.join("tests/external/value.test.ts"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_relevant_test(&root.join("src/value.ts"), &root, None),
+        Some(root.join("tests/valid/value.spec.ts"))
+    );
+
+    cleanup(root);
+    cleanup(outside);
+}
+
+#[test]
+fn nested_selector_respects_search_depth_and_non_directory_roots() {
+    let root = temp_root("nested-depth");
+    write(&root, "src/value.ts", "export const value = true;\n");
+    write(
+        &root,
+        "tests/a/b/c/d/value.test.ts",
+        "test('too deep', () => {});\n",
+    );
+    write(
+        &root,
+        "tests/a/b/c/value.spec.ts",
+        "test('value', () => {});\n",
+    );
+    assert_eq!(
+        find_relevant_test(&root.join("src/value.ts"), &root, None),
+        Some(root.join("tests/a/b/c/value.spec.ts"))
+    );
+    cleanup(root);
+
+    let root = temp_root("nested-file-root");
+    write(&root, "src/value.ts", "export const value = true;\n");
+    write(&root, "tests", "this is not a directory\n");
+    assert!(find_relevant_test(&root.join("src/value.ts"), &root, None).is_none());
+    cleanup(root);
+}
+
+#[test]
+fn selector_rejects_untrusted_bases_and_deduplicates_paths() {
+    let root = temp_root("selector-guards");
+    let names = test_names("value", Some("ts"));
+    let outside = temp_root("selector-outside");
+    write(&root, "nested/package.json", "{}\n");
+
+    assert!(find_direct_test(&outside, &names, &root).is_none());
+    assert!(find_direct_test(&root.join("missing"), &names, &root).is_none());
+    assert!(find_direct_test(&root.join("nested"), &names, &root).is_none());
+    assert!(find_nested_test(&root.join("missing"), &names, 4, &root).is_none());
+    assert!(find_nested_test(&root, &names, 4, &root.join("missing-root")).is_none());
+    assert!(find_nested_test(&root, &names, 0, &root).is_none());
+    assert!(find_nested_entry(&root, &names, 4, &root).is_none());
+
+    let tests = root.join("tests");
+    assert_eq!(
+        deduplicate_paths(vec![tests.clone(), tests.clone(), root.join("__tests__")]),
+        vec![tests, root.join("__tests__")]
+    );
+
+    cleanup(root);
+    cleanup(outside);
 }
