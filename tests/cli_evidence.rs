@@ -1,29 +1,22 @@
 #[path = "common/cli.rs"]
 mod cli;
-#[path = "support/fs.rs"]
-mod fs;
 #[path = "common/fs_git.rs"]
 mod fs_git;
 
-use cli::{json, run};
-use fs::tempdir;
+use cli::{Fixture, assert_status, json, run};
 use fs_git::{commit_baseline, init_repo, write};
 use serde_json::Value;
 use std::path::Path;
 
 fn successful_report(root: &Path, command: &str) -> Value {
     let output = run(root, &[command, "--format", "json"]);
-    assert!(
-        output.status.success(),
-        "{command}: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+    assert_status(&output, true, command);
     json(&output)
 }
 
 fn failed_report(root: &Path, command: &str) -> Value {
     let output = run(root, &[command, "--format", "json"]);
-    assert!(!output.status.success(), "{command} unexpectedly passed");
+    assert_status(&output, false, command);
     json(&output)
 }
 
@@ -48,24 +41,15 @@ max_nesting_depth = 20
     )
 }
 
-fn diff_fixture(
-    tag: &str,
-    baseline_source: &str,
-    current_source: &str,
-    coverage: &str,
-) -> std::path::PathBuf {
-    let root = tempdir(tag);
-    write(
-        &root,
-        "hardgate.toml",
-        &base_config(
-            r#"[coverage]
+fn diff_fixture(tag: &str, baseline_source: &str, current_source: &str, coverage: &str) -> Fixture {
+    let config = base_config(
+        r#"[coverage]
 enabled = true
 report = "coverage.info"
 min_line_percent = 90.0
 "#,
-        ),
     );
+    let root = Fixture::new("cli-evidence", tag, Some(&config));
     write(&root, "src/lib.rs", baseline_source);
     init_repo(&root);
     commit_baseline(&root, "baseline");
@@ -76,11 +60,11 @@ min_line_percent = 90.0
 
 fn failed_diff_report(root: &Path) -> Value {
     let output = run(root, &["check", "--diff", "--format", "json"]);
-    assert!(!output.status.success());
+    assert_status(&output, false, "check --diff");
     json(&output)
 }
 
-fn malformed_legacy_fixture(tag: &str, strict: bool) -> std::path::PathBuf {
+fn malformed_legacy_fixture(tag: &str, strict: bool) -> Fixture {
     let mut config = base_config(
         r#"[legacy]
 reference_branch = "HEAD"
@@ -91,8 +75,7 @@ ratchet = true
     if !strict {
         config = config.replace("strict = true", "strict = false");
     }
-    let root = tempdir(tag);
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", tag, Some(&config));
     write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
     init_repo(&root);
     commit_baseline(&root, "malformed baseline");
@@ -125,14 +108,13 @@ fn assert_malformed_legacy_report(report: &Value) {
 
 #[test]
 fn generated_freshness_runs_for_check_and_verify_and_reports_success() {
-    let root = tempdir("cli-generated");
     let config = base_config(
         r#"[generated]
 enabled = true
 freshness_command = "printf generated-ok"
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "generated", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     for command in ["check", "verify"] {
@@ -158,14 +140,13 @@ freshness_command = "printf generated-ok"
 
 #[test]
 fn generated_freshness_failure_fails_check_and_verify() {
-    let root = tempdir("cli-generated-failure");
     let config = base_config(
         r#"[generated]
 enabled = true
 freshness_command = "sh -c 'exit 7'"
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "generated-failure", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     for command in ["check", "verify"] {
@@ -182,13 +163,12 @@ freshness_command = "sh -c 'exit 7'"
 
 #[test]
 fn configured_dead_code_runs_for_check_and_verify() {
-    let root = tempdir("cli-dead-code");
     let config = base_config(
         r#"[analysis.dead_code]
 enabled = true
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "dead-code", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(&root, "src/unused.rs", "pub fn old_code() -> i32 { 1 }\n");
 
@@ -251,7 +231,6 @@ fn check_diff_requires_da_for_changed_code_but_ignores_comments_and_braces() {
 
 #[test]
 fn verify_coverage_scores_only_current_source_role_records() {
-    let root = tempdir("cli-source-only-coverage");
     let config = base_config(
         r#"[coverage]
 enabled = true
@@ -259,7 +238,7 @@ report = "coverage.info"
 min_line_percent = 90.0
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "source-only-coverage", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(
         &root,
@@ -284,7 +263,6 @@ min_line_percent = 90.0
 
 #[test]
 fn malformed_coverage_report_is_blocking_orchestration_evidence() {
-    let root = tempdir("cli-malformed-coverage");
     let config = base_config(
         r#"[coverage]
 enabled = true
@@ -292,7 +270,7 @@ report = "coverage.info"
 min_line_percent = 90.0
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "malformed-coverage", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(
         &root,
@@ -312,14 +290,13 @@ min_line_percent = 90.0
 
 #[test]
 fn coverage_report_is_not_auto_discovered_for_check_or_verify() {
-    let root = tempdir("cli-coverage-no-auto-discovery");
     let config = base_config(
         r#"[coverage]
 enabled = true
 min_line_percent = 90.0
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "coverage-no-auto-discovery", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(
         &root,
@@ -354,17 +331,13 @@ min_line_percent = 90.0
 
 #[test]
 fn required_coverage_report_cannot_be_skipped_when_no_source_exists() {
-    let root = tempdir("cli-empty-required-report");
-    write(
-        &root,
-        "hardgate.toml",
-        &base_config(
-            r#"[coverage]
+    let config = base_config(
+        r#"[coverage]
 enabled = true
 report = "missing.info"
 "#,
-        ),
     );
+    let root = Fixture::new("cli-evidence", "empty-required-report", Some(&config));
 
     let output = run(&root, &["verify", "--format", "json"]);
     assert!(!output.status.success());
@@ -380,7 +353,6 @@ report = "missing.info"
 
 #[test]
 fn non_strict_enabled_evidence_still_fails_closed() {
-    let root = tempdir("cli-nonstrict-evidence");
     let mut config = base_config("");
     config = config.replace("strict = true", "strict = false");
     config.push_str(
@@ -393,7 +365,7 @@ enabled = true
 reports = ["missing.json"]
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "nonstrict-evidence", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     let output = run(&root, &["verify", "--format", "json"]);
@@ -414,7 +386,6 @@ reports = ["missing.json"]
 
 #[test]
 fn legacy_ratchet_grandfathers_current_dead_code_and_emits_summary() {
-    let root = tempdir("cli-legacy-ratchet");
     let config = base_config(
         r#"[analysis.dead_code]
 enabled = true
@@ -424,7 +395,7 @@ reference_branch = "HEAD"
 ratchet = true
 "#,
     );
-    write(&root, "hardgate.toml", &config);
+    let root = Fixture::new("cli-evidence", "legacy-ratchet", Some(&config));
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(&root, "src/unused.rs", "pub fn old_code() -> i32 { 1 }\n");
     init_repo(&root);

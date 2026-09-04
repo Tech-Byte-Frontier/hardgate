@@ -3,8 +3,8 @@ mod cli;
 #[path = "common/fs_git.rs"]
 mod fs_git;
 
-use cli::{Fixture, assert_success, json, run, stderr, stdout};
-use fs_git::{commit_baseline, init_repo};
+use cli::{Fixture, assert_status, json, run, stdout};
+use fs_git::{commit_baseline, init_repo, write};
 use serde_json::Value;
 
 const BASE_CONFIG: &str = r#"[gate]
@@ -14,7 +14,7 @@ strict = true
 
 fn report_for(root: &Fixture, args: &[&str]) -> Value {
     let output = run(root.as_ref(), args);
-    assert_success(&output, &format!("{args:?}"));
+    assert_status(&output, true, &format!("{args:?}"));
     json(&output)
 }
 
@@ -29,7 +29,7 @@ fn mutation_config(reports: &str) -> String {
 }
 
 fn changed_coverage_fixture(tag: &str, reference_branch: &str, ratchet: bool) -> Fixture {
-    let fixture = Fixture::new("cli-gate-edges", tag);
+    let fixture = Fixture::new("cli-gate-edges", tag, None);
     fixture.write(
         "hardgate.toml",
         &format!(
@@ -40,7 +40,8 @@ fn changed_coverage_fixture(tag: &str, reference_branch: &str, ratchet: bool) ->
     init_repo(fixture.as_ref());
     commit_baseline(fixture.as_ref(), "baseline");
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 2 }\n");
-    fixture.write(
+    write(
+        fixture.as_ref(),
         "coverage.info",
         "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
     );
@@ -60,17 +61,17 @@ fn assert_advisory(report: &Value, expected: &str) {
 
 #[test]
 fn verify_requires_each_mutation_report_state_and_accepts_valid_json() {
-    let missing_path = Fixture::new("cli-gate-edges", "mutation-no-path");
+    let missing_path = Fixture::new("cli-gate-edges", "mutation-no-path", None);
     missing_path.write("hardgate.toml", &mutation_config(""));
     let report = failed_report_for(&missing_path, &["verify", "--format", "json"]);
     assert_mutation_failure(&report, "<not-configured>", "no report path");
 
-    let empty_list = Fixture::new("cli-gate-edges", "mutation-empty-list");
+    let empty_list = Fixture::new("cli-gate-edges", "mutation-empty-list", None);
     empty_list.write("hardgate.toml", &mutation_config("reports = []"));
     let report = failed_report_for(&empty_list, &["verify", "--format", "json"]);
     assert_mutation_failure(&report, "<empty-report-list>", "report list is empty");
 
-    let missing_file = Fixture::new("cli-gate-edges", "mutation-missing-file");
+    let missing_file = Fixture::new("cli-gate-edges", "mutation-missing-file", None);
     missing_file.write(
         "hardgate.toml",
         &mutation_config("reports = [\"mutation.json\"]"),
@@ -78,7 +79,7 @@ fn verify_requires_each_mutation_report_state_and_accepts_valid_json() {
     let report = failed_report_for(&missing_file, &["verify", "--format", "json"]);
     assert_mutation_failure(&report, "mutation.json", "not found");
 
-    let malformed = Fixture::new("cli-gate-edges", "mutation-malformed");
+    let malformed = Fixture::new("cli-gate-edges", "mutation-malformed", None);
     malformed.write(
         "hardgate.toml",
         &mutation_config("reports = [\"mutation.json\"]"),
@@ -87,7 +88,7 @@ fn verify_requires_each_mutation_report_state_and_accepts_valid_json() {
     let report = failed_report_for(&malformed, &["verify", "--format", "json"]);
     assert_mutation_failure(&report, "mutation.json", "parse required mutation report");
 
-    let valid = Fixture::new("cli-gate-edges", "mutation-valid");
+    let valid = Fixture::new("cli-gate-edges", "mutation-valid", None);
     valid.write(
         "hardgate.toml",
         &mutation_config("reports = [\"mutation.json\"]"),
@@ -138,13 +139,13 @@ fn check_diff_uses_valid_legacy_reference_for_changed_coverage() {
     assert_advisory(&report, "legacy ratchet: reference=`HEAD`");
 
     let summary = run(fixture.as_ref(), &["check", "--all", "--format", "summary"]);
-    assert_success(&summary, "complete evidence summary");
+    assert_status(&summary, true, "complete evidence summary");
     assert!(stdout(&summary).contains("result: pass"));
 }
 
 #[test]
 fn invalid_legacy_reference_is_blocking_and_visible_in_verify() {
-    let fixture = Fixture::new("cli-gate-edges", "legacy-invalid");
+    let fixture = Fixture::new("cli-gate-edges", "legacy-invalid", None);
     fixture.write(
         "hardgate.toml",
         &format!(
@@ -183,7 +184,7 @@ fn invalid_legacy_reference_is_blocking_and_visible_in_verify() {
 
 #[test]
 fn check_all_reports_complete_evidence_advisory() {
-    let fixture = Fixture::new("cli-gate-edges", "complete-evidence");
+    let fixture = Fixture::new("cli-gate-edges", "complete-evidence", None);
     fixture.write(
         "hardgate.toml",
         &format!(
@@ -209,7 +210,7 @@ fn check_all_reports_complete_evidence_advisory() {
 
 #[test]
 fn warning_source_role_keeps_suppression_invariant_clone_and_dead_code_visible() {
-    let fixture = Fixture::new("cli-gate-edges", "warning-role-findings");
+    let fixture = Fixture::new("cli-gate-edges", "warning-role-findings", None);
     fixture.write(
         "hardgate.toml",
         &format!(
@@ -260,7 +261,7 @@ fn warning_source_role_keeps_suppression_invariant_clone_and_dead_code_visible()
 
 #[test]
 fn empty_check_scopes_report_discovery_advisories_for_diff_and_paths() {
-    let diff = Fixture::new("cli-gate-edges", "empty-diff");
+    let diff = Fixture::new("cli-gate-edges", "empty-diff", None);
     diff.write("hardgate.toml", BASE_CONFIG);
     diff.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     init_repo(diff.as_ref());
@@ -279,7 +280,7 @@ fn empty_check_scopes_report_discovery_advisories_for_diff_and_paths() {
             })
     );
 
-    let scoped = Fixture::new("cli-gate-edges", "empty-scoped");
+    let scoped = Fixture::new("cli-gate-edges", "empty-scoped", None);
     scoped.write("hardgate.toml", BASE_CONFIG);
     std::fs::create_dir_all(scoped.0.join("empty")).unwrap();
     let scoped_report = report_for(&scoped, &["check", "empty", "--format", "json"]);

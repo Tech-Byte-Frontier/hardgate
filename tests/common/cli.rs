@@ -2,26 +2,17 @@
 mod test_fs;
 
 use serde_json::Value;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 pub struct Fixture(pub PathBuf);
 
 impl Fixture {
-    pub fn new(prefix: &str, tag: &str) -> Self {
-        Self(test_fs::tempdir(&format!("{prefix}-{tag}")))
-    }
-
-    pub fn with_config(prefix: &str, tag: &str, config: &str) -> Self {
-        let fixture = Self::new(prefix, tag);
-        fixture.write("hardgate.toml", config);
-        fixture
-    }
-
-    pub fn with_files(prefix: &str, tag: &str, config: &str, files: &[(&str, &str)]) -> Self {
-        let fixture = Self::with_config(prefix, tag, config);
-        for &(path, content) in files {
-            fixture.write(path, content);
+    pub fn new(prefix: &str, tag: &str, config: Option<&str>) -> Self {
+        let fixture = Self(test_fs::tempdir(&format!("{prefix}-{tag}")));
+        if let Some(config) = config {
+            fixture.write("hardgate.toml", config);
         }
         fixture
     }
@@ -37,6 +28,14 @@ impl Fixture {
 
 impl AsRef<Path> for Fixture {
     fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Deref for Fixture {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
@@ -63,13 +62,17 @@ pub fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-pub fn assert_success(output: &Output, context: &str) {
-    assert!(
-        output.status.success(),
-        "{context} failed: stdout={} stderr={}",
-        stdout(output),
-        stderr(output)
-    );
+pub fn assert_status(output: &Output, expected_success: bool, context: &str) {
+    if expected_success {
+        assert!(
+            output.status.success(),
+            "{context} failed: stdout={} stderr={}",
+            stdout(output),
+            stderr(output)
+        );
+    } else {
+        assert!(!output.status.success(), "{context} unexpectedly passed");
+    }
 }
 
 pub fn json(output: &Output) -> Value {

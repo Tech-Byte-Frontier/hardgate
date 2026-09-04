@@ -1,12 +1,9 @@
 #[path = "common/cli.rs"]
 mod cli;
-#[path = "support/fs.rs"]
-mod fs;
 #[path = "common/fs_git.rs"]
 mod fs_git;
 
-use cli::{json, run};
-use fs::tempdir;
+use cli::{Fixture, assert_status, json, run};
 use fs_git::{commit_baseline, init_repo, write};
 
 const CONFIG: &str = r#"[gate]
@@ -41,9 +38,9 @@ fn calculate_total(values: &[i32]) -> i32 {
 }
 "#;
 
-fn diff_fixture(tag: &str) -> std::path::PathBuf {
-    let root = tempdir(tag);
-    write(&root, "hardgate.toml", CONFIG);
+fn diff_fixture(tag: &str) -> Fixture {
+    let root = Fixture::new("diff-explicit-scope", tag, None);
+    root.write("hardgate.toml", CONFIG);
     write(&root, "src/changed.rs", "pub fn changed() -> i32 { 41 }\n");
     write(&root, "src/scoped/unchanged.rs", COPIED);
     write(&root, "src/unrelated.rs", COPIED);
@@ -101,7 +98,7 @@ fn diff_scope_repository_root_includes_changed_and_unchanged_files() {
 
     for scope in [absolute, "."] {
         let output = run(&root, &["check", "--diff", scope, "--format", "json"]);
-        assert!(!output.status.success());
+        assert_status(&output, false, "repository root scope");
         let report = json(&output);
         assert_eq!(report["files_scanned"], 4);
         for file in [

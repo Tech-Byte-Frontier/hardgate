@@ -3,7 +3,7 @@ mod cli;
 #[path = "common/fs_git.rs"]
 mod fs_git;
 
-use cli::{Fixture, run, stderr, stdout};
+use cli::{Fixture, assert_status, run, stderr, stdout};
 use fs_git::{commit_baseline, init_repo, write};
 use serde_json::Value;
 use std::process::Output;
@@ -31,6 +31,14 @@ enabled = false
 "#;
 
 const SOURCE: &str = "pub fn accepts(value: bool) -> bool { value == true }\n";
+
+fn mutation_fixture(tag: &str, config: &str, files: &[(&str, &str)]) -> Fixture {
+    let fixture = Fixture::new("mutate-command", tag, Some(config));
+    for &(path, content) in files {
+        fixture.write(path, content);
+    }
+    fixture
+}
 
 fn git_baseline(fixture: &Fixture) {
     init_repo(fixture.as_ref());
@@ -61,15 +69,14 @@ fn setup_failure(output: &Output, message: &str) {
 
 #[test]
 fn disabled_mutation_has_agent_and_json_noop_contracts() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "disabled-output",
         DISABLED_CONFIG,
         &[("src/lib.rs", SOURCE)],
     );
 
     let agent = run(fixture.as_ref(), &["mutate", "--format", "agent"]);
-    assert!(agent.status.success(), "{}", stderr(&agent));
+    assert_status(&agent, true, "mutate --format agent");
     assert!(stdout(&agent).contains("mutation testing is disabled"));
 
     let json = run(fixture.as_ref(), &["mutate", "--json"]);
@@ -82,7 +89,7 @@ fn disabled_mutation_has_agent_and_json_noop_contracts() {
 
 #[test]
 fn empty_discovery_fails_full_runs_but_diff_is_a_machine_noop() {
-    let fixture = Fixture::with_files("mutate-command", "empty-discovery", MUTATION_CONFIG, &[]);
+    let fixture = mutation_fixture("empty-discovery", MUTATION_CONFIG, &[]);
     git_baseline(&fixture);
 
     let full = run(fixture.as_ref(), &["mutate", "--format", "agent"]);
@@ -99,8 +106,7 @@ fn empty_discovery_fails_full_runs_but_diff_is_a_machine_noop() {
 
 #[test]
 fn explicit_directory_scope_honors_maximum_and_agent_survivor_warning() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "scoped-selection",
         MUTATION_CONFIG,
         &[("src/first.rs", SOURCE), ("src/second.rs", SOURCE)],
@@ -129,12 +135,7 @@ fn explicit_directory_scope_honors_maximum_and_agent_survivor_warning() {
 
 #[test]
 fn max_and_timeout_zero_are_typed_setup_failures() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
-        "zero-options",
-        MUTATION_CONFIG,
-        &[("src/lib.rs", SOURCE)],
-    );
+    let fixture = mutation_fixture("zero-options", MUTATION_CONFIG, &[("src/lib.rs", SOURCE)]);
 
     let max = run(
         fixture.as_ref(),
@@ -173,8 +174,7 @@ fn max_and_timeout_zero_are_typed_setup_failures() {
 
 #[test]
 fn automatic_javascript_full_suite_requires_explicit_safe_timeout() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "javascript-timeout",
         MUTATION_CONFIG,
         &[("src/value.ts", "export const value = true;\n")],
@@ -193,8 +193,7 @@ fn automatic_javascript_full_suite_requires_explicit_safe_timeout() {
 
 #[test]
 fn malformed_javascript_resolution_is_typed_in_agent_mode() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "javascript-resolution",
         MUTATION_CONFIG,
         &[("src/value.ts", "export const value = true;\n")],
@@ -213,8 +212,7 @@ fn explicit_unsupported_scope_fails_before_mutant_generation() {
     let config = format!(
         "{MUTATION_CONFIG}\n[[classification.rules]]\nglob = \"src/value.custom\"\nrole = \"source\"\n"
     );
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "unsupported-scope",
         &config,
         &[("src/value.custom", "value == true\n")],
@@ -228,8 +226,7 @@ fn explicit_unsupported_scope_fails_before_mutant_generation() {
 
 #[test]
 fn baseline_failure_is_silent_json_but_typed_in_terminal_output() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
+    let fixture = mutation_fixture(
         "baseline-formats",
         MUTATION_CONFIG,
         &[("src/lib.rs", SOURCE)],
@@ -273,12 +270,7 @@ fn baseline_failure_is_silent_json_but_typed_in_terminal_output() {
 
 #[test]
 fn diff_scope_distinguishes_unchanged_and_changed_sources() {
-    let fixture = Fixture::with_files(
-        "mutate-command",
-        "diff-variants",
-        MUTATION_CONFIG,
-        &[("src/lib.rs", SOURCE)],
-    );
+    let fixture = mutation_fixture("diff-variants", MUTATION_CONFIG, &[("src/lib.rs", SOURCE)]);
     git_baseline(&fixture);
 
     let unchanged = run(

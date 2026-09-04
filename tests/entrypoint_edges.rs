@@ -1,7 +1,7 @@
 #[path = "common/cli.rs"]
 mod cli;
 
-use cli::{Fixture, json, run, stderr, stdout};
+use cli::{Fixture, assert_status, json, run, stderr, stdout};
 use hardgate::GateReport;
 use hardgate::commands::{
     AnalyzeInput, OutputOptions, analyze_file_content, output_report, output_report_with_opts,
@@ -40,14 +40,14 @@ enabled = false
 
 #[test]
 fn check_json_flags_have_deterministic_precedence() {
-    let fixture = Fixture::with_config("entrypoint", "json-precedence", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "json-precedence", Some(BASE_CONFIG));
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     let full = run(
         fixture.as_ref(),
         &["check", "--json", "--format", "terminal"],
     );
-    assert!(full.status.success(), "{}", stderr(&full));
+    assert_status(&full, true, "check --json --format terminal");
     let full_report = json(&full);
     assert_eq!(full_report["passed"], true);
     assert!(full_report.get("budget_violations").is_some());
@@ -65,7 +65,7 @@ fn check_json_flags_have_deterministic_precedence() {
 
 #[test]
 fn check_missing_scope_is_a_structured_json_command_error() {
-    let fixture = Fixture::with_config("entrypoint", "missing-scope", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "missing-scope", Some(BASE_CONFIG));
     let output = run(
         fixture.as_ref(),
         &["check", "missing.rs", "--format", "json"],
@@ -86,7 +86,7 @@ fn check_missing_scope_is_a_structured_json_command_error() {
 
 #[test]
 fn diff_without_git_is_a_structured_json_command_error() {
-    let fixture = Fixture::with_config("entrypoint", "diff-without-git", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "diff-without-git", Some(BASE_CONFIG));
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     let output = run(fixture.as_ref(), &["check", "--diff", "--format", "json"]);
 
@@ -100,7 +100,7 @@ fn diff_without_git_is_a_structured_json_command_error() {
 
 #[test]
 fn verify_empty_explicit_scope_remains_a_successful_scoped_report() {
-    let fixture = Fixture::with_config("entrypoint", "empty-scope", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "empty-scope", Some(BASE_CONFIG));
     std::fs::create_dir(fixture.0.join("empty")).unwrap();
     let output = run(fixture.as_ref(), &["verify", "empty", "--format", "json"]);
 
@@ -123,7 +123,7 @@ fn verify_empty_explicit_scope_remains_a_successful_scoped_report() {
 
 #[test]
 fn scan_unsupported_source_has_consistent_failure_shapes() {
-    let fixture = Fixture::with_config("entrypoint", "scan-unsupported", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "scan-unsupported", Some(BASE_CONFIG));
     fixture.write(
         "migrations/001_init.sql",
         "create table users (id integer);\n",
@@ -163,7 +163,7 @@ fn scan_unsupported_source_has_consistent_failure_shapes() {
 
 #[test]
 fn scan_parse_failure_has_consistent_failure_shapes() {
-    let fixture = Fixture::with_config("entrypoint", "scan-parse-failure", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "scan-parse-failure", Some(BASE_CONFIG));
     fixture.write("src/broken.rs", "fn broken( {\n");
 
     for format in ["json", "agent", "terminal"] {
@@ -192,7 +192,7 @@ fn verify_empty_mutation_report_list_is_blocking_evidence() {
         "[mutation]\nenabled = false",
         "[mutation]\nenabled = true\nreports = []",
     );
-    let fixture = Fixture::with_config("entrypoint", "empty-mutation-reports", &config);
+    let fixture = Fixture::new("entrypoint", "empty-mutation-reports", Some(&config));
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
     let output = run(fixture.as_ref(), &["verify", "--format", "json"]);
@@ -279,7 +279,7 @@ fn public_empty_discovery_printer_distinguishes_scope_and_diff() {
 
 #[test]
 fn invalid_output_format_is_rejected_before_gate_execution() {
-    let fixture = Fixture::with_config("entrypoint", "invalid-format", BASE_CONFIG);
+    let fixture = Fixture::new("entrypoint", "invalid-format", Some(BASE_CONFIG));
     let output = run(fixture.as_ref(), &["check", "--format", "yaml"]);
 
     assert!(!output.status.success());
