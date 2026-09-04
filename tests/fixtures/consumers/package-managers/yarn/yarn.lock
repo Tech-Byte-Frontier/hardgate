@@ -1,0 +1,7 @@
+__metadata:
+  version: 8
+  cacheKey: 8
+
+jest@0.0.0-fixture:
+  version: 0.0.0-fixture
+  resolution: "jest@0.0.0-fixture"

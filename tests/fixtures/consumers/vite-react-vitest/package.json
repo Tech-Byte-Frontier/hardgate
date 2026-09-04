@@ -1,0 +1,13 @@
+{
+  "name": "consumer-vite-react-vitest",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "0.0.0-fixture",
+    "vite": "0.0.0-fixture",
+    "vitest": "0.0.0-fixture"
+  }
+}

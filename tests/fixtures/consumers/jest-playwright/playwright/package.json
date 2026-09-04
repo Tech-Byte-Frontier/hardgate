@@ -1,0 +1,10 @@
+{
+  "name": "consumer-playwright-fixtures",
+  "private": true,
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "0.0.0-fixture"
+  }
+}

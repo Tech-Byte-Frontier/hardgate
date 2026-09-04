@@ -1,0 +1,6 @@
+{
+  "name": "consumer-package-manager-npm",
+  "private": true,
+  "scripts": { "test": "jest" },
+  "devDependencies": { "jest": "0.0.0-fixture" }
+}

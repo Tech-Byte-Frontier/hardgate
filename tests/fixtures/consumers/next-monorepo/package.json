@@ -1,0 +1,8 @@
+{
+  "name": "consumer-next-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "test": "pnpm --filter web test"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "consumer-package-manager-bun",
+  "private": true,
+  "scripts": { "test": "bun test" },
+  "devDependencies": { "bun-types": "0.0.0-fixture" }
+}

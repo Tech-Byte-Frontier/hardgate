@@ -1,0 +1,9 @@
+lockfileVersion: '9.0'
+importers:
+  .:
+    specifiers: {}
+  apps/web:
+    dependencies:
+      next:
+        specifier: 0.0.0-fixture
+        version: 0.0.0-fixture

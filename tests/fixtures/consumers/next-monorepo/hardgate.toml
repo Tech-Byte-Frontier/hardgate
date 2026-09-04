@@ -1,0 +1,11 @@
+[gate]
+name = "consumer-next-monorepo"
+preset = "custom"
+strict = true
+enforce_classified_sources = true
+
+[coverage]
+enabled = false
+
+[mutation]
+enabled = false

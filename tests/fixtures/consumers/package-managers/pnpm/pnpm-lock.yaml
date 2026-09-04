@@ -1,0 +1,7 @@
+lockfileVersion: '9.0'
+importers:
+  .:
+    devDependencies:
+      vitest:
+        specifier: 0.0.0-fixture
+        version: 0.0.0-fixture

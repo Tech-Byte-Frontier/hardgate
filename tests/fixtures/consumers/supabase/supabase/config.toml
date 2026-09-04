@@ -1,0 +1,4 @@
+project_id = "consumer-fixture"
+
+[api]
+enabled = true

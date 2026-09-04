@@ -1,0 +1,5 @@
+{
+  "name": "consumer-supabase",
+  "private": true,
+  "scripts": { "test": "echo local fixture" }
+}

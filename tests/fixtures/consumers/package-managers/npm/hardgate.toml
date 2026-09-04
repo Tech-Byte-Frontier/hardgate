@@ -1,0 +1,11 @@
+[gate]
+name = "consumer-package-manager-npm"
+preset = "custom"
+strict = true
+enforce_classified_sources = true
+
+[coverage]
+enabled = false
+
+[mutation]
+enabled = false

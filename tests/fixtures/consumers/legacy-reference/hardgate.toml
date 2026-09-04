@@ -1,0 +1,14 @@
+[gate]
+name = "consumer-legacy-reference"
+preset = "legacy-migration"
+strict = false
+enforce_classified_sources = true
+
+[budgets.functions]
+max_parameters = 1
+
+[coverage]
+enabled = false
+
+[mutation]
+enabled = false
