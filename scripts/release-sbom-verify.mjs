@@ -5,7 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { option } from "./release-support.mjs";
+import { option, uuidV5 } from "./release-support.mjs";
 
 function fail(message) {
   throw new Error(`release-sbom-verify: ${message}`);
@@ -22,6 +22,14 @@ try {
 }
 if (bom["$schema"] !== "http://cyclonedx.org/schema/bom-1.5.schema.json" || bom.bomFormat !== "CycloneDX" || bom.specVersion !== "1.5" || bom.version !== 1) {
   fail("must be CycloneDX 1.5 version 1");
+}
+if (!/^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(bom.serialNumber ?? "")) {
+  fail("serialNumber must be a lowercase RFC 4122 UUIDv5 URN");
+}
+const withoutSerial = { ...bom };
+delete withoutSerial.serialNumber;
+if (bom.serialNumber !== `urn:uuid:${uuidV5(JSON.stringify(withoutSerial))}`) {
+  fail("serialNumber must deterministically identify the remaining BOM contents");
 }
 const root = bom.metadata?.component;
 if (!root || root.type !== "application" || root.name !== "hardgate" || typeof root.version !== "string" || typeof root["bom-ref"] !== "string") {

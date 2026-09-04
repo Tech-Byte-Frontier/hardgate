@@ -21,11 +21,13 @@ assert.match(
   /concurrency:\n(?:  #[^\n]*\n)*  group: hardgate-release\n  cancel-in-progress: false/,
   "an in-flight publication must never be cancelled by another tag",
 );
-assert.match(release, /package:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only packaging may attest artifacts");
+assert.match(release, /attest:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only the resumable attestation job may attest artifacts");
 assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
 assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
 
 const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
+const publishCratesJob = release.slice(release.indexOf("  publish-crates:"), release.indexOf("  publish-npm:"));
+const publishNpmJob = release.slice(release.indexOf("  publish-npm:"), release.indexOf("  verify-channels:"));
 const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  quality-gate:"));
 includesAll(
   versionCheckJob,
@@ -94,9 +96,27 @@ includesAll(
 );
 assert.match(
   githubReleaseJob,
-  /needs: \[version-check, quality-gate, package, publication-preflight\]/,
-  "GitHub publication must wait for registry preflight",
+  /needs: \[version-check, quality-gate, package, attest, publication-preflight\]/,
+  "GitHub publication must wait for attestation and registry preflight",
 );
+for (const [label, job] of [
+  ["GitHub Release", githubReleaseJob],
+  ["crates.io", publishCratesJob],
+  ["npm", publishNpmJob],
+]) {
+  includesAll(
+    job,
+    [
+      "Recheck signed tag immediately before",
+      "RELEASE_TAG: ${{ needs.version-check.outputs.tag }}",
+      "RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}",
+      'git cat-file -t "$RELEASE_TAG"',
+      'verify-tag "$RELEASE_TAG"',
+      'git rev-parse "${RELEASE_TAG}^{commit}"',
+    ],
+    `${label} publication tag guard`,
+  );
+}
 includesAll(
   githubReleaseJob,
   [

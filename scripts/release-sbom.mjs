@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { option } from "./release-support.mjs";
+import { option, uuidV5 } from "./release-support.mjs";
 
 function cargoMetadata() {
   const result = spawnSync("cargo", ["metadata", "--locked", "--format-version", "1"], { encoding: "utf8" });
@@ -62,6 +62,10 @@ const bom = {
   // components must not repeat that same bom-ref at the top level.
   components: components.filter((item) => item["bom-ref"] !== rootComponent["bom-ref"]),
 };
+// GitHub's SBOM attestation parser requires the CycloneDX serial number.
+// UUIDv5 over the stable inventory makes changed BOM contents distinct while
+// retaining the release pipeline's byte-for-byte reproducibility contract.
+bom.serialNumber = `urn:uuid:${uuidV5(JSON.stringify(bom))}`;
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, `${JSON.stringify(bom, null, 2)}\n`);
 console.log(`release-sbom: ${components.length} Cargo components -> ${output}`);

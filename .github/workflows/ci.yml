@@ -40,7 +40,7 @@ jobs:
         run: scripts/dependency-audit.sh
 
   npm-wrapper:
-    name: npm quality and wrapper regression
+    name: npm quality, wrapper, and SBOM regression
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,6 +73,9 @@ jobs:
       - run: node tests/consumer_matrix.mjs
         env:
           HARDGATE_BINARY: target/release/hardgate
+      # The real SBOM generator needs both pinned Node and Cargo, which this
+      # job already provisions without another runner/toolchain setup.
+      - run: node tests/release_contract.sbom.test.mjs
 
   hardgate-self:
     name: Hardgate complete self/evidence gate

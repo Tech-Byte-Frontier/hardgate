@@ -163,6 +163,7 @@ jobs:
       - run: node tests/release_contract.install.test.mjs
       - run: node tests/release_contract.package.test.mjs
       - run: node tests/release_contract.abi.test.mjs
+      - run: node tests/release_contract.sbom.test.mjs
       - name: Hardgate complete configured self/orchestration/evidence gate
         run: scripts/self-gate.sh
 
@@ -242,11 +243,8 @@ jobs:
     name: Package and verify release artifacts
     needs: [version-check, quality-gate, build]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
+    outputs:
+      bundle_artifact_id: ${{ steps.upload_bundle.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -282,13 +280,54 @@ jobs:
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
-      - name: Upload verified release bundle
+      # Recovery must use "Re-run failed jobs" so this successful immutable
+      # checkpoint and the six build artifacts remain available in the run.
+      - id: upload_bundle
+        name: Upload verified release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-bundle
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+
+  attest:
+    name: Attest verified release artifacts
+    needs: [version-check, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Recheck the signed tag and immutable bundle before attestation
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+          node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
+          (cd dist && sha256sum --check --strict SHA256SUMS)
       - name: Sign archive checksums with GitHub artifact attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -337,15 +376,31 @@ jobs:
 
   github-release:
     name: Publish verified GitHub Release
-    needs: [version-check, quality-gate, package, publication-preflight]
+    needs: [version-check, quality-gate, package, attest, publication-preflight]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck signed tag immediately before GitHub publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-bundle
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
+          digest-mismatch: error
       - name: Recheck checksums immediately before publication
         run: cd dist && sha256sum --check --strict SHA256SUMS
       - name: Upload release assets
@@ -435,6 +490,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Recheck signed tag immediately before crates.io publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
       - id: crate-state
         name: Check crate publication state
         env:
@@ -582,6 +646,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -594,10 +659,20 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
       - run: npm install --global "npm@${NPM_VERSION}"
+      - name: Recheck signed tag immediately before npm publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-bundle
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
+          digest-mismatch: error
       - name: Verify release bundle and prepare npm packages
         env:
           RELEASE_TAG: ${{ needs.version-check.outputs.tag }}

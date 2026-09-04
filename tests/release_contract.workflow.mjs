@@ -51,6 +51,7 @@ node tests/npm-wrapper-regression.test.mjs
 node tests/release_contract.install.test.mjs
 node tests/release_contract.package.test.mjs
 node tests/release_contract.abi.test.mjs
+node tests/release_contract.sbom.test.mjs
 node tests/consumer_matrix.mjs
 HARDGATE_BINARY: target/release/hardgate
 `,
@@ -110,10 +111,13 @@ cargo publish --locked
 cargo publish --dry-run --locked
 publication-preflight:
 npm whoami --registry=https://registry.npmjs.org
-needs: [version-check, quality-gate, package, publication-preflight]
+needs: [version-check, quality-gate, package, attest, publication-preflight]
 https://crates.io/api/v1/crates/hardgate/
 version"]["num
 actions/attest
+bundle_artifact_id
+artifact-ids: \${{ needs.package.outputs.bundle_artifact_id }}
+digest-mismatch: error
 publish-crates
 verify-channels:
 hardgate-\${RELEASE_VERSION}.sbom.cdx.json
@@ -162,7 +166,9 @@ wait_for_latest_tag()
 );
 
 const ciSelfGate = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
+const ciNpmWrapper = ci.slice(ci.indexOf("  npm-wrapper:"), ci.indexOf("  hardgate-self:"));
 const releaseQualityGate = release.slice(release.indexOf("  quality-gate:"), release.indexOf("  build:"));
+assert.match(ciNpmWrapper, /node tests\/release_contract\.sbom\.test\.mjs/, "SBOM runtime contract must reuse the CI job with pinned Node and Cargo");
 const crateDryRunStep = releaseQualityGate.slice(
   releaseQualityGate.indexOf("- name: Validate the crates.io package without publishing"),
   releaseQualityGate.indexOf("- run: node scripts/sync-npm-version.mjs"),
@@ -181,7 +187,8 @@ for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release qual
   );
 }
 
-assert.doesNotMatch(release, /--clobber/, "immutable release assets must never be overwritten in place");
+assert.doesNotMatch(release, /--clobber|overwrite:\s*true/, "immutable release assets and workflow artifacts must never be overwritten in place");
+assert.match(release, /Recovery must use "Re-run failed jobs"/, "release recovery must document the artifact-safe rerun mode");
 assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
 assert.doesNotMatch(release, /https:\/\/crates\.io\/api\/v1\/me/, "crates.io /api/v1/me is cookie-only and cannot validate a publish token");
 assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");
@@ -276,7 +283,7 @@ assert.doesNotMatch(crateStateStep, /CARGO_REGISTRY_TOKEN/, "crate probes must n
 assert.match(cratePublishStep, /CARGO_REGISTRY_TOKEN:[\s\S]*?cargo publish --locked/, "crate token must scope only publication");
 assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?CARGO_REGISTRY_TOKEN=\"\$publish_token\" cargo publish --locked/, "crate token must be process-scoped");
 assert.doesNotMatch(crateVerifyStep, /CARGO_REGISTRY_TOKEN/, "crate verification must not inherit publish credentials");
-for (const job of ["version-check", "package", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
+for (const job of ["version-check", "package", "attest", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
   assert.match(release, new RegExp(`${job}:[\\s\\S]*?runs-on: ubuntu-24\\.04`), `${job} should use the current x64 Linux runner`);
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");

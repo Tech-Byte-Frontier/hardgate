@@ -80,9 +80,9 @@ for (const error of [
 assert.doesNotMatch(verifier, /startsWith\(`hardgate \$\{version\}/, "host smoke must compare the complete identity");
 assert.match(sbomScript, /expression: licenseText/, "CycloneDX must encode compound SPDX values as expressions");
 assert.match(sbomScript, /id: licenseText/, "CycloneDX may encode a single SPDX identifier as an id");
-includesAll(sbomScript, ["$schema", "rootComponent.type = \"application\"", "components.filter", "codepointCompare", "Buffer.from(left, \"utf8\").compare"], "CycloneDX structure");
+includesAll(sbomScript, ["$schema", "serialNumber", "uuidV5(JSON.stringify(bom))", "rootComponent.type = \"application\"", "components.filter", "codepointCompare", "Buffer.from(left, \"utf8\").compare"], "CycloneDX structure");
 assert.doesNotMatch(sbomScript, /id:\s*pkg\.license/, "raw package SPDX expressions must not be emitted as license ids");
-includesAll(sbomVerifier, ["CycloneDX", "1.5", "metadata.component", "application", "must not be duplicated", "license.expression", "$schema"], "CycloneDX verifier");
+includesAll(sbomVerifier, ["CycloneDX", "1.5", "serialNumber", "RFC 4122 UUIDv5 URN", "uuidV5(JSON.stringify(withoutSerial))", "metadata.component", "application", "must not be duplicated", "license.expression", "$schema"], "CycloneDX verifier");
 includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "COV_TOOLCHAIN=\"${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}\"", "0.9.0", "cargo install cargo-llvm-cov --version \"=$COV_VERSION\"", "cargo \"+$COV_TOOLCHAIN\" llvm-cov --version", "--all-targets", "--all-features", "--branch", "--include-build-script", "--lcov", "coverage/lcov.info"], "coverage helper");
 includesAll(auditScript, ["CARGO_AUDIT_VERSION", "0.22.2", "cargo install cargo-audit --version \"=$AUDIT_VERSION\"", "cargo audit"], "audit helper");
 includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 180", "cargo test --all-targets --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
@@ -99,13 +99,23 @@ assert.equal((release.match(/target:/g) ?? []).length, targets.length, "release 
 
 assert.match(release, /needs:\s*\[version-check, quality-gate\]/, "build must wait for quality");
 assert.match(release, /package:[\s\S]*needs:\s*\[version-check, quality-gate, build\]/, "packaging must wait for all builds");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, quality-gate, package, publication-preflight\]/, "GitHub publication must wait for verification and registry preflight");
+assert.match(release, /attest:[\s\S]*needs:\s*\[version-check, package\]/, "attestation must consume the completed package checkpoint");
+assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, quality-gate, package, attest, publication-preflight\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
 assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, quality-gate, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
 assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, github-release, publish-crates, publish-npm\]/, "final channel verification must wait for every publication");
 const platformPublish = release.indexOf("Publish and verify each platform package in order");
 const wrapperPublish = release.indexOf("Publish wrapper only after all platforms are verified");
 assert.ok(platformPublish >= 0 && wrapperPublish > platformPublish, "wrapper publication must follow platform publication");
 assert.doesNotMatch(release, /deliberately tolerant|continu(?:e|ing) with remaining|main wrapper above was still attempted/i);
+
+const packageJob = release.slice(release.indexOf("  package:"), release.indexOf("  attest:"));
+const attestJob = release.slice(release.indexOf("  attest:"), release.indexOf("  publication-preflight:"));
+assert.doesNotMatch(packageJob, /actions\/attest@/, "successful packaging must remain reusable when attestation fails");
+assert.doesNotMatch(packageJob, /id-token: write|attestations: write|artifact-metadata: write/, "packaging must not have attestation credentials");
+assert.match(packageJob.trimEnd(), /retention-days: 14$/, "verified bundle upload must be the package job's final checkpoint");
+includesAll(attestJob, ["artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}", "digest-mismatch: error", "release-verify.mjs", "release-sbom-verify.mjs", "sha256sum --check --strict", "actions: read", "id-token: write", "attestations: write", "artifact-metadata: write", "verify-tag", "subject-checksums", "sbom-path"], "resumable attestation checkpoint");
+assert.equal((attestJob.match(/actions\/attest@/g) ?? []).length, 2, "attestation checkpoint must sign checksums and the SBOM exactly once each");
+assert.doesNotMatch(attestJob, /continue-on-error/, "attestation failures must block publication");
 
 assert.doesNotMatch(installer, /win32|windows|\.exe|powershell/i, "installer must advertise Unix targets only");
 assert.doesNotMatch(release, /win32|windows|homebrew|brew/i, "release must not advertise removed channels");
