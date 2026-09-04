@@ -1,3 +1,4 @@
+use super::lcov_details::{DetailValidation, RecordDetails};
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -78,8 +79,15 @@ impl LcovRecords {
     }
 
     fn ingest(&mut self, line: &str) -> Result<()> {
-        if line == "SF" || (line.starts_with("end_of_record") && line != "end_of_record") {
-            bail!("Malformed LCOV record marker `{line}`");
+        reject_malformed_marker(line)?;
+        if line.is_empty() || line.starts_with('#') {
+            if let Some(current) = self.current.as_mut() {
+                current.saw_metric = true;
+            }
+            return Ok(());
+        }
+        if self.ingest_metadata(line)? {
+            return Ok(());
         }
         if let Some(path) = line.strip_prefix("SF:") {
             return self.start(path);
@@ -92,8 +100,33 @@ impl LcovRecords {
                 bail!("LCOV {tag} metric appears outside a source record");
             };
             current.ingest_metric(tag, line)?;
+        } else {
+            return reject_unknown_tag(line);
         }
         Ok(())
+    }
+
+    fn ingest_metadata(&mut self, line: &str) -> Result<bool> {
+        if line == "TN" {
+            bail!("Malformed LCOV TN metadata");
+        }
+        if line.starts_with("TN:") {
+            if self.current.is_some() {
+                bail!("LCOV TN metadata must appear outside a source record");
+            }
+            return Ok(true);
+        }
+        if line == "VER" {
+            bail!("Malformed LCOV VER metadata");
+        }
+        let Some(value) = line.strip_prefix("VER:") else {
+            return Ok(false);
+        };
+        let Some(current) = self.current.as_mut() else {
+            bail!("LCOV VER metadata must immediately follow SF");
+        };
+        current.ingest_version(value)?;
+        Ok(true)
     }
 
     fn start(&mut self, path: &str) -> Result<()> {
@@ -138,10 +171,25 @@ impl LcovRecords {
     }
 }
 
+fn reject_malformed_marker(line: &str) -> Result<()> {
+    if line == "SF" || (line.starts_with("end_of_record") && line != "end_of_record") {
+        bail!("Malformed LCOV record marker `{line}`");
+    }
+    Ok(())
+}
+
+fn reject_unknown_tag(line: &str) -> Result<()> {
+    let tag = line.split_once(':').map_or(line, |(tag, _)| tag);
+    bail!("Unsupported or malformed LCOV tag `{tag}`")
+}
+
 struct RecordBuilder {
     coverage: FileCoverage,
     seen_counts: HashSet<&'static str>,
     seen_da: HashSet<usize>,
+    details: RecordDetails,
+    saw_version: bool,
+    saw_metric: bool,
 }
 
 impl RecordBuilder {
@@ -153,10 +201,22 @@ impl RecordBuilder {
             },
             seen_counts: HashSet::new(),
             seen_da: HashSet::new(),
+            details: RecordDetails::default(),
+            saw_version: false,
+            saw_metric: false,
         }
     }
 
+    fn ingest_version(&mut self, value: &str) -> Result<()> {
+        if self.saw_version || self.saw_metric || value.trim().is_empty() {
+            bail!("LCOV VER must be non-empty and immediately follow SF");
+        }
+        self.saw_version = true;
+        Ok(())
+    }
+
     fn ingest_metric(&mut self, tag: &'static str, line: &str) -> Result<()> {
+        self.saw_metric = true;
         let rest = line
             .strip_prefix(tag)
             .and_then(|value| value.strip_prefix(':'))
@@ -166,9 +226,12 @@ impl RecordBuilder {
             "LF" | "LH" | "FNF" | "FNH" | "BRF" | "BRH" => self.ingest_count(tag, rest),
             // Function/branch detail records are not needed for scoring, but
             // they are still recognized metrics and must remain record-bound.
-            "FN" => validate_fn(rest),
-            "FNDA" => validate_fnda(rest),
-            "BRDA" => validate_brda(rest),
+            "FN" => self.details.ingest_fn(rest),
+            "FNDA" => self.details.ingest_fnda(rest),
+            "BRDA" => self.details.ingest_brda(rest),
+            "FNL" | "FNA" | "MCDC" | "MRF" | "MRH" => {
+                bail!("Unsupported LCOV {tag} metric")
+            }
             _ => unreachable!("metric_tag only returns recognized metrics"),
         }
     }
@@ -209,6 +272,15 @@ impl RecordBuilder {
         validate_lines(&self)?;
         validate_function_counts(&self, require_functions)?;
         validate_branch_counts(&self, require_branches)?;
+        self.details.validate(DetailValidation {
+            seen_counts: &self.seen_counts,
+            functions_found: self.coverage.functions_found,
+            functions_hit: self.coverage.functions_hit,
+            branches_found: self.coverage.branches_found,
+            branches_hit: self.coverage.branches_hit,
+            require_functions,
+            require_branches,
+        })?;
         Ok(self.coverage)
     }
 }
@@ -355,48 +427,11 @@ fn require_counts(
     }
 }
 
-fn validate_fn(rest: &str) -> Result<()> {
-    let (line, name) = rest
-        .split_once(',')
-        .ok_or_else(|| anyhow::anyhow!("Malformed LCOV FN metric `{rest}`"))?;
-    let line = line
-        .parse::<usize>()
-        .map_err(|_| anyhow::anyhow!("Malformed LCOV FN line number `{line}`"))?;
-    if line == 0 || name.is_empty() {
-        bail!("Malformed LCOV FN metric `{rest}`");
-    }
-    Ok(())
-}
-
-fn validate_fnda(rest: &str) -> Result<()> {
-    let (hits, _name) = rest
-        .split_once(',')
-        .ok_or_else(|| anyhow::anyhow!("Malformed LCOV FNDA metric `{rest}`"))?;
-    hits.parse::<usize>()
-        .map_err(|_| anyhow::anyhow!("Malformed LCOV FNDA hit count `{hits}`"))?;
-    Ok(())
-}
-
-fn validate_brda(rest: &str) -> Result<()> {
-    let fields: Vec<_> = rest.split(',').collect();
-    if fields.len() != 4 || fields.iter().any(|field| field.is_empty()) {
-        bail!("Malformed LCOV BRDA metric `{rest}`");
-    }
-    if fields[0] != "-" {
-        let line = fields[0]
-            .parse::<usize>()
-            .map_err(|_| anyhow::anyhow!("Malformed LCOV BRDA line number `{}`", fields[0]))?;
-        if line == 0 {
-            bail!("LCOV BRDA line number must be greater than zero");
-        }
-    }
-    Ok(())
-}
-
 fn metric_tag(line: &str) -> Option<&'static str> {
     let tag = line.split_once(':').map_or(line, |(tag, _)| tag);
     [
-        "DA", "LF", "LH", "FN", "FNDA", "FNF", "FNH", "BRDA", "BRF", "BRH",
+        "DA", "LF", "LH", "FN", "FNDA", "FNF", "FNH", "BRDA", "BRF", "BRH", "FNL", "FNA", "MCDC",
+        "MRF", "MRH",
     ]
     .into_iter()
     .find(|candidate| *candidate == tag)

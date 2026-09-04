@@ -2,6 +2,8 @@
 mod evaluator;
 #[path = "coverage/lcov.rs"]
 mod lcov;
+#[path = "coverage/lcov_details.rs"]
+mod lcov_details;
 #[path = "coverage/paths.rs"]
 mod paths;
 #[path = "coverage/scoring.rs"]

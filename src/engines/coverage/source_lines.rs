@@ -5,15 +5,12 @@ use std::collections::BTreeSet;
 /// retained so a stale report cannot silently pass by hiding the line.
 pub(crate) fn retain_code_lines(content: &str, candidates: &BTreeSet<usize>) -> BTreeSet<usize> {
     let mut retained = BTreeSet::new();
-    let mut block_comment = false;
+    let mut state = ScannerState::default();
     let line_count = content.split('\n').count();
     for (index, line) in content.lines().enumerate() {
         let line_number = index + 1;
-        if !candidates.contains(&line_number) {
-            continue;
-        }
-        let code = strip_comments(line, &mut block_comment);
-        if is_code_bearing(&code) {
+        let (code, literal) = strip_comments(line, &mut state);
+        if candidates.contains(&line_number) && (literal || is_code_bearing(&code)) {
             retained.insert(line_number);
         }
     }
@@ -26,68 +23,104 @@ pub(crate) fn retain_code_lines(content: &str, candidates: &BTreeSet<usize>) -> 
     retained
 }
 
-fn strip_comments(line: &str, in_block: &mut bool) -> String {
-    let scanner = CommentScanner::new(line, *in_block);
-    let (result, block) = scanner.run();
-    *in_block = block;
-    result
+fn strip_comments(line: &str, state: &mut ScannerState) -> (String, bool) {
+    let scanner = CommentScanner::new(line, *state);
+    let (result, next, literal) = scanner.run();
+    *state = next;
+    (result, literal)
+}
+
+#[derive(Clone, Copy, Default)]
+struct ScannerState {
+    block_depth: usize,
+    literal: Option<LiteralState>,
+}
+
+#[derive(Clone, Copy)]
+enum LiteralState {
+    Quoted(char),
+    Raw(usize),
 }
 
 struct CommentScanner {
     chars: Vec<char>,
     index: usize,
-    in_block: bool,
-    quote: Option<char>,
+    state: ScannerState,
+    literal_line: bool,
     output: String,
 }
 
 impl CommentScanner {
-    fn new(line: &str, in_block: bool) -> Self {
+    fn new(line: &str, state: ScannerState) -> Self {
         Self {
             chars: line.chars().collect(),
             index: 0,
-            in_block,
-            quote: None,
+            literal_line: state.literal.is_some(),
+            state,
             output: String::new(),
         }
     }
 
-    fn run(mut self) -> (String, bool) {
+    fn run(mut self) -> (String, ScannerState, bool) {
         while self.index < self.chars.len() {
             self.step();
         }
-        (self.output, self.in_block)
+        (self.output, self.state, self.literal_line)
     }
 
     fn step(&mut self) {
-        if self.in_block {
+        if self.state.block_depth > 0 {
             self.consume_block();
-        } else if let Some(delimiter) = self.quote {
-            self.consume_quote(delimiter);
+        } else if let Some(literal) = self.state.literal {
+            self.literal_line = true;
+            self.consume_literal(literal);
         } else {
             self.consume_code();
         }
     }
 
     fn consume_block(&mut self) {
-        if self.starts_with('*', '/') {
-            self.in_block = false;
+        if self.starts_with('/', '*') {
+            self.state.block_depth = self.state.block_depth.saturating_add(1);
+            self.index += 2;
+        } else if self.starts_with('*', '/') {
+            self.state.block_depth -= 1;
             self.index += 2;
         } else {
             self.index += 1;
         }
     }
 
-    fn consume_quote(&mut self, delimiter: char) {
+    fn consume_literal(&mut self, literal: LiteralState) {
+        match literal {
+            LiteralState::Quoted(delimiter) => self.consume_quoted(delimiter),
+            LiteralState::Raw(hashes) => self.consume_raw(hashes),
+        }
+    }
+
+    fn consume_quoted(&mut self, delimiter: char) {
         let character = self.chars[self.index];
         self.output.push(character);
         match character {
             '\\' => self.consume_escape(),
             value if value == delimiter => {
-                self.quote = None;
+                self.state.literal = None;
                 self.index += 1;
             }
             _ => self.index += 1,
+        }
+    }
+
+    fn consume_raw(&mut self, hashes: usize) {
+        if self.chars[self.index] == '"' && self.raw_close_len(hashes).is_some() {
+            let length = hashes + 1;
+            self.output
+                .extend(self.chars[self.index..=self.index + hashes].iter());
+            self.index += length;
+            self.state.literal = None;
+        } else {
+            self.output.push(self.chars[self.index]);
+            self.index += 1;
         }
     }
 
@@ -101,16 +134,26 @@ impl CommentScanner {
 
     fn consume_code(&mut self) {
         let character = self.chars[self.index];
+        if let Some(hashes) = self.raw_prefix_hashes() {
+            let length = hashes + 2;
+            self.output
+                .extend(self.chars[self.index..self.index + length].iter());
+            self.index += length;
+            self.state.literal = Some(LiteralState::Raw(hashes));
+            self.literal_line = true;
+            return;
+        }
         match character {
             '\'' | '"' | '`' => {
-                self.quote = Some(character);
+                self.state.literal = Some(LiteralState::Quoted(character));
+                self.literal_line = true;
                 self.output.push(character);
                 self.index += 1;
             }
             '/' if self.starts_with('/', '/') => self.index = self.chars.len(),
             '#' if is_hash_comment_start(&self.chars, self.index) => self.index = self.chars.len(),
             '/' if self.starts_with('/', '*') => {
-                self.in_block = true;
+                self.state.block_depth = 1;
                 self.index += 2;
             }
             _ => {
@@ -123,6 +166,28 @@ impl CommentScanner {
     fn starts_with(&self, first: char, second: char) -> bool {
         self.chars.get(self.index) == Some(&first)
             && self.chars.get(self.index + 1) == Some(&second)
+    }
+
+    fn raw_prefix_hashes(&self) -> Option<usize> {
+        if self.chars.get(self.index) != Some(&'r') {
+            return None;
+        }
+        let mut cursor = self.index + 1;
+        while self.chars.get(cursor) == Some(&'#') {
+            cursor += 1;
+        }
+        (self.chars.get(cursor) == Some(&'"')).then_some(cursor - self.index - 1)
+    }
+
+    fn raw_close_len(&self, hashes: usize) -> Option<usize> {
+        let end = self.index + hashes + 1;
+        if end > self.chars.len() {
+            return None;
+        }
+        (self.chars[self.index + 1..end]
+            .iter()
+            .all(|character| *character == '#'))
+        .then_some(hashes + 1)
     }
 }
 
@@ -178,5 +243,40 @@ mod tests {
     fn ignores_trailing_blank_line() {
         let lines = BTreeSet::from([2]);
         assert!(retain_code_lines("one\n", &lines).is_empty());
+    }
+
+    #[test]
+    fn advances_block_comment_state_on_unchanged_lines() {
+        let source = "/* unchanged opener\nstill comment\n*/\nlet answer = 1;\n";
+        let lines = BTreeSet::from([4]);
+        assert_eq!(retain_code_lines(source, &lines), lines);
+    }
+
+    #[test]
+    fn resumes_after_unchanged_block_comment_closer() {
+        let source = "/*\n*/\nlet answer = 1;\n";
+        let lines = BTreeSet::from([3]);
+        assert_eq!(retain_code_lines(source, &lines), lines);
+    }
+
+    #[test]
+    fn preserves_multiline_template_literal_comment_markers() {
+        let source = "const text = `open\n// literal text\n`;\n";
+        let lines = BTreeSet::from([2]);
+        assert_eq!(retain_code_lines(source, &lines), lines);
+    }
+
+    #[test]
+    fn preserves_multiline_raw_string_comment_markers() {
+        let source = "let text = r#\"open\n// literal text\n\"#;\n";
+        let lines = BTreeSet::from([2]);
+        assert_eq!(retain_code_lines(source, &lines), lines);
+    }
+
+    #[test]
+    fn tracks_nested_block_comments_before_changed_code() {
+        let source = "/* outer\n/* inner */\nstill outer\n*/\nlet answer = 1;\n";
+        let lines = BTreeSet::from([3, 5]);
+        assert_eq!(retain_code_lines(source, &lines), BTreeSet::from([5]));
     }
 }

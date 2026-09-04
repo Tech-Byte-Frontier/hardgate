@@ -357,6 +357,106 @@ fn assert_invalid_lcov(config: &CoverageConfig, body: &str) {
     let _ = std::fs::remove_dir_all(tmp);
 }
 
+fn detail_report(details: &str, counts: &str) -> String {
+    format!(
+        "# generated metadata\nTN:\nSF:src/lib.rs\nVER:1.0\n{details}DA:1,1\nLF:1\nLH:1\n{counts}\nend_of_record\n"
+    )
+}
+
+#[test]
+fn lcov_parser_accepts_metadata_and_consistent_details() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: Some(1.0),
+        min_branch_percent: Some(1.0),
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    let body = detail_report(
+        "FN:1,2,compute\nFNDA:1,compute\nBRDA:1,0,case,with,comma,1\n",
+        "FNF:1\nFNH:1\nBRF:1\nBRH:1",
+    );
+    let tmp = tempdir("lcov-details-valid");
+    let report = tmp.join("report.info");
+    std::fs::write(&report, body).unwrap();
+    let parsed = CoverageScorer::new(&config).parse_lcov(&report).unwrap();
+    assert_eq!(parsed.len(), 1);
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn lcov_parser_rejects_function_detail_mismatches_and_duplicates() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    for details in [
+        "FN:1,compute\nFNF:1\nFNH:0\n",
+        "FNDA:1,compute\nFNF:1\nFNH:1\n",
+        "FN:1,compute\nFN:2,compute\nFNDA:1,compute\nFNF:1\nFNH:1\n",
+        "FN:1,compute\nFNDA:1,other\nFNF:1\nFNH:1\n",
+        "FN:1,\nFNF:1\nFNH:0\n",
+        "FN:1,2,compute\nFNDA:1,compute\nFNF:2\nFNH:1\n",
+    ] {
+        assert_invalid_lcov(&config, &detail_report(details, ""));
+    }
+}
+
+#[test]
+fn lcov_parser_rejects_branch_detail_mismatches_and_malformed_fields() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    for details in [
+        "BRDA:1,0,0,1\n",
+        "BRDA:1,0,0,1\nBRDA:1,0,0,0\n",
+        "BRDA:0,0,0,1\n",
+        "BRDA:1,-,0,1\n",
+        "BRDA:1,0,-,1\n",
+        "BRDA:1,0,0,unknown\n",
+        "BRDA:1,0,0\n",
+    ] {
+        assert_invalid_lcov(&config, &detail_report(details, ""));
+    }
+    assert_invalid_lcov(&config, &detail_report("BRDA:1,0,0,1\n", "BRF:2\nBRH:1"));
+}
+
+#[test]
+fn lcov_parser_rejects_unknown_records_and_invalid_metadata_placement() {
+    let config = CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent: None,
+        min_branch_percent: None,
+        max_crap_score: None,
+        critical_paths: None,
+    };
+    for body in [
+        "JUNK:1\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "TN\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "VER:1.0\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nVER:1.0\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nFNL:1,compute\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nJUNK\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+    ] {
+        assert_invalid_lcov(&config, body);
+    }
+}
+
 #[test]
 fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
     let config = CoverageConfig {
