@@ -14,7 +14,7 @@ impl SupportedLanguage {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
             "rs" => Some(SupportedLanguage::Rust),
-            "ts" => Some(SupportedLanguage::TypeScript),
+            "ts" | "mts" | "cts" => Some(SupportedLanguage::TypeScript),
             "tsx" => Some(SupportedLanguage::Tsx),
             "js" | "jsx" | "mjs" | "cjs" => Some(SupportedLanguage::JavaScript),
             "py" => Some(SupportedLanguage::Python),
@@ -60,9 +60,26 @@ impl SupportedLanguage {
     }
 
     pub fn parse_file(path: &std::path::Path, content: &str) -> Option<(Self, tree_sitter::Tree)> {
+        Self::parse_file_checked(path, content).ok().flatten()
+    }
+
+    /// Parse a supported source file and fail when Tree-sitter reports syntax
+    /// errors. Unsupported extensions return `Ok(None)` so classification can
+    /// decide whether that absence is permitted by policy.
+    pub fn parse_file_checked(
+        path: &std::path::Path,
+        content: &str,
+    ) -> anyhow::Result<Option<(Self, tree_sitter::Tree)>> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let lang = Self::from_extension(ext)?;
-        let tree = lang.parse_tree(content)?;
-        Some((lang, tree))
+        let Some(lang) = Self::from_extension(ext) else {
+            return Ok(None);
+        };
+        let tree = lang
+            .parse_tree(content)
+            .ok_or_else(|| anyhow::anyhow!("Tree-sitter did not return a syntax tree"))?;
+        if tree.root_node().has_error() {
+            anyhow::bail!("Tree-sitter found syntax errors in {}", path.display());
+        }
+        Ok(Some((lang, tree)))
     }
 }

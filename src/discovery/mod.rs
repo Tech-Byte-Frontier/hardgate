@@ -1,14 +1,19 @@
-use anyhow::Result;
+pub mod classification;
+
+pub use classification::{
+    AST_EXTENSIONS, ClassifiedFile, FileRole, INVENTORY_EXTENSIONS, ast_supported,
+    is_inventory_file,
+};
+
+use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::{DirEntry, WalkBuilder};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// File extensions hardgate analyzes.
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "go", "c", "cpp", "cc", "h", "hpp", "css",
-];
+/// Backwards-compatible name for extensions included in repository inventory.
+pub const SUPPORTED_EXTENSIONS: &[&str] = INVENTORY_EXTENSIONS;
 
 /// Dependency and build-output directories that are never project code to
 /// gate (eslint/Biome precedent: `node_modules` is ignored out of the box).
@@ -61,6 +66,7 @@ pub struct DiscoverOptions<'a> {
 pub struct DiscoveryResult {
     pub files: Vec<PathBuf>,
     pub excluded_files: Vec<PathBuf>,
+    pub classified_files: Vec<ClassifiedFile>,
 }
 
 /// Discover source files, returning just the included paths.
@@ -159,7 +165,7 @@ fn path_key(p: &Path) -> String {
 
 /// Discover source files, keeping excluded ones visible for advisories.
 pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<DiscoveryResult> {
-    let exclusion_glob = build_exclusion_globset(options.exclusions);
+    let exclusion_glob = build_exclusion_globset(options.exclusions)?;
     let has_exclusions = !options.exclusions.is_empty();
 
     if options.diff_only {
@@ -179,45 +185,40 @@ pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<Discov
         .build();
 
     for result in walker {
-        let Ok(entry) = result else { continue };
+        let entry = result.context("Failed while walking repository files")?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
 
-        if is_supported_source_extension(path) {
+        if is_inventory_file(path) {
             let rel = path.strip_prefix(options.root).unwrap_or(path);
             if has_exclusions && exclusion_glob.is_match(rel) {
                 excluded_files.push(path.to_path_buf());
-            } else {
-                files.push(path.to_path_buf());
             }
+            // A file-budget exclusion belongs only to the budget engine. The
+            // file remains visible to classification and every other engine.
+            files.push(path.to_path_buf());
         }
     }
 
     files.sort();
     excluded_files.sort();
+    let classified_files = files.iter().map(|path| ClassifiedFile::new(path)).collect();
     Ok(DiscoveryResult {
         files,
         excluded_files,
+        classified_files,
     })
 }
 
-fn build_exclusion_globset(exclusions: &[String]) -> GlobSet {
+fn build_exclusion_globset(exclusions: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for ex in exclusions {
-        if let Ok(g) = Glob::new(ex) {
-            builder.add(g);
-        }
+        let glob = Glob::new(ex).with_context(|| format!("Invalid exclusion glob `{ex}`"))?;
+        builder.add(glob);
     }
-    builder.build().unwrap_or_else(|_| GlobSet::empty())
-}
-
-fn is_supported_source_extension(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    SUPPORTED_EXTENSIONS.contains(&ext)
+    builder.build().context("Failed to compile exclusion globs")
 }
 
 fn discover_git_diff_files(
@@ -226,16 +227,18 @@ fn discover_git_diff_files(
     has_exclusions: bool,
 ) -> Result<DiscoveryResult> {
     let mut collector = GitDiffCollector::new(root, exclusions, has_exclusions);
-    collector.collect_status();
-    collector.collect_diff();
+    collector.collect_status()?;
+    collector.collect_diff()?;
 
     let mut files: Vec<PathBuf> = collector.files.into_iter().collect();
     files.sort();
     let mut excluded_files: Vec<PathBuf> = collector.excluded.into_iter().collect();
     excluded_files.sort();
+    let classified_files = files.iter().map(|path| ClassifiedFile::new(path)).collect();
     Ok(DiscoveryResult {
         files,
         excluded_files,
+        classified_files,
     })
 }
 
@@ -258,41 +261,57 @@ impl<'a> GitDiffCollector<'a> {
         }
     }
 
-    fn run_git_lines(&self, args: &[&str]) -> Vec<String> {
-        let Ok(output) = Command::new("git")
+    fn run_git_records(&self, args: &[&str]) -> Result<Vec<String>> {
+        let output = Command::new("git")
             .args(args)
             .current_dir(self.root)
             .output()
-        else {
-            return Vec::new();
-        };
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().map(|s| s.to_string()).collect()
+            .with_context(|| format!("Failed to execute `git {}`", args.join(" ")))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "`git {}` failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .context("Git returned a path that was not valid UTF-8")?;
+        Ok(stdout
+            .split('\0')
+            .filter(|record| !record.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
-    fn collect_status(&mut self) {
-        for line in self.run_git_lines(&["status", "--porcelain"]) {
-            // Safe slicing: porcelain rows are always `XY␣path`, but short or
-            // corrupt lines must be skipped, never allowed to panic indexing.
-            let Some(marker) = line.get(..2) else {
-                continue;
-            };
+    fn collect_status(&mut self) -> Result<()> {
+        let records =
+            self.run_git_records(&["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
+        let mut records = records.into_iter();
+        while let Some(line) = records.next() {
+            let marker = line
+                .get(..2)
+                .context("Git returned a malformed porcelain status record")?;
             if marker.contains('D') {
                 continue;
             }
-            let raw = line.get(3..).map(str::trim).unwrap_or_default();
-            let target = raw
-                .split_once(" -> ")
-                .map(|(_, new_p)| new_p.trim())
-                .unwrap_or(raw);
+            let target = line
+                .get(3..)
+                .context("Git returned a malformed porcelain path record")?;
             self.add_target(target);
+            if marker.contains('R') || marker.contains('C') {
+                // Porcelain -z emits the old path as a second record. The new
+                // path above is the one that exists in the working tree.
+                let _ = records.next();
+            }
         }
+        Ok(())
     }
 
-    fn collect_diff(&mut self) {
-        for line in self.run_git_lines(&["diff", "--name-only", "HEAD"]) {
-            self.add_target(line.trim());
+    fn collect_diff(&mut self) -> Result<()> {
+        for target in self.run_git_records(&["diff", "--name-only", "-z", "HEAD"])? {
+            self.add_target(&target);
         }
+        Ok(())
     }
 
     fn add_target(&mut self, target: &str) {
@@ -300,13 +319,12 @@ impl<'a> GitDiffCollector<'a> {
             return;
         }
         let path = self.root.join(target);
-        if path.is_file() && is_supported_source_extension(&path) {
+        if path.is_file() && is_inventory_file(&path) {
             let rel = path.strip_prefix(self.root).unwrap_or(&path);
             if self.has_exclusions && self.exclusions.is_match(rel) {
-                self.excluded.insert(path);
-            } else {
-                self.files.insert(path);
+                self.excluded.insert(path.clone());
             }
+            self.files.insert(path);
         }
     }
 }

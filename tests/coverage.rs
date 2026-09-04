@@ -86,3 +86,42 @@ fn test_lcov_checksum_and_paths() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_lcov_rejects_empty_and_malformed_reports() {
+    let tmp = tempdir("lcov-invalid");
+    let scorer = strict_scorer();
+    let empty = tmp.join("empty.info");
+    std::fs::write(&empty, "").unwrap();
+    assert!(scorer.parse_lcov(&empty).is_err());
+
+    let malformed = tmp.join("malformed.info");
+    std::fs::write(
+        &malformed,
+        "SF:src/calc.rs\nDA:not-a-line,wat\nend_of_record\n",
+    )
+    .unwrap();
+    assert!(scorer.parse_lcov(&malformed).is_err());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn test_missing_critical_path_is_a_violation() {
+    let scorer = strict_scorer();
+    let mut map = HashMap::new();
+    map.insert(
+        PathBuf::from("src/other.rs"),
+        FileCoverage {
+            file_path: PathBuf::from("src/other.rs"),
+            lines_found: 1,
+            lines_hit: 1,
+            ..Default::default()
+        },
+    );
+    let violations = scorer.evaluate(&map, &[], Path::new("."));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.metric == "Missing Critical Path")
+    );
+}

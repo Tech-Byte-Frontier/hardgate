@@ -56,3 +56,24 @@ fn test_clone_actual_tokens_not_threshold() {
         violations[0].tokens
     );
 }
+
+#[test]
+fn test_repeated_windows_are_bounded_and_deterministic() {
+    let mut config = clone_config();
+    config.min_lines = 1;
+    config.min_tokens = 5;
+    let detector = CloneDetector::new(&config);
+    let repeated = "let value = source + 1;\n".repeat(2_000);
+    let files = vec![
+        (PathBuf::from("src/a.rs"), repeated.clone()),
+        (PathBuf::from("src/b.rs"), repeated),
+    ];
+    let first = detector.detect_clones(&files, Path::new("."));
+    let second = detector.detect_clones(&files, Path::new("."));
+    assert_eq!(first.len(), second.len());
+    assert!(
+        first.len() < 1_000,
+        "bounded index emitted {} clones",
+        first.len()
+    );
+}

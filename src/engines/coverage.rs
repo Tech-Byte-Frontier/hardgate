@@ -68,6 +68,9 @@ impl CoverageScorer {
 
     pub fn parse_lcov(&self, report_path: &Path) -> anyhow::Result<HashMap<PathBuf, FileCoverage>> {
         let content = fs::read_to_string(report_path)?;
+        if content.trim().is_empty() {
+            anyhow::bail!("LCOV report is empty");
+        }
         let mut map = HashMap::new();
         let mut current = FileCoverage::default();
         let mut in_file = false;
@@ -75,6 +78,12 @@ impl CoverageScorer {
         for line in content.lines() {
             let trimmed = line.trim();
             if let Some(rest) = trimmed.strip_prefix("SF:") {
+                if in_file {
+                    anyhow::bail!("LCOV record started before the previous record ended");
+                }
+                if rest.trim().is_empty() {
+                    anyhow::bail!("LCOV source path is empty");
+                }
                 current = FileCoverage::default();
                 current.file_path = PathBuf::from(rest);
                 in_file = true;
@@ -82,8 +91,15 @@ impl CoverageScorer {
                 map.insert(current.file_path.clone(), current.clone());
                 in_file = false;
             } else if in_file {
-                parse_lcov_metric_line(&mut current, trimmed);
+                parse_lcov_metric_line(&mut current, trimmed)?;
             }
+        }
+
+        if in_file {
+            anyhow::bail!("LCOV report ended before `end_of_record`");
+        }
+        if map.is_empty() {
+            anyhow::bail!("LCOV report contains no source records");
         }
 
         Ok(map)
@@ -97,9 +113,40 @@ impl CoverageScorer {
     ) -> Vec<CoverageViolation> {
         let mut violations = Vec::new();
         self.evaluate_global_floors(coverage_map, &mut violations);
+        self.evaluate_missing_function_files(coverage_map, functions, &mut violations);
         self.evaluate_function_crap(coverage_map, functions, &mut violations);
         self.evaluate_critical_paths(coverage_map, root, &mut violations);
         violations
+    }
+
+    fn evaluate_missing_function_files(
+        &self,
+        coverage_map: &HashMap<PathBuf, FileCoverage>,
+        functions: &[FunctionMetrics],
+        violations: &mut Vec<CoverageViolation>,
+    ) {
+        let mut missing = std::collections::HashSet::new();
+        for function in functions {
+            let present = coverage_map
+                .keys()
+                .any(|path| coverage_path_matches(path, &function.file));
+            if !present && missing.insert(function.file.clone()) {
+                violations.push(CoverageViolation {
+                    file: function.file.clone(),
+                    function_name: None,
+                    metric: "Missing Source Coverage".to_string(),
+                    actual: 0.0,
+                    limit: self.config.min_line_percent.unwrap_or(0.0),
+                    message: format!(
+                        "Required coverage report has no record for `{}`",
+                        function.file.display()
+                    ),
+                    recommendation:
+                        "Instrument this classified source or explicitly change its coverage policy."
+                            .to_string(),
+                });
+            }
+        }
     }
 
     fn evaluate_global_floors(
@@ -248,38 +295,58 @@ impl CoverageScorer {
                                 .to_string(),
                         });
                     }
+                } else {
+                    violations.push(CoverageViolation {
+                        file: PathBuf::from(cp),
+                        function_name: None,
+                        metric: "Missing Critical Path".to_string(),
+                        actual: 0.0,
+                        limit: 100.0,
+                        message: format!(
+                            "Critical path `{}` is absent from the required coverage report",
+                            cp
+                        ),
+                        recommendation:
+                            "Instrument the critical path and regenerate the coverage report."
+                                .to_string(),
+                    });
                 }
             }
         }
     }
 }
 
-fn parse_lcov_metric_line(cov: &mut FileCoverage, line: &str) {
+fn parse_lcov_metric_line(cov: &mut FileCoverage, line: &str) -> anyhow::Result<()> {
     if let Some(rest) = line.strip_prefix("DA:") {
-        parse_da_line(cov, rest);
+        parse_da_line(cov, rest)?;
     } else {
-        parse_count_line(cov, line);
+        parse_count_line(cov, line)?;
     }
+    Ok(())
 }
 
-fn parse_da_line(cov: &mut FileCoverage, rest: &str) {
+fn parse_da_line(cov: &mut FileCoverage, rest: &str) -> anyhow::Result<()> {
     // DA:<line>,<hits>[,<checksum>] — checksum is optional (lcov --checksum).
     let mut parts = rest.split(',');
     let (Some(l_str), Some(h_str)) = (parts.next(), parts.next()) else {
-        return;
+        anyhow::bail!("Malformed LCOV DA record `{rest}`");
     };
     let (Ok(line_num), Ok(hits)) = (l_str.parse::<usize>(), h_str.parse::<usize>()) else {
-        return;
+        anyhow::bail!("Malformed LCOV DA values `{rest}`");
     };
     cov.line_hits.insert(line_num, hits);
+    Ok(())
 }
 
-fn parse_count_line(cov: &mut FileCoverage, line: &str) {
+fn parse_count_line(cov: &mut FileCoverage, line: &str) -> anyhow::Result<()> {
     let Some((tag, val_str)) = line.split_once(':') else {
-        return;
+        return Ok(());
     };
+    if !matches!(tag, "LF" | "LH" | "FNF" | "FNH" | "BRF" | "BRH") {
+        return Ok(());
+    }
     let Ok(val) = val_str.parse::<usize>() else {
-        return;
+        anyhow::bail!("Malformed LCOV {tag} count `{val_str}`");
     };
     match tag {
         "LF" => cov.lines_found = val,
@@ -290,6 +357,7 @@ fn parse_count_line(cov: &mut FileCoverage, line: &str) {
         "BRH" => cov.branches_hit = val,
         _ => {}
     }
+    Ok(())
 }
 
 fn calculate_function_coverage_ratio(

@@ -72,8 +72,20 @@ impl ComplexityAnalyzer {
         content: &str,
         root: &Path,
     ) -> Vec<FunctionMetrics> {
-        let Some((lang, tree)) = SupportedLanguage::parse_file(path, content) else {
-            return Vec::new();
+        self.analyze_file_checked(path, content, root)
+            .unwrap_or_default()
+    }
+
+    /// Checked variant used by strict gates so parser failures cannot turn
+    /// into a zero-function success.
+    pub fn analyze_file_checked(
+        &mut self,
+        path: &Path,
+        content: &str,
+        root: &Path,
+    ) -> anyhow::Result<Vec<FunctionMetrics>> {
+        let Some((lang, tree)) = SupportedLanguage::parse_file_checked(path, content)? else {
+            return Ok(Vec::new());
         };
 
         let rel_path = path.strip_prefix(root).unwrap_or(path);
@@ -85,7 +97,7 @@ impl ComplexityAnalyzer {
 
         let mut functions = Vec::new();
         collect_functions(tree.root_node(), &ctx, &mut functions);
-        functions
+        Ok(functions)
     }
 
     /// Flag every metric in `metrics` that exceeds a `budgets` ceiling.

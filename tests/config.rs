@@ -173,6 +173,10 @@ fn test_discover_files_with_exclusions() {
 
     assert!(result.files.iter().any(|f| f.ends_with("src/main.rs")));
     assert!(
+        result.files.iter().any(|f| f.ends_with("sample_test.rs")),
+        "budget exclusions must not remove files from other engines"
+    );
+    assert!(
         result
             .excluded_files
             .iter()

@@ -1,4 +1,4 @@
-use crate::commands::check::{AnalyzeInput, analyze_file_content};
+use crate::commands::{AnalyzeInput, analyze_file_content};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};

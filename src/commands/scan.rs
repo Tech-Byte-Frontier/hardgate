@@ -1,4 +1,5 @@
-use super::check::{AnalyzeInput, Emission, OutputOptions, analyze_file_content, emit_gate_report};
+use super::check::{Emission, OutputOptions, emit_gate_report};
+use super::static_gate::{AnalyzeInput, analyze_file_content};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{AntiGamingScanner, InvariantsChecker};

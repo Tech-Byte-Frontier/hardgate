@@ -41,7 +41,9 @@ impl OrchestrationEngine {
     }
 
     pub fn has_orchestration(&self) -> bool {
-        self.config.format_check.is_some() || self.config.lint.is_some()
+        self.config.format_check.is_some()
+            || self.config.lint.is_some()
+            || self.config.test_cmd.is_some()
     }
 
     pub fn run_format_check(
@@ -96,6 +98,22 @@ impl OrchestrationEngine {
         })
     }
 
+    pub fn run_tests(
+        &self,
+        root: &Path,
+    ) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
+        self.config.test_cmd.as_ref().map(|cmd| {
+            self.execute_step(
+                StepSpec {
+                    step: "test",
+                    cmd_str: cmd,
+                    recommendation: "Resolve the failing project tests before accepting the gate.",
+                },
+                root,
+            )
+        })
+    }
+
     pub fn run_all_checks(
         &self,
         root: &Path,
@@ -105,6 +123,7 @@ impl OrchestrationEngine {
 
         self.collect_step(self.run_format_check(root), &mut results, &mut violations);
         self.collect_step(self.run_lint(root), &mut results, &mut violations);
+        self.collect_step(self.run_tests(root), &mut results, &mut violations);
 
         (results, violations)
     }

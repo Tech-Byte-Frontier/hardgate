@@ -1,16 +1,10 @@
-use super::verify::verify_coverage;
+use super::static_gate::run_static_gate_scoped;
+use super::verify::{verify_coverage, verify_mutation};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{DiscoverOptions, discover_files_with_exclusions, filter_files_by_paths};
-use crate::engines::{
-    AntiGamingScanner, BudgetViolation, CloneDetector, ComplexityAnalyzer, ComplexityViolation,
-    DeadCodeAnalyzer, FunctionMetrics, InvariantViolation, InvariantsChecker, OrchestrationEngine,
-    SuppressionViolation, check_file_budgets,
-};
+use crate::engines::{DeadCodeAnalyzer, OrchestrationEngine};
 use anyhow::Result;
 use colored::*;
-use rayon::prelude::*;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -76,8 +70,17 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
             .extend(analyzer.analyze(&files, &read_results, root));
     }
 
-    if let Some(cov_path) = find_coverage_report(&config, opts.coverage_report) {
-        verify_coverage(&config, Some(cov_path), &functions, &mut report);
+    if config.coverage.enabled {
+        verify_coverage(
+            &config,
+            find_coverage_report(&config, opts.coverage_report.clone()),
+            &functions,
+            &mut report,
+        );
+    }
+
+    if config.mutation.enabled {
+        verify_mutation(&config, None, &mut report);
     }
 
     if opts.all {
@@ -86,14 +89,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         report.orchestration_violations.extend(violations);
     }
 
-    // `check` is static-only by design (sub-second): it never executes
-    // mutants, dead-code graphs, or external formatters/linters. One
-    // advisory names the full gate so green is never mistaken for fully
-    // gated; humans and LLM agents get the exact next commands.
-    report.advisories.push(
-        "Static check excludes live mutation testing, dead-code analysis, and formatter/linter orchestration. Full gate: `hardgate check --all --dead-code` plus `hardgate mutate --diff`."
-            .to_string(),
-    );
+    report.advisories.push(check_scope_advisory(&config, &opts));
 
     let elapsed = start_time.elapsed().as_millis();
     emit_gate_report(
@@ -118,10 +114,8 @@ fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> 
     if cli_report.is_some() {
         return cli_report;
     }
-    if let Some(ref r) = config.coverage.report {
-        if Path::new(r).exists() {
-            return Some(r.clone());
-        }
+    if config.coverage.report.is_some() {
+        return config.coverage.report.clone();
     }
     let candidates = [
         "coverage/lcov.info",
@@ -136,136 +130,29 @@ fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> 
     None
 }
 
-/// Artifacts of one static-gate run: the report plus the discovered files,
-/// their contents, and per-function metrics for downstream gates.
-pub type StaticGateOutcome = Option<(
-    GateReport,
-    Vec<PathBuf>,
-    Vec<(PathBuf, String)>,
-    Vec<FunctionMetrics>,
-)>;
-
-/// Run the static gate over the whole discovered tree (see
-/// [`run_static_gate_scoped`] for path-filtered runs).
-pub fn run_static_gate(config: &HardgateConfig, diff: bool) -> Result<StaticGateOutcome> {
-    run_static_gate_scoped(config, diff, &[])
-}
-
-/// Run the static gate, optionally scoped to `paths` (files or directories).
-/// Missing filter paths are an error; an empty discovery yields `None`.
-pub fn run_static_gate_scoped(
-    config: &HardgateConfig,
-    diff: bool,
-    paths: &[PathBuf],
-) -> Result<StaticGateOutcome> {
-    let root = Path::new(".");
-    let discovery = discover_files_with_exclusions(DiscoverOptions {
-        root,
-        diff_only: diff,
-        exclusions: &config.budgets.files.exclusions.paths,
-    })?;
-
-    let files = filter_files_by_paths(discovery.files, paths, root)?;
-    let excluded_files = discovery.excluded_files;
-
-    if files.is_empty() {
-        return Ok(None);
+fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String {
+    let mut omitted = Vec::new();
+    if !opts.all {
+        omitted.push("configured formatter/linter/test commands");
     }
-
-    let mut report = GateReport::new(config.gate.name.clone());
-
-    if !excluded_files.is_empty() {
-        let count = excluded_files.len();
-        let noun = if count == 1 { "file" } else { "files" };
-        report.advisories.push(format!(
-            "{} {} excluded from file budget checks via hardgate.toml.",
-            count, noun
-        ));
+    if !opts.dead_code && !config.analysis.dead_code.enabled {
+        omitted.push("dead-code analysis");
     }
-
-    let (read_results, all_functions) = run_file_analysis(&files, config, root, &mut report);
-
-    if config.clones.enabled {
-        let detector = CloneDetector::new(&config.clones);
-        let clone_excluded = detector.count_excluded_files(&read_results, root);
-        if clone_excluded > 0 {
-            let noun = if clone_excluded == 1 { "file" } else { "files" };
-            report.advisories.push(format!(
-                "{} {} excluded from clone detection via hardgate.toml.",
-                clone_excluded, noun
-            ));
-        }
-
-        if read_results.len() > 1 {
-            report
-                .clone_violations
-                .extend(detector.detect_clones(&read_results, root));
-        }
+    if !config.coverage.enabled {
+        omitted.push("coverage evidence (disabled by policy)");
     }
-
-    Ok(Some((report, files, read_results, all_functions)))
-}
-
-fn run_file_analysis(
-    files: &[PathBuf],
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) -> (Vec<(PathBuf, String)>, Vec<FunctionMetrics>) {
-    let anti_gaming = AntiGamingScanner::new(&config.anti_gaming);
-    let invariants = InvariantsChecker::new(&config.invariants.rules);
-
-    let read_results: Vec<(PathBuf, String)> = files
-        .par_iter()
-        .filter_map(|path| {
-            fs::read_to_string(path)
-                .ok()
-                .map(|content| (path.clone(), content))
-        })
-        .collect();
-
-    // Parallelize per-file analysis (budgets + suppressions + invariants +
-    // complexity) — previously serial. Collect then merge serially into report
-    // to avoid lock contention.
-    type FileAnalysis = (
-        Vec<BudgetViolation>,
-        Vec<SuppressionViolation>,
-        Vec<InvariantViolation>,
-        Vec<FunctionMetrics>,
-        Vec<ComplexityViolation>,
-    );
-    let analyzed: Vec<FileAnalysis> = read_results
-        .par_iter()
-        .map(|(path, content)| {
-            let budgets = check_file_budgets(path, &config.budgets.files, root);
-            let suppressions = if config.anti_gaming.disallow_suppressions {
-                anti_gaming.scan_content(path, content, root)
-            } else {
-                Vec::new()
-            };
-            let inv = if config.invariants.enforce {
-                invariants.check_file(path, content, root)
-            } else {
-                Vec::new()
-            };
-            let mut analyzer = ComplexityAnalyzer::new();
-            let functions = analyzer.analyze_file(path, content, root);
-            let violations =
-                ComplexityAnalyzer::check_violations(&functions, &config.budgets.functions);
-            (budgets, suppressions, inv, functions, violations)
-        })
-        .collect();
-
-    let mut all_functions = Vec::new();
-    for (budgets, suppressions, inv, functions, violations) in analyzed {
-        report.budget_violations.extend(budgets);
-        report.suppression_violations.extend(suppressions);
-        report.invariant_violations.extend(inv);
-        report.complexity_violations.extend(violations);
-        all_functions.extend(functions);
+    if !config.mutation.enabled {
+        omitted.push("mutation evidence (disabled by policy)");
     }
-
-    (read_results, all_functions)
+    if omitted.is_empty() {
+        "This check evaluated every configured report and static/orchestration engine; native mutation execution remains a separate `hardgate mutate` command."
+            .to_string()
+    } else {
+        format!(
+            "This is a partial gate; omitted {}. Use `check --all --dead-code`, `verify`, and an enabled `mutate` policy for complete evidence.",
+            omitted.join(", ")
+        )
+    }
 }
 
 /// Print the "nothing to check" note, distinguishing scoped runs from diffs.
@@ -338,53 +225,4 @@ pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
     if !report.passed {
         std::process::exit(1);
     }
-}
-
-/// Shared single-file analysis used by `check`, `scan`, and the MCP server.
-/// Runs budgets + suppressions + invariants + complexity and appends to `report`.
-pub struct AnalyzeInput<'a> {
-    pub path: &'a Path,
-    pub content: &'a str,
-    pub config: &'a HardgateConfig,
-    pub root: &'a Path,
-    pub anti_gaming: &'a AntiGamingScanner,
-    pub invariants: &'a InvariantsChecker,
-}
-
-/// Run budgets, suppressions, invariants, and complexity for one file,
-/// appending violations to `report` and returning its function metrics.
-pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec<FunctionMetrics> {
-    let AnalyzeInput {
-        path,
-        content,
-        config,
-        root,
-        anti_gaming,
-        invariants,
-    } = input;
-    report
-        .budget_violations
-        .extend(check_file_budgets(path, &config.budgets.files, root));
-
-    if config.anti_gaming.disallow_suppressions {
-        report
-            .suppression_violations
-            .extend(anti_gaming.scan_content(path, content, root));
-    }
-
-    if config.invariants.enforce {
-        report
-            .invariant_violations
-            .extend(invariants.check_file(path, content, root));
-    }
-
-    let mut analyzer = ComplexityAnalyzer::new();
-    let functions = analyzer.analyze_file(path, content, root);
-    report
-        .complexity_violations
-        .extend(ComplexityAnalyzer::check_violations(
-            &functions,
-            &config.budgets.functions,
-        ));
-    functions
 }

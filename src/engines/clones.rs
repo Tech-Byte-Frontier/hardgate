@@ -21,6 +21,7 @@ pub struct CloneViolation {
 #[derive(Debug, Clone)]
 struct TokenLocation {
     file: PathBuf,
+    stream_idx: usize,
     start_line: usize,
     end_line: usize,
     start_idx: usize,
@@ -51,6 +52,12 @@ struct CloneIndexState<'a> {
     window_map: &'a mut HashMap<u64, Vec<TokenLocation>>,
     raw_matches: &'a mut Vec<RawCloneMatch>,
 }
+
+// Repeated generated constructs can create O(n^2) comparisons for one hash.
+// A bounded bucket still reports representative clones without allowing an
+// adversarial repeated token stream to exhaust memory or CPU.
+const MAX_WINDOWS_PER_HASH: usize = 64;
+const MAX_RAW_MATCHES: usize = 50_000;
 
 pub struct CloneDetector {
     min_lines: usize,
@@ -106,27 +113,43 @@ impl CloneDetector {
     pub fn detect_clones(&self, files: &[(PathBuf, String)], root: &Path) -> Vec<CloneViolation> {
         let mut window_map: HashMap<u64, Vec<TokenLocation>> = HashMap::new();
         let mut raw_matches: Vec<RawCloneMatch> = Vec::new();
-
-        for (abs_path, content) in files {
-            let rel_path = abs_path.strip_prefix(root).unwrap_or(abs_path);
-            if let Some(ref exclude) = self.exclude_glob {
-                if exclude.is_match(rel_path) {
-                    continue;
+        let token_streams: Vec<(PathBuf, Vec<Token>)> = files
+            .iter()
+            .filter_map(|(abs_path, content)| {
+                let rel_path = abs_path.strip_prefix(root).unwrap_or(abs_path);
+                if self
+                    .exclude_glob
+                    .as_ref()
+                    .is_some_and(|exclude| exclude.is_match(rel_path))
+                {
+                    return None;
                 }
-            }
+                Some((rel_path.to_path_buf(), tokenize(content)))
+            })
+            .collect();
 
+        for (stream_idx, (rel_path, tokens)) in token_streams.iter().enumerate() {
             let mut state = CloneIndexState {
                 window_map: &mut window_map,
                 raw_matches: &mut raw_matches,
             };
-            self.index_file_windows(content, rel_path, &mut state);
+            self.index_file_windows(tokens, rel_path, stream_idx, &token_streams, &mut state);
+            if raw_matches.len() >= MAX_RAW_MATCHES {
+                break;
+            }
         }
 
         coalesce_matches(raw_matches, self.min_tokens, self.min_lines)
     }
 
-    fn index_file_windows(&self, content: &str, rel_path: &Path, state: &mut CloneIndexState) {
-        let tokens = tokenize(content);
+    fn index_file_windows(
+        &self,
+        tokens: &[Token],
+        rel_path: &Path,
+        stream_idx: usize,
+        token_streams: &[(PathBuf, Vec<Token>)],
+        state: &mut CloneIndexState,
+    ) {
         if tokens.len() < self.min_tokens {
             return;
         }
@@ -144,12 +167,16 @@ impl CloneDetector {
             if line_span >= self.min_lines {
                 let loc = TokenLocation {
                     file: rel_path.to_path_buf(),
+                    stream_idx,
                     start_line,
                     end_line,
                     start_idx: i,
                     end_idx: i + self.min_tokens - 1,
                 };
-                check_and_record_window(&loc, rolling_hash, self.min_lines, state);
+                check_and_record_window(&loc, rolling_hash, self.min_lines, token_streams, state);
+                if state.raw_matches.len() >= MAX_RAW_MATCHES {
+                    return;
+                }
             }
 
             if i + self.min_tokens >= tokens.len() {
@@ -187,13 +214,14 @@ fn check_and_record_window(
     loc: &TokenLocation,
     hash: u64,
     min_lines: usize,
+    token_streams: &[(PathBuf, Vec<Token>)],
     state: &mut CloneIndexState,
 ) {
     if let Some(existing) = state.window_map.get_mut(&hash) {
         for prev in existing.iter() {
             let same_file = prev.file == loc.file;
             let too_close = same_file && (loc.start_line <= prev.end_line + min_lines);
-            if !too_close {
+            if !too_close && token_sequences_match(prev, loc, token_streams) {
                 state.raw_matches.push(RawCloneMatch {
                     file_a: prev.file.clone(),
                     start_a: prev.start_line,
@@ -206,12 +234,40 @@ fn check_and_record_window(
                     start_idx_b: loc.start_idx,
                     end_idx_b: loc.end_idx,
                 });
+                if state.raw_matches.len() >= MAX_RAW_MATCHES {
+                    return;
+                }
             }
         }
-        existing.push(loc.clone());
+        if existing.len() < MAX_WINDOWS_PER_HASH {
+            existing.push(loc.clone());
+        }
     } else {
         state.window_map.insert(hash, vec![loc.clone()]);
     }
+}
+
+fn token_sequences_match(
+    left: &TokenLocation,
+    right: &TokenLocation,
+    streams: &[(PathBuf, Vec<Token>)],
+) -> bool {
+    let Some((_, left_tokens)) = streams.get(left.stream_idx) else {
+        return false;
+    };
+    let Some((_, right_tokens)) = streams.get(right.stream_idx) else {
+        return false;
+    };
+    let Some(left_slice) = left_tokens.get(left.start_idx..=left.end_idx) else {
+        return false;
+    };
+    let Some(right_slice) = right_tokens.get(right.start_idx..=right.end_idx) else {
+        return false;
+    };
+    left_slice
+        .iter()
+        .map(|token| token.kind.as_str())
+        .eq(right_slice.iter().map(|token| token.kind.as_str()))
 }
 
 fn coalesce_matches(

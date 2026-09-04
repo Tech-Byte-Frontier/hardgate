@@ -182,7 +182,7 @@ impl NativeMutationRunner {
             diagnostic: execution.diagnostic,
         }
     }
-    fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
+    pub(crate) fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
         if let Some(ref cmd) = self.test_cmd {
             let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             return cmd

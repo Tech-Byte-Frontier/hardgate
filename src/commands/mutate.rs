@@ -1,11 +1,13 @@
+use super::mutation_output::{MutationSummaryContext, render_mutation_output};
 use crate::config::HardgateConfig;
-use crate::discovery::{DiscoverOptions, discover_files};
+use crate::discovery::{ClassifiedFile, DiscoverOptions, discover_files};
 use crate::engines::{
-    AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
-    NativeMutationRunner,
+    AstMutant, AstMutationGenerator, BaselineOutcome, MutantExecutionResult, MutantOutcome,
+    MutationStats, NativeMutationRunner,
 };
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use colored::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -29,6 +31,14 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let config = HardgateConfig::load_or_default(None)?;
     let root = Path::new(".");
 
+    if !config.mutation.enabled {
+        println!(
+            "{} mutation testing is disabled by `[mutation].enabled = false`.",
+            "note:".green().bold()
+        );
+        return Ok(());
+    }
+
     let target_files = discover_targets(&opts, &config, root)?;
     if target_files.is_empty() {
         print_no_targets(opts.diff);
@@ -46,20 +56,28 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .max_mutants
         .or(config.mutation.max_mutants)
         .unwrap_or(30);
-    let mutants = generate_target_mutants(&target_files, max_count);
-    if mutants.is_empty() {
-        println!(
-            "{} no candidate AST mutation points found in selected files.",
-            "warning:".yellow().bold()
-        );
-        return Ok(());
+    if max_count == 0 {
+        bail!("mutation max_mutants must be greater than zero");
     }
 
     let timeout = opts
         .timeout_secs
         .or(config.mutation.timeout_secs)
         .unwrap_or(10);
-    let test_cmd = opts.test_cmd.or_else(|| config.mutation.test_cmd.clone());
+    if timeout == 0 {
+        bail!("mutation timeout_secs must be greater than zero");
+    }
+    let test_cmd = opts
+        .test_cmd
+        .clone()
+        .or_else(|| config.mutation.test_cmd.clone());
+    let runner = NativeMutationRunner::new(timeout, test_cmd);
+
+    run_unmutated_baselines(&runner, &target_files, root)?;
+    let mutants = generate_target_mutants(&target_files, max_count)?;
+    if mutants.is_empty() {
+        bail!("no viable AST mutation points were found in the selected production sources");
+    }
 
     println!(
         "{} running {} mutants (timeout: {}s per mutant)...",
@@ -68,10 +86,10 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         timeout
     );
 
-    let (results, stats) = run_mutant_batch(&mutants, timeout, test_cmd, root)?;
+    let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
     let score = stats.score_percent();
     let min_score = config.mutation.min_score.unwrap_or(85.0);
-    let passed = score >= min_score && (!config.mutation.reject_timeouts || stats.timeout == 0);
+    let passed = mutation_run_passed(&stats, score, min_score);
     let elapsed = start_time.elapsed().as_millis();
 
     let summary_ctx = MutationSummaryContext {
@@ -91,16 +109,6 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     Ok(())
 }
 
-/// Borrowed inputs for rendering one mutation run in any output mode.
-pub struct MutationSummaryContext<'a> {
-    pub stats: &'a MutationStats,
-    pub results: &'a [MutantExecutionResult],
-    pub score: f64,
-    pub min_score: f64,
-    pub passed: bool,
-    pub elapsed: u128,
-}
-
 fn discover_targets(
     opts: &MutateOptions,
     config: &HardgateConfig,
@@ -108,42 +116,167 @@ fn discover_targets(
 ) -> Result<Vec<PathBuf>> {
     if let Some(ref path) = opts.scoped {
         if path.is_file() {
+            let classified = ClassifiedFile::new(path);
+            if !classified.role.is_mutation_target() {
+                bail!(
+                    "refusing to mutate `{}` because it is classified as {:?}, not production source",
+                    path.display(),
+                    classified.role
+                );
+            }
+            if !classified.ast_supported {
+                bail!(
+                    "refusing to mutate `{}` because Hardgate has no AST mutator for its file type",
+                    path.display()
+                );
+            }
             return Ok(vec![path.clone()]);
         }
         if path.is_dir() {
-            return discover_files(DiscoverOptions {
+            let files = discover_files(DiscoverOptions {
                 root: path,
                 diff_only: false,
                 exclusions: &config.budgets.files.exclusions.paths,
-            });
+            })?;
+            return Ok(filter_production_sources(files));
         }
         anyhow::bail!("Path not found: {:?}", path);
     }
-    discover_files(DiscoverOptions {
+    let files = discover_files(DiscoverOptions {
         root,
         diff_only: opts.diff,
         exclusions: &config.budgets.files.exclusions.paths,
-    })
+    })?;
+    Ok(filter_production_sources(files))
 }
 
-fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Vec<AstMutant> {
+fn filter_production_sources(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    files
+        .into_iter()
+        .filter(|path| {
+            let classified = ClassifiedFile::new(path);
+            classified.role.is_mutation_target() && classified.ast_supported
+        })
+        .collect()
+}
+
+fn run_unmutated_baselines(
+    runner: &NativeMutationRunner,
+    files: &[PathBuf],
+    root: &Path,
+) -> Result<()> {
+    let mut commands = BTreeMap::new();
+    for file in files {
+        commands
+            .entry(runner.resolve_test_command(file, root))
+            .or_insert_with(|| file.clone());
+    }
+
+    println!(
+        "{} running {} unmutated baseline command(s)...",
+        "note:".bold(),
+        commands.len().to_string().cyan()
+    );
+    for (command, file) in commands {
+        let result = runner.run_baseline(&file, root);
+        if result.outcome == BaselineOutcome::Passed {
+            println!("   {} ... {}", command.dimmed(), "passed".green().bold());
+            continue;
+        }
+        let diagnostic = if result.diagnostic.trim().is_empty() {
+            "no diagnostic output".to_string()
+        } else {
+            result.diagnostic
+        };
+        bail!(
+            "unmutated baseline {:?} for `{}` using `{}`:\n{}",
+            result.outcome,
+            file.display(),
+            result.command,
+            diagnostic
+        );
+    }
+    Ok(())
+}
+
+fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();
     let mut all = Vec::new();
     for file in files {
-        if let Ok(content) = fs::read_to_string(file) {
-            all.extend(mutator.generate_mutants(file, &content));
-        }
+        let content = fs::read_to_string(file)
+            .with_context(|| format!("Failed to read mutation target `{}`", file.display()))?;
+        all.extend(mutator.generate_mutants(file, &content));
     }
-    all.into_iter().take(max_count).collect()
+    Ok(select_representative_mutants(all, max_count))
+}
+
+fn select_representative_mutants(
+    mut candidates: Vec<AstMutant>,
+    max_count: usize,
+) -> Vec<AstMutant> {
+    candidates.sort_by(|left, right| {
+        (
+            &left.file,
+            left.line,
+            left.column,
+            &left.original,
+            &left.replacement,
+        )
+            .cmp(&(
+                &right.file,
+                right.line,
+                right.column,
+                &right.original,
+                &right.replacement,
+            ))
+    });
+
+    let mut per_family_rank = BTreeMap::new();
+    let mut ranked = Vec::with_capacity(candidates.len());
+    for mutant in candidates {
+        let family = (
+            mutant.file.clone(),
+            mutant.original.clone(),
+            mutant.replacement.clone(),
+        );
+        let rank = per_family_rank.entry(family).or_insert(0_usize);
+        ranked.push((*rank, mutant));
+        *rank += 1;
+    }
+    ranked.sort_by(|(left_rank, left), (right_rank, right)| {
+        (
+            left_rank,
+            &left.file,
+            &left.original,
+            &left.replacement,
+            left.line,
+            left.column,
+        )
+            .cmp(&(
+                right_rank,
+                &right.file,
+                &right.original,
+                &right.replacement,
+                right.line,
+                right.column,
+            ))
+    });
+    ranked
+        .into_iter()
+        .take(max_count)
+        .enumerate()
+        .map(|(index, (_, mut mutant))| {
+            mutant.id = index + 1;
+            mutant
+        })
+        .collect()
 }
 
 fn run_mutant_batch(
     mutants: &[AstMutant],
-    timeout: u64,
-    test_cmd: Option<String>,
+    runner: &NativeMutationRunner,
     root: &Path,
 ) -> Result<(Vec<MutantExecutionResult>, MutationStats)> {
-    let runner = NativeMutationRunner::new(timeout, test_cmd);
     let mut results = Vec::new();
     let mut stats = MutationStats {
         total: mutants.len(),
@@ -175,14 +308,37 @@ fn run_mutant_batch(
                 stats.timeout += 1;
                 println!("{}", "timeout".yellow().bold());
             }
-            MutantOutcome::Error => {
-                println!("{}", "error".red());
+            MutantOutcome::CompileError => {
+                stats.compile_error += 1;
+                println!("{}", "compile error".red().bold());
+            }
+            MutantOutcome::RunnerError => {
+                stats.runner_error += 1;
+                println!("{}", "runner error".red().bold());
+            }
+            MutantOutcome::Equivalent => {
+                stats.equivalent += 1;
+                println!("{}", "equivalent".yellow());
+            }
+            MutantOutcome::Unviable => {
+                stats.unviable += 1;
+                println!("{}", "unviable".red().bold());
             }
         }
         results.push(res);
     }
 
     Ok((results, stats))
+}
+
+fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> bool {
+    let viable = stats.killed + stats.survived;
+    viable > 0
+        && score >= min_score
+        && stats.timeout == 0
+        && stats.compile_error == 0
+        && stats.runner_error == 0
+        && stats.unviable == 0
 }
 
 fn print_no_targets(diff: bool) {
@@ -197,132 +353,4 @@ fn print_no_targets(diff: bool) {
             "warning:".yellow().bold()
         );
     }
-}
-
-fn render_mutation_output(ctx: &MutationSummaryContext, format: Option<&str>) {
-    match format {
-        Some("agent") => render_agent_output(ctx),
-        Some("json") => {
-            let json_obj = serde_json::json!({
-                "stats": ctx.stats,
-                "score": ctx.score,
-                "min_score": ctx.min_score,
-                "passed": ctx.passed,
-                "duration_ms": ctx.elapsed,
-                "results": ctx.results,
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_obj).unwrap_or_default()
-            );
-        }
-        _ => render_terminal_output(ctx),
-    }
-}
-
-fn render_agent_output(ctx: &MutationSummaryContext) {
-    let mut out = format!(
-        "### 🧬 Native AST Mutation Results ({}ms)\n- Evaluated: {}\n- Killed: {}\n- Survived: {}\n- Timed Out: {}\n- Mutation Score: {:.1}% (Floor: {:.1}%)\n- Verdict: {}\n\n",
-        ctx.elapsed,
-        ctx.stats.total,
-        ctx.stats.killed,
-        ctx.stats.survived,
-        ctx.stats.timeout,
-        ctx.score,
-        ctx.min_score,
-        if ctx.passed { "PASSED" } else { "FAILED" }
-    );
-    for res in ctx
-        .results
-        .iter()
-        .filter(|r| r.outcome == MutantOutcome::Survived)
-    {
-        out.push_str(&format!(
-            "- ⚠️ Survived Mutant in `{}:{}`: {}\n  Original: `{}` -> Mutant: `{}`\n  Directive: Add a test asserting behavior for this case.\n",
-            res.mutant.file.display(), res.mutant.line, res.mutant.description, res.mutant.original, res.mutant.replacement
-        ));
-    }
-    print!("{}", out);
-}
-
-fn render_terminal_output(ctx: &MutationSummaryContext) {
-    print!("{}", format_mutation_terminal(ctx));
-}
-
-/// Terminal rendering of a mutation run as a plain string (testable).
-/// The verdict repeats at the end so `tail`-only readers (humans and
-/// agents) see the outcome without scrolling past the survivors list.
-pub fn format_mutation_terminal(ctx: &MutationSummaryContext) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("\n{}\n", "-".repeat(70).dimmed()));
-    out.push_str(&format!("{}\n", "mutation summary:".bold()));
-    out.push_str(&format!(
-        "  mutants tested:  {}\n",
-        ctx.stats.total.to_string().cyan()
-    ));
-    out.push_str(&format!(
-        "  killed:          {}\n",
-        ctx.stats.killed.to_string().green()
-    ));
-    out.push_str(&format!(
-        "  survived:        {}\n",
-        ctx.stats.survived.to_string().red()
-    ));
-    out.push_str(&format!(
-        "  timed out:       {}\n",
-        ctx.stats.timeout.to_string().yellow()
-    ));
-    out.push_str(&format!(
-        "  score:           {:.1}% (threshold: {:.1}%)\n",
-        ctx.score, ctx.min_score
-    ));
-    out.push_str(&format!(
-        "  result:          {}\n",
-        if ctx.passed {
-            "pass".bold().green()
-        } else {
-            "fail".bold().red()
-        }
-    ));
-
-    let survivors: Vec<_> = ctx
-        .results
-        .iter()
-        .filter(|r| r.outcome == MutantOutcome::Survived)
-        .collect();
-    if !survivors.is_empty() {
-        out.push_str(&format!(
-            "\n{} {}\n",
-            "warning:".yellow().bold(),
-            format!("survived mutants ({})", survivors.len()).bold()
-        ));
-        for res in survivors {
-            out.push_str(&format!(
-                "  --> {}:{}: {}\n       original: `{}` mutated: `{}`\n       {} add a test asserting behavior for this code branch.\n",
-                res.mutant.file.display().to_string().bold(),
-                res.mutant.line.to_string().yellow(),
-                res.mutant.description,
-                res.mutant.original.red(),
-                res.mutant.replacement.green(),
-                "help:".dimmed(),
-            ));
-        }
-    }
-
-    let verdict = if ctx.passed {
-        "pass".bold().green()
-    } else {
-        "fail".bold().red()
-    };
-    out.push_str(&format!(
-        "{}\nresult: {} · score {:.1}% (threshold: {:.1}%) · {} killed, {} survived, {} timed out\n",
-        "-".repeat(70).dimmed(),
-        verdict,
-        ctx.score,
-        ctx.min_score,
-        ctx.stats.killed,
-        ctx.stats.survived,
-        ctx.stats.timeout
-    ));
-    out
 }

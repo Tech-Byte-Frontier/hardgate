@@ -1,6 +1,6 @@
-use super::check::{
-    Emission, OutputOptions, emit_gate_report, print_empty_discovery, run_static_gate_scoped,
-};
+use super::check::{Emission, OutputOptions, emit_gate_report, print_empty_discovery};
+use super::evidence::record_evidence_failure;
+use super::static_gate::run_static_gate_scoped;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
@@ -82,14 +82,29 @@ pub fn verify_coverage(
     functions: &[FunctionMetrics],
     report: &mut GateReport,
 ) {
+    if !config.coverage.enabled {
+        return;
+    }
     let cov_path = cli_report.or_else(|| config.coverage.report.clone());
-    let Some(ref path_str) = cov_path else { return };
+    let Some(ref path_str) = cov_path else {
+        record_evidence_failure(
+            report,
+            config.gate.strict,
+            "coverage-report",
+            Path::new("<not-configured>"),
+            "Coverage is enabled, but no report path was provided.".to_string(),
+        );
+        return;
+    };
     let p = Path::new(path_str);
     if !p.exists() {
-        report.advisories.push(format!(
-            "Coverage report `{}` not found; skipping coverage gate.",
-            path_str
-        ));
+        record_evidence_failure(
+            report,
+            config.gate.strict,
+            "coverage-report",
+            p,
+            "Required coverage report was not found.".to_string(),
+        );
         return;
     }
     let scorer = CoverageScorer::new(&config.coverage);
@@ -99,10 +114,13 @@ pub fn verify_coverage(
             report.coverage_violations.extend(cov_violations);
         }
         Err(e) => {
-            report.advisories.push(format!(
-                "Failed to parse coverage report `{}`: {}; skipping coverage gate.",
-                path_str, e
-            ));
+            record_evidence_failure(
+                report,
+                config.gate.strict,
+                "coverage-report",
+                p,
+                format!("Failed to parse required coverage report: {e}"),
+            );
         }
     }
 }
@@ -114,27 +132,56 @@ pub fn verify_mutation(
     cli_report: Option<String>,
     report: &mut GateReport,
 ) {
+    if !config.mutation.enabled {
+        return;
+    }
     let mut_reports = cli_report
         .map(|r| vec![r])
         .or_else(|| config.mutation.reports.clone());
 
-    let Some(reports) = mut_reports else { return };
+    let Some(reports) = mut_reports else {
+        record_evidence_failure(
+            report,
+            config.gate.strict,
+            "mutation-report",
+            Path::new("<not-configured>"),
+            "Mutation is enabled, but no report path was provided.".to_string(),
+        );
+        return;
+    };
+    if reports.is_empty() {
+        record_evidence_failure(
+            report,
+            config.gate.strict,
+            "mutation-report",
+            Path::new("<empty-report-list>"),
+            "Mutation is enabled, but the configured report list is empty.".to_string(),
+        );
+        return;
+    }
     let gatekeeper = MutationGatekeeper::new(&config.mutation);
     for r_str in reports {
         let p = Path::new(&r_str);
         if !p.exists() {
-            report
-                .advisories
-                .push(format!("Mutation report `{}` not found; skipping.", r_str));
+            record_evidence_failure(
+                report,
+                config.gate.strict,
+                "mutation-report",
+                p,
+                "Required mutation report was not found.".to_string(),
+            );
             continue;
         }
         match gatekeeper.evaluate_report(p) {
             Ok(m_violations) => report.mutation_violations.extend(m_violations),
             Err(e) => {
-                report.advisories.push(format!(
-                    "Failed to parse mutation report `{}`: {}; skipping.",
-                    r_str, e
-                ));
+                record_evidence_failure(
+                    report,
+                    config.gate.strict,
+                    "mutation-report",
+                    p,
+                    format!("Failed to parse required mutation report: {e}"),
+                );
             }
         }
     }
