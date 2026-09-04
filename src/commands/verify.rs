@@ -97,7 +97,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
                 summary: opts.summary,
             },
         },
-    );
+    )?;
     Ok(())
 }
 

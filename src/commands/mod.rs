@@ -18,7 +18,7 @@ pub mod verify;
 pub use fmt::cmd_fmt;
 pub use init::cmd_init;
 pub use mutate::{MutateOptions, cmd_mutate};
-pub use mutation_output::{MutationSummaryContext, format_mutation_terminal};
+pub use mutation_output::{MutationFailure, MutationSummaryContext, format_mutation_terminal};
 pub use scan::{cmd_scan, cmd_scan_with_format};
 pub use static_gate::{
     AnalyzeInput, StaticGateOutcome, StaticSnapshotOutcome, analyze_file_content, run_static_gate,

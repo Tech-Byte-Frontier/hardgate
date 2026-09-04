@@ -174,40 +174,48 @@ impl GateReport {
 
     /// Full machine-readable JSON: every violation plus `summary` and
     /// `top_files` for `jq`-friendly CI and agent consumption.
-    pub fn render_json(&self) -> String {
-        match serde_json::to_value(self) {
-            Ok(mut val) => {
-                if let Some(obj) = val.as_object_mut() {
-                    obj.insert(
-                        "summary".to_string(),
-                        serde_json::to_value(self.summary()).unwrap_or_default(),
-                    );
-                    obj.insert(
-                        "top_files".to_string(),
-                        serde_json::to_value(self.top_files(10)).unwrap_or_default(),
-                    );
-                }
-                serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
-            }
-            Err(_) => "{}".to_string(),
-        }
+    pub fn render_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&FullJson {
+            report: self,
+            summary: self.summary(),
+            top_files: self.top_files(10),
+        })
     }
 
     /// Lean summary-only JSON for `--summary --format json`: counts plus top
     /// files without the full per-violation payloads.
-    pub fn render_summary_json(&self) -> String {
-        let obj = serde_json::json!({
-            "gate_name": self.gate_name,
-            "passed": self.passed,
-            "files_scanned": self.files_scanned,
-            "functions_analyzed": self.functions_analyzed,
-            "duration_ms": self.duration_ms,
-            "summary": self.summary(),
-            "top_files": self.top_files(10),
-            "advisories": self.advisories,
-        });
-        serde_json::to_string_pretty(&obj).unwrap_or_else(|_| "{}".to_string())
+    pub fn render_summary_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&SummaryJson {
+            gate_name: &self.gate_name,
+            passed: self.passed,
+            files_scanned: self.files_scanned,
+            functions_analyzed: self.functions_analyzed,
+            duration_ms: self.duration_ms,
+            summary: self.summary(),
+            top_files: self.top_files(10),
+            advisories: &self.advisories,
+        })
     }
+}
+
+#[derive(Serialize)]
+struct FullJson<'a> {
+    #[serde(flatten)]
+    report: &'a GateReport,
+    summary: GateSummary,
+    top_files: Vec<TopFileEntry>,
+}
+
+#[derive(Serialize)]
+struct SummaryJson<'a> {
+    gate_name: &'a str,
+    passed: bool,
+    files_scanned: usize,
+    functions_analyzed: usize,
+    duration_ms: u128,
+    summary: GateSummary,
+    top_files: Vec<TopFileEntry>,
+    advisories: &'a [String],
 }
 
 fn push_keys<'a>(keys: &mut Vec<String>, files: impl Iterator<Item = &'a std::path::PathBuf>) {

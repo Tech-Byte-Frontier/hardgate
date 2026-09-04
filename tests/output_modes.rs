@@ -66,7 +66,7 @@ fn test_summary_shows_totals_and_top_files() {
 #[test]
 fn test_json_embeds_summary_and_top_files() {
     let parsed: serde_json::Value =
-        serde_json::from_str(&report_with_violations().render_json()).unwrap();
+        serde_json::from_str(&report_with_violations().render_json().unwrap()).unwrap();
     assert_eq!(parsed["summary"]["total_errors"], 3);
     assert_eq!(parsed["summary"]["clones"], 1);
     assert_eq!(parsed["summary"]["ast_violations"], 1);
@@ -81,7 +81,7 @@ fn test_json_embeds_summary_and_top_files() {
 #[test]
 fn test_summary_json_is_lean() {
     let parsed: serde_json::Value =
-        serde_json::from_str(&report_with_violations().render_summary_json()).unwrap();
+        serde_json::from_str(&report_with_violations().render_summary_json().unwrap()).unwrap();
     assert_eq!(parsed["summary"]["total_errors"], 3);
     assert!(parsed["top_files"].is_array());
     assert!(

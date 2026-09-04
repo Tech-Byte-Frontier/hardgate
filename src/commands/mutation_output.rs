@@ -1,5 +1,9 @@
+use crate::engines::mutation::{BaselineExecutionResult, BaselineOutcome};
 use crate::engines::{MutantExecutionResult, MutantOutcome, MutationStats};
 use colored::*;
+use serde::Serialize;
+use std::fmt;
+use std::path::Path;
 
 /// Borrowed inputs for rendering one mutation run in any output mode.
 pub struct MutationSummaryContext<'a> {
@@ -11,27 +15,61 @@ pub struct MutationSummaryContext<'a> {
     pub elapsed: u128,
 }
 
-pub(crate) fn render_mutation_output(ctx: &MutationSummaryContext, format: Option<&str>) {
-    match format {
-        Some("agent") => render_agent_output(ctx),
-        Some("json") => render_json_output(ctx),
-        _ => print!("{}", format_mutation_terminal(ctx)),
+#[derive(Debug)]
+pub struct MutationFailure {
+    pub stage: &'static str,
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl MutationFailure {
+    pub(crate) fn new(stage: &'static str, kind: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            kind,
+            message: message.into(),
+        }
     }
 }
 
-fn render_json_output(ctx: &MutationSummaryContext) {
-    let value = serde_json::json!({
-        "stats": ctx.stats,
-        "score": ctx.score,
-        "min_score": ctx.min_score,
-        "passed": ctx.passed,
-        "duration_ms": ctx.elapsed,
-        "results": ctx.results,
-    });
+impl fmt::Display for MutationFailure {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MutationFailure {}
+
+pub(crate) fn render_mutation_output(
+    ctx: &MutationSummaryContext,
+    format: Option<&str>,
+) -> Result<(), serde_json::Error> {
+    match format {
+        Some("agent") => {
+            render_agent_output(ctx);
+            Ok(())
+        }
+        Some("json") => render_json_output(ctx),
+        _ => {
+            print!("{}", format_mutation_terminal(ctx));
+            Ok(())
+        }
+    }
+}
+
+fn render_json_output(ctx: &MutationSummaryContext) -> Result<(), serde_json::Error> {
     println!(
         "{}",
-        serde_json::to_string_pretty(&value).unwrap_or_default()
+        serde_json::to_string_pretty(&MutationJson {
+            stats: ctx.stats,
+            score: ctx.score,
+            min_score: ctx.min_score,
+            passed: ctx.passed,
+            duration_ms: ctx.elapsed,
+            results: ctx.results,
+        })?
     );
+    Ok(())
 }
 
 fn render_agent_output(ctx: &MutationSummaryContext) {
@@ -65,6 +103,143 @@ fn render_agent_output(ctx: &MutationSummaryContext) {
         ));
     }
     print!("{out}");
+}
+
+#[derive(Serialize)]
+struct MutationJson<'a> {
+    stats: &'a MutationStats,
+    score: f64,
+    min_score: f64,
+    passed: bool,
+    duration_ms: u128,
+    results: &'a [MutantExecutionResult],
+}
+
+#[derive(Serialize)]
+pub(crate) struct MutationNoop<'a> {
+    pub passed: bool,
+    pub status: &'static str,
+    pub stage: &'static str,
+    pub kind: &'static str,
+    pub message: &'a str,
+}
+
+pub(crate) fn render_mutation_noop(
+    noop: MutationNoop<'_>,
+    format: Option<&str>,
+) -> Result<(), serde_json::Error> {
+    if format == Some("json") {
+        println!("{}", serde_json::to_string_pretty(&noop)?);
+    }
+    Ok(())
+}
+
+pub(crate) fn finish_disabled_mutation(format: Option<&str>) -> anyhow::Result<()> {
+    if format == Some("json") {
+        render_mutation_noop(
+            MutationNoop {
+                passed: true,
+                status: "noop",
+                stage: "policy",
+                kind: "disabled",
+                message: "mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.",
+            },
+            format,
+        )
+        .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
+    } else {
+        println!(
+            "{} mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.",
+            "note:".green().bold()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn handle_no_targets(diff: bool, format: Option<&str>) -> anyhow::Result<()> {
+    if !diff {
+        return Err(MutationFailure::new(
+            "setup",
+            "setup-error",
+            "no source files found for mutation testing: no production source files are eligible; full/native runs require at least one production target",
+        )
+        .into());
+    }
+    if format == Some("json") {
+        render_mutation_noop(
+            MutationNoop {
+                passed: true,
+                status: "noop",
+                stage: "selection",
+                kind: "no-changed-targets",
+                message: "no git-modified files found for mutation testing; no changed production source targets.",
+            },
+            format,
+        )
+        .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
+    } else {
+        println!(
+            "{} no git-modified files found for mutation testing; no changed production source targets (no-op).",
+            "note:".green().bold()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn baseline_failure(result: &BaselineExecutionResult, file: &Path) -> anyhow::Error {
+    let diagnostic = if result.diagnostic.trim().is_empty() {
+        "no diagnostic output".to_string()
+    } else {
+        result.diagnostic.clone()
+    };
+    let kind = match result.outcome {
+        BaselineOutcome::Failed => "test-failure",
+        BaselineOutcome::Timeout => "timeout",
+        BaselineOutcome::RunnerError => "runner-error",
+        BaselineOutcome::Passed => "test-failure",
+    };
+    MutationFailure::new(
+        "baseline",
+        kind,
+        format!(
+            "unmutated baseline {:?} for \u{60}{}\u{60} using \u{60}{}\u{60}:\n{}",
+            result.outcome,
+            file.display(),
+            result.command,
+            diagnostic
+        ),
+    )
+    .into()
+}
+
+pub(crate) fn runtime_failure(result: &MutantExecutionResult) -> Option<anyhow::Error> {
+    let kind = match result.outcome {
+        MutantOutcome::RunnerError => "execution-error",
+        MutantOutcome::Timeout => "timeout",
+        MutantOutcome::Killed
+        | MutantOutcome::Survived
+        | MutantOutcome::CompileError
+        | MutantOutcome::Equivalent
+        | MutantOutcome::Unviable => return None,
+    };
+    Some(
+        MutationFailure::new(
+            "execution",
+            kind,
+            format!(
+                "mutant {} {:?} for \u{60}{}\u{60}: {}",
+                result.mutant.id,
+                result.outcome,
+                result.mutant.file.display(),
+                if result.diagnostic.trim().is_empty() {
+                    "no diagnostic output"
+                } else {
+                    result.diagnostic.as_str()
+                }
+            ),
+        )
+        .into(),
+    )
 }
 
 /// Terminal rendering of a mutation run as a plain string (testable).

@@ -364,7 +364,7 @@ fn test_gate_report_advisories_rendering() {
     );
     assert!(agent.contains("✅ **Hardgate Passed**"));
 
-    let json_str = report.render_json();
+    let json_str = report.render_json().unwrap();
     assert!(json_str.contains("\"advisories\": ["));
     assert!(json_str.contains("25 files excluded from clone detection via hardgate.toml."));
 }

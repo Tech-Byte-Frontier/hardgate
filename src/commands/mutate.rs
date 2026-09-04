@@ -1,4 +1,7 @@
-use super::mutation_output::{MutationSummaryContext, render_mutation_output};
+use super::mutation_output::{
+    MutationFailure, MutationSummaryContext, baseline_failure, finish_disabled_mutation,
+    handle_no_targets, render_mutation_output, runtime_failure,
+};
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
@@ -7,8 +10,8 @@ mod targets;
 use crate::config::HardgateConfig;
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
 use crate::engines::{
-    AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
-    MutantExecutionResult, MutantOutcome, MutationStats, NativeMutationRunner,
+    AstMutant, AstMutationGenerator, BaselineOutcome, MutantExecutionResult, MutantOutcome,
+    MutationStats, NativeMutationRunner,
 };
 use anyhow::{Context, Result, bail};
 use colored::*;
@@ -43,32 +46,46 @@ struct MutationRun<'a> {
 /// kill score. Exits non-zero below the configured floor.
 pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let start_time = Instant::now();
-    let config = HardgateConfig::load_or_default(None)?;
+    let config = HardgateConfig::load_or_default(None)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     let root = Path::new(".");
     if !config.mutation.enabled {
-        print_disabled_mutation();
-        return Ok(());
+        return finish_disabled_mutation(opts.format.as_deref());
     }
-    let target_files = discover_targets(&opts, &config, root)?;
+    let target_files = discover_targets(&opts, &config, root)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if target_files.is_empty() {
-        return handle_no_targets(opts.diff);
+        return handle_no_targets(opts.diff, opts.format.as_deref());
     }
-    print_generation_notice(&target_files, opts.diff);
+    let json = opts.format.as_deref() == Some("json");
+    if !json {
+        print_generation_notice(&target_files, opts.diff);
+    }
     let test_cmd = opts
         .test_cmd
         .clone()
         .or_else(|| config.mutation.test_cmd.clone());
-    let max_count = resolve_max_mutants(&opts, &config)?;
-    let mutants = generate_target_mutants(&target_files, max_count)?;
+    let max_count = resolve_max_mutants(&opts, &config)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
+    let mutants = generate_target_mutants(&target_files, max_count)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if mutants.is_empty() {
-        bail!("no viable AST mutation points were found in the selected production sources");
+        return Err(MutationFailure::new(
+            "setup",
+            "setup-error",
+            "no viable AST mutation points were found in the selected production sources",
+        )
+        .into());
     }
     let selected_files = selected_mutant_files(&mutants);
-    let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
+    let timeout = resolve_timeout(&opts, &config, &selected_files, root)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
-    run_unmutated_baselines(&runner, &selected_files, &target_files, root)?;
-    print_mutant_notice(mutants.len(), timeout);
-    let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
+    run_unmutated_baselines(&runner, &selected_files, &target_files, root, json)?;
+    if !json {
+        print_mutant_notice(mutants.len(), timeout);
+    }
+    let (results, stats) = run_mutant_batch(&mutants, &runner, root, json)?;
     finish_mutation_run(MutationRun {
         config: &config,
         opts: &opts,
@@ -77,12 +94,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         start_time,
     })
 }
-fn print_disabled_mutation() {
-    println!(
-        "{} mutation testing is disabled by `[mutation].enabled = false`.",
-        "note:".green().bold()
-    );
-}
+
 fn print_generation_notice(files: &[PathBuf], diff: bool) {
     println!(
         "{} generating AST mutations across {} source files (diff: {})...",
@@ -168,7 +180,8 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
             elapsed: run.start_time.elapsed().as_millis(),
         },
         run.opts.format.as_deref(),
-    );
+    )
+    .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
     if passed {
         Ok(())
     } else {
@@ -185,6 +198,7 @@ fn run_unmutated_baselines(
     command_files: &[PathBuf],
     protected_files: &[PathBuf],
     root: &Path,
+    json: bool,
 ) -> Result<()> {
     let protected = NativeMutationRunner::snapshot_baseline_sources(protected_files, root)
         .with_context(|| "failed to snapshot protected production sources before baseline")?;
@@ -196,43 +210,34 @@ fn run_unmutated_baselines(
             .or_insert_with(|| file.clone());
     }
 
-    println!(
-        "{} running {} unmutated baseline command(s)...",
-        "note:".bold(),
-        commands.len().to_string().cyan()
-    );
+    if !json {
+        println!(
+            "{} running {} unmutated baseline command(s)...",
+            "note:".bold(),
+            commands.len().to_string().cyan()
+        );
+    }
     for ((working_dir, command), file) in commands {
         let plan = runner.resolve_test_plan(&file, root);
-        println!(
-            "   {} ({}) in {}",
-            command.dimmed(),
-            plan.selection.description().dimmed(),
-            working_dir.display()
-        );
+        if !json {
+            println!(
+                "   {} ({}) in {}",
+                command.dimmed(),
+                plan.selection.description().dimmed(),
+                working_dir.display()
+            );
+        }
         let result = runner.run_baseline_with_sources(&file, root, &protected);
         if result.outcome == BaselineOutcome::Passed {
-            println!("      ... {}", "passed".green().bold());
+            if !json {
+                println!("      ... {}", "passed".green().bold());
+            }
             continue;
         }
         return Err(baseline_failure(&result, &file));
     }
     Ok(())
 }
-fn baseline_failure(result: &BaselineExecutionResult, file: &Path) -> anyhow::Error {
-    let diagnostic = if result.diagnostic.trim().is_empty() {
-        "no diagnostic output".to_string()
-    } else {
-        result.diagnostic.clone()
-    };
-    anyhow::anyhow!(
-        "unmutated baseline {:?} for `{}` using `{}`:\n{}",
-        result.outcome,
-        file.display(),
-        result.command,
-        diagnostic
-    )
-}
-
 fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();
     let mut all = Vec::new();
@@ -362,6 +367,7 @@ fn run_mutant_batch(
     mutants: &[AstMutant],
     runner: &NativeMutationRunner,
     root: &Path,
+    json: bool,
 ) -> Result<(Vec<MutantExecutionResult>, MutationStats)> {
     let mut results = Vec::new();
     let mut stats = MutationStats {
@@ -370,21 +376,21 @@ fn run_mutant_batch(
     };
 
     for (idx, mutant) in mutants.iter().enumerate() {
-        print!(
-            "   [{}/{}] {}:{} {} ... ",
-            idx + 1,
-            mutants.len(),
-            mutant.file.display().to_string().bold(),
-            mutant.line.to_string().yellow(),
-            mutant.description.dimmed()
-        );
-        std::io::Write::flush(&mut std::io::stdout())?;
+        if !json {
+            print!(
+                "   [{}/{}] {}:{} {} ... ",
+                idx + 1,
+                mutants.len(),
+                mutant.file.display().to_string().bold(),
+                mutant.line.to_string().yellow(),
+                mutant.description.dimmed()
+            );
+            std::io::Write::flush(&mut std::io::stdout())?;
+        }
 
         let res = runner.run_mutant(mutant, root);
         let source_restored = res.source_restored;
         let diagnostic = res.diagnostic.clone();
-        print_outcome(&mut stats, res.outcome);
-        results.push(res);
         if !source_restored {
             return Err(anyhow::anyhow!(
                 "mutation source restoration failed for `{}`; aborting before later mutants:\n{}",
@@ -396,6 +402,15 @@ fn run_mutant_batch(
                 }
             ));
         }
+        if json {
+            if let Some(error) = runtime_failure(&res) {
+                return Err(error);
+            }
+            increment_stats(&mut stats, res.outcome);
+        } else {
+            print_outcome(&mut stats, res.outcome);
+        }
+        results.push(res);
     }
 
     Ok((results, stats))
@@ -450,17 +465,4 @@ fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> boo
         && stats.compile_error == 0
         && stats.runner_error == 0
         && stats.unviable == 0
-}
-
-fn handle_no_targets(diff: bool) -> Result<()> {
-    if diff {
-        println!(
-            "{} no git-modified files found for mutation testing; no changed production source targets (no-op).",
-            "note:".green().bold()
-        );
-        return Ok(());
-    }
-    bail!(
-        "no source files found for mutation testing: no production source files are eligible; full/native runs require at least one production target"
-    );
 }

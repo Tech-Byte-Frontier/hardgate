@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use hardgate::commands;
 use hardgate::mcp;
+use serde::Serialize;
 use std::path::PathBuf;
 
 mod build_info;
@@ -148,7 +149,92 @@ fn main() -> anyhow::Result<()> {
     let _ = std::hint::black_box(build_info::TARGET);
     let _ = std::hint::black_box(build_info::BUILD_TARGET_MARKER);
     let cli = Cli::parse();
-    execute_command(cli.command)
+    execute_with_json_errors(cli.command)
+}
+
+fn execute_with_json_errors(command: Commands) -> anyhow::Result<()> {
+    let json_context = JsonContext::from_command(&command);
+    let result = execute_command(command);
+    if let (Some(context), Err(error)) = (json_context, &result) {
+        emit_json_error(context, error);
+    }
+    result
+}
+
+fn emit_json_error(context: JsonContext, error: &anyhow::Error) {
+    match serde_json::to_string_pretty(&JsonFailure::from_error(context, error)) {
+        Ok(payload) => println!("{payload}"),
+        Err(serialization_error) => {
+            eprintln!("hardgate: failed to render JSON error: {serialization_error}");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct JsonContext {
+    stage: &'static str,
+}
+
+impl JsonContext {
+    fn from_command(command: &Commands) -> Option<Self> {
+        let json = match command {
+            Commands::Check { output, .. } | Commands::Verify { output, .. } => {
+                output.json || matches!(output.format.as_deref(), Some("json"))
+            }
+            Commands::Scan { output, .. } => {
+                output.json || matches!(output.format.as_deref(), Some("json"))
+            }
+            Commands::Mutate { format, json, .. } => {
+                *json || matches!(format.as_deref(), Some("json"))
+            }
+            Commands::Init { .. } | Commands::Fmt { .. } | Commands::Mcp => false,
+        };
+        json.then(|| Self {
+            stage: command_stage(command),
+        })
+    }
+}
+
+fn command_stage(command: &Commands) -> &'static str {
+    match command {
+        Commands::Check { .. } => "check",
+        Commands::Scan { .. } => "scan",
+        Commands::Mutate { .. } => "mutation",
+        Commands::Verify { .. } => "verify",
+        Commands::Init { .. } => "init",
+        Commands::Fmt { .. } => "fmt",
+        Commands::Mcp => "mcp",
+    }
+}
+
+#[derive(Serialize)]
+struct JsonFailure {
+    passed: bool,
+    stage: &'static str,
+    kind: &'static str,
+    message: String,
+}
+
+impl JsonFailure {
+    fn from_error(context: JsonContext, error: &anyhow::Error) -> Self {
+        if let Some(mutation) = error.downcast_ref::<commands::MutationFailure>() {
+            return Self {
+                passed: false,
+                stage: mutation.stage,
+                kind: mutation.kind,
+                message: mutation.message.clone(),
+            };
+        }
+        let kind = error
+            .downcast_ref::<serde_json::Error>()
+            .map_or("command-error", |_| "serialization-error");
+        Self {
+            passed: false,
+            stage: context.stage,
+            kind,
+            message: format!("{error:#}"),
+        }
+    }
 }
 
 fn execute_command(cmd: Commands) -> anyhow::Result<()> {

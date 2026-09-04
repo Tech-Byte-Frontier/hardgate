@@ -44,7 +44,7 @@ pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
             elapsed: start_time.elapsed().as_millis(),
             opts: &opts,
         },
-    );
+    )?;
     Ok(())
 }
 

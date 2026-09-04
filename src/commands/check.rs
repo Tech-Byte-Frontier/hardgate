@@ -135,7 +135,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
                 summary: opts.summary,
             },
         },
-    );
+    )?;
     Ok(())
 }
 
@@ -300,7 +300,7 @@ pub fn print_empty_discovery(diff: bool, scoped: bool) {
 
 /// Render `report` with a legacy `format` name (`agent`, `json`, terminal).
 /// Prefer [`output_report_with_opts`] for the full flag matrix.
-pub fn output_report(report: &GateReport, format: Option<&str>) {
+pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<(), serde_json::Error> {
     output_report_with_opts(
         report,
         &OutputOptions {
@@ -310,18 +310,21 @@ pub fn output_report(report: &GateReport, format: Option<&str>) {
             no_snippets: false,
             summary: false,
         },
-    );
+    )
 }
 
 /// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
-pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) {
+pub fn output_report_with_opts(
+    report: &GateReport,
+    opts: &OutputOptions,
+) -> Result<(), serde_json::Error> {
     if opts.is_json() {
         if opts.is_summary() {
-            println!("{}", report.render_summary_json());
+            println!("{}", report.render_summary_json()?);
         } else {
-            println!("{}", report.render_json());
+            println!("{}", report.render_json()?);
         }
-        return;
+        return Ok(());
     }
     match opts.format.as_deref() {
         Some("agent") => print!("{}", report.render_agent()),
@@ -329,6 +332,7 @@ pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) {
         _ if opts.is_compact() => print!("{}", report.render_compact()),
         _ => print!("{}", report.render_terminal()),
     }
+    Ok(())
 }
 
 /// Finalize counts, render via [`OutputOptions`], and exit non-zero on
@@ -342,10 +346,11 @@ pub struct Emission<'a> {
 }
 
 /// Finalize `report` from `emission` counts, render it, and exit(1) on failure.
-pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
+pub fn emit_gate_report(report: &mut GateReport, emission: Emission) -> anyhow::Result<()> {
     report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
-    output_report_with_opts(report, emission.opts);
+    output_report_with_opts(report, emission.opts)?;
     if !report.passed {
         std::process::exit(1);
     }
+    Ok(())
 }
