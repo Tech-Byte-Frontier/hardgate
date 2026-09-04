@@ -3,9 +3,5 @@
   "private": true,
   "scripts": {
     "test": "vitest run"
-  },
-  "dependencies": {
-    "next": "0.0.0-fixture",
-    "react": "0.0.0-fixture"
   }
 }

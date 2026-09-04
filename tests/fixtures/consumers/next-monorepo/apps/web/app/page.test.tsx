@@ -1,3 +1,4 @@
 import { expect, test } from "vitest";
+import { pageTitle } from "./page";
 
-test("page fixture is present", () => expect(true).toBe(true));
+test("page title includes the name", () => expect(pageTitle("fixture")).toBe("Next:fixture"));

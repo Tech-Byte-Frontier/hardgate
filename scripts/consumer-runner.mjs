@@ -1,134 +1,145 @@
 "use strict";
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONSUMER_CASES, caseLabel } from "./consumer-fixtures.mjs";
+import {
+  bounded,
+  fail,
+  parseExactJson,
+  validateGateReport,
+  validateMutationReport,
+} from "./consumer-schema.mjs";
+import {
+  failureResult,
+  processFailure,
+  resolveBinary,
+  runProcess,
+} from "./consumer-process.mjs";
+
+export {
+  ConsumerMatrixError,
+  parseExactJson,
+  validateGateReport,
+  validateMutationReport,
+} from "./consumer-schema.mjs";
+export { resolveBinary, runProcess } from "./consumer-process.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE_ROOT = path.join(ROOT, "tests", "fixtures", "consumers");
-const MANAGERS = ["npm", "pnpm", "yarn", "bun", "npx"];
 
-export function resolveBinary(options) {
-  const candidates = [
-    options.binary,
-    process.env.HARDGATE_BINARY,
-    path.join(ROOT, "target", "debug", "hardgate"),
-    path.join(ROOT, "target", "release", "hardgate"),
-  ].filter(Boolean);
-  const binary = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!binary) {
-    throw new Error(
-      "No local Hardgate binary found; run `cargo build --locked --bin hardgate` or set HARDGATE_BINARY.",
-    );
+function earlyCheckFailure(processError, result) {
+  if (!processError) return null;
+  const immediate = ["spawn-error", "signal", "timeout", "no-exit-status"];
+  return immediate.includes(processError[0]) ? failureResult(processError[0], processError[1], result) : null;
+}
+
+export function runCheck(binary, root, expectation, diff = false) {
+  const args = ["check", "--format", "json"];
+  if (diff) args.push("--diff");
+  const result = runProcess({ binary, args, cwd: root, timeout: expectation.timeout ?? 30_000 });
+  const expectedExit = expectation.expectedExit ?? (expectation.expectPass ? 0 : 1);
+  const processError = processFailure(result, expectedExit, "check");
+  const earlyFailure = earlyCheckFailure(processError, result);
+  if (earlyFailure) return earlyFailure;
+  let report;
+  try {
+    report = validateGateReport(parseExactJson(result.stdout, "check"));
+  } catch (error) {
+    return failureResult(error.code ?? "malformed-report", error.message, result);
   }
-  return path.resolve(binary);
+  if (processError) return failureResult(processError[0], processError[1], result);
+  const passed = result.status === 0 && report.passed === true;
+  if (passed !== expectation.expectPass || report.passed !== (expectedExit === 0)) return failureResult("report-status-mismatch", `check exit/report status does not match expected pass=${expectation.expectPass}`, result);
+  const failures = checkEvidence(report, expectation);
+  if (failures.length) return failureResult("evidence-mismatch", failures.join("; "), result);
+  return { status: "pass", reasonCode: "ok", diagnostics: "", exitCode: result.status, signal: null, timedOut: false, report };
+}
+
+function checkCountEvidence(report, expectation) {
+  const failures = [];
+  const counts = [
+    ["expectedViolationCount", report.summary.total_errors, "violations"],
+    ["minFiles", report.files_scanned, "inventoried files"],
+    ["minFunctions", report.functions_analyzed, "parsed functions"],
+  ];
+  for (const [key, actual, label] of counts) {
+    const expected = expectation[key];
+    const invalid = key.startsWith("min") ? expected !== undefined && actual < expected : expected !== undefined && actual !== expected;
+    if (invalid) failures.push(key.startsWith("min") ? `expected at least ${expected} ${label}, got ${actual}` : `expected ${expected} ${label}, got ${actual}`);
+  }
+  return failures;
+}
+
+function checkOrchestrationEvidence(report, expectation) {
+  return (expectation.expectedOrchestration ?? []).flatMap((expected) => {
+    const found = report.orchestration_violations.some((item) => item.step === expected.step && item.command === expected.command && item.output === expected.output);
+    return found ? [] : [`missing exact orchestration evidence ${expected.step} ${expected.command}`];
+  });
+}
+
+function checkAdvisoryEvidence(report, expectation) {
+  return (expectation.expectedAdvisories ?? []).flatMap((expected) => report.advisories.includes(expected) ? [] : [`missing exact advisory ${expected}`]);
+}
+
+function checkComplexityEvidence(report, expectation) {
+  return (expectation.expectedComplexity ?? []).flatMap((expected) => {
+    const found = report.complexity_violations.some((item) => Object.entries(expected).every(([key, value]) => item[key] === value));
+    return found ? [] : [`missing exact complexity evidence for ${expected.file}`];
+  });
+}
+
+function checkEvidence(report, expectation) {
+  const failures = [
+    ...checkCountEvidence(report, expectation),
+    ...checkOrchestrationEvidence(report, expectation),
+    ...checkAdvisoryEvidence(report, expectation),
+    ...checkComplexityEvidence(report, expectation),
+  ];
+  if (expectation.legacySummary) checkLegacySummary(report, expectation.legacySummary, failures);
+  return failures;
+}
+
+function checkLegacySummary(report, expected, failures) {
+  const matching = report.advisories.filter((item) => item.startsWith("legacy ratchet: reference=`"));
+  if (matching.length !== 1) { failures.push("legacy ratchet must emit exactly one summary advisory"); return; }
+  const value = matching[0].match(/^legacy ratchet: reference=`([^`]+)` merge-base=`([0-9a-f]{40}|[0-9a-f]{64})` grandfathered=(\d+) retained=(\d+)$/);
+  if (!value || value[1] !== expected.reference || Number(value[3]) !== expected.grandfathered || Number(value[4]) !== expected.retained) failures.push("legacy ratchet summary is malformed or inconsistent");
 }
 
 function copyFixture(testCase) {
   const source = path.join(FIXTURE_ROOT, testCase.fixture);
-  if (!fs.existsSync(source)) throw new Error(`fixture is missing: ${testCase.fixture}`);
+  try {
+    if (!fs.statSync(source).isDirectory()) fail("fixture-missing", `fixture is missing: ${testCase.fixture}`);
+  } catch (error) {
+    if (error instanceof Error && error.code === "fixture-missing") throw error;
+    fail("fixture-missing", `fixture is missing: ${testCase.fixture}`);
+  }
   const target = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-consumer-"));
-  fs.cpSync(source, target, { recursive: true });
+  try {
+    fs.cpSync(source, target, { recursive: true });
+  } catch (error) {
+    fs.rmSync(target, { recursive: true, force: true });
+    fail("fixture-copy", `could not copy fixture ${testCase.fixture}: ${error.message}`);
+  }
   return target;
-}
-
-function runProcess({ binary, args, cwd, env = {}, timeout = 30_000 }) {
-  const child = spawnSync(binary, args, {
-    cwd,
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-    timeout,
-  });
-  return {
-    status: child.status,
-    signal: child.signal,
-    stdout: child.stdout ?? "",
-    stderr: child.stderr ?? "",
-    error: child.error?.message ?? null,
-  };
-}
-
-function parseReport(stdout) {
-  const first = stdout.indexOf("{");
-  const last = stdout.lastIndexOf("}");
-  if (first < 0 || last <= first) throw new Error("Hardgate did not emit a JSON report");
-  try {
-    return JSON.parse(stdout.slice(first, last + 1));
-  } catch (error) {
-    throw new Error(`invalid Hardgate JSON report: ${error.message}`);
-  }
-}
-
-function runCheck(binary, root, expectation, diff = false) {
-  const args = ["check", "--format", "json"];
-  if (diff) args.push("--diff");
-  const result = runProcess({ binary, args, cwd: root });
-  let report;
-  try {
-    report = parseReport(result.stdout);
-  } catch (error) {
-    return {
-      status: "fail",
-      exitCode: result.status,
-      diagnostics: `${error.message}; stdout=${result.stdout}; stderr=${result.stderr}`,
-    };
-  }
-  const failures = checkFailures(report, result, expectation);
-  return {
-    status: failures.length === 0 ? "pass" : "fail",
-    exitCode: result.status,
-    report,
-    diagnostics: failures.join("; "),
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-}
-
-function checkFailures(report, result, expectation) {
-  const passed = result.status === 0 && report.passed === true;
-  const alternate = expectation.allowPassWithNoUnsupported && passed;
-  const failures = outcomeFailures(expectation, passed, result, alternate);
-  failures.push(...advisoryFailures(report, expectation));
-  if (!alternate) failures.push(...evidenceFailures(report, expectation));
-  failures.push(...metricFailures(report, expectation));
-  return failures;
-}
-
-function outcomeFailures(expectation, passed, result, alternate) {
-  if (expectation.expectPass === passed || alternate) return [];
-  return [`expected ${expectation.expectPass ? "pass" : "failure"}, observed exit=${result.status} passed=${passed}`];
-}
-
-function advisoryFailures(report, expectation) {
-  return (expectation.advisoryIncludes ?? []).filter((text) => !report.advisories.some((advisory) => advisory.includes(text))).map((text) => `missing advisory containing ${JSON.stringify(text)}`);
-}
-
-function evidenceFailures(report, expectation) {
-  const failures = (expectation.orchestrationSteps ?? []).filter((step) => !report.orchestration_violations.some((violation) => violation.step === step)).map((step) => `missing orchestration evidence step ${JSON.stringify(step)}`);
-  for (const target of expectation.paths ?? []) {
-    const found = report.orchestration_violations.some((violation) => violation.command.includes(target) || violation.output.includes(target));
-    if (!found) failures.push(`missing evidence target ${JSON.stringify(target)}`);
-  }
-  return failures;
-}
-
-function metricFailures(report, expectation) {
-  const failures = [];
-  if (expectation.minFiles && report.files_scanned < expectation.minFiles) failures.push(`expected at least ${expectation.minFiles} inventoried files, got ${report.files_scanned}`);
-  if (expectation.minFunctions && report.functions_analyzed < expectation.minFunctions) failures.push(`expected at least ${expectation.minFunctions} parsed functions, got ${report.functions_analyzed}`);
-  return failures;
 }
 
 function initializeFixture(binary, root, preset) {
   const result = runProcess({ binary, args: ["init", "--preset", preset], cwd: root });
-  if (result.status !== 0 || !fs.existsSync(path.join(root, "hardgate.toml"))) throw new Error(`hardgate init failed: ${result.stdout}${result.stderr}`);
-  const config = fs.readFileSync(path.join(root, "hardgate.toml"), "utf8");
-  if (!config.includes('preset = "strict-agent"')) throw new Error("strict init did not write preset = \"strict-agent\"");
-  if (!config.includes("strict = true") || config.includes('"tests/**"')) throw new Error("strict init must keep strict policy and avoid a tests/** exclusion");
+  const error = processFailure(result, 0, "init");
+  if (error) fail(error[0], error[1]);
+  const configPath = path.join(root, "hardgate.toml");
+  if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) fail("fixture-init", "hardgate init did not write hardgate.toml");
+  const config = fs.readFileSync(configPath, "utf8");
+  if (!config.includes('preset = "strict-agent"') || !config.includes("strict = true") || config.includes('"tests/**"')) fail("fixture-init", "strict init wrote an unexpected policy");
 }
+
+function git(cwd, args) { execFileSync("git", args, { cwd, stdio: "ignore" }); }
 
 function prepareLegacyReference(root) {
   for (const args of [["init", "-q"], ["config", "user.email", "hardgate@example.invalid"], ["config", "user.name", "Hardgate Consumer Fixture"], ["config", "commit.gpgsign", "false"], ["add", "-A"], ["commit", "-qm", "legacy baseline"], ["branch", "-M", "main"], ["switch", "-q", "-c", "consumer-change"]]) git(root, args);
@@ -136,91 +147,140 @@ function prepareLegacyReference(root) {
   fs.writeFileSync(source, fs.readFileSync(source, "utf8").replace("legacy(first: string, second: string)", "legacy(first: string, second: string, third: string)"));
 }
 
-function git(cwd, args) {
-  execFileSync("git", args, { cwd, stdio: "ignore" });
-}
-
 function enableMutation(root) {
   const configPath = path.join(root, "hardgate.toml");
   const config = fs.readFileSync(configPath, "utf8");
   const enabled = config.replace(/(\[mutation\]\s*\n\s*enabled\s*=\s*)false/, "$1true");
-  if (enabled === config) throw new Error("fixture config has no disabled mutation section");
+  if (enabled === config) fail("fixture-config", "fixture config has no disabled mutation section");
   fs.writeFileSync(configPath, enabled);
 }
 
-function createCommandShims(root) {
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-consumer-bin-"));
-  const log = path.join(root, ".consumer-command-log");
-  for (const manager of MANAGERS) {
-    const script = [
-      "#!/bin/sh",
-      'if [ -n "$HARDGATE_CONSUMER_COMMAND_LOG" ]; then',
-      '  printf "%s|%s|%s\\n" "$PWD" "$(basename "$0")" "$*" >> "$HARDGATE_CONSUMER_COMMAND_LOG"',
-      "fi",
-      "exit 0",
-      "",
-    ].join("\n");
-    fs.writeFileSync(path.join(bin, manager), script, { mode: 0o755 });
+function sourceSnapshot(root, relative) {
+  const file = path.join(root, relative);
+  try {
+    const bytes = fs.readFileSync(file);
+    return { file, bytes, hash: crypto.createHash("sha256").update(bytes).digest("hex"), mode: fs.statSync(file).mode & 0o7777 };
+  } catch (error) {
+    fail("source-missing", `mutation source is missing: ${relative} (${error.message})`);
   }
-  return { log, env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HARDGATE_CONSUMER_COMMAND_LOG: log } };
+}
+
+function installHarness(root, spec, snapshot, testSnapshot) {
+  const packageRoot = path.resolve(root, spec.packageRoot);
+  const workspaceRoot = path.resolve(root, spec.workspaceRoot);
+  const binDir = path.join(packageRoot, "node_modules", ".bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const harness = path.join(root, ".consumer-harness.mjs");
+  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto";\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst source=process.env.CONSUMER_SOURCE; const test=process.env.CONSUMER_TEST; const sourceHash=hash(source); const testHash=hash(test); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const record={cwd:process.cwd(), manager:process.env.CONSUMER_MANAGER, argv, executable:fs.realpathSync(process.env.CONSUMER_EXECUTABLE), packageRoot:process.env.CONSUMER_PACKAGE_ROOT, workspaceRoot:process.env.CONSUMER_WORKSPACE_ROOT, sourceHash, testHash, sourceMarker:fs.readFileSync(source,"utf8").includes(process.env.CONSUMER_SOURCE_MARKER), testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=sourceHash===process.env.CONSUMER_SOURCE_HASH && record.sourceMarker && record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected ? 0 : 1;\n`);
+  const managerPath = path.join(binDir, spec.manager);
+  fs.writeFileSync(managerPath, `#!/bin/sh\nset -eu\nCONSUMER_EXECUTABLE="$0" CONSUMER_MANAGER="${spec.manager}" exec node "$CONSUMER_HARNESS" "$@"\n`, { mode: 0o755 });
+  return {
+    log: path.join(root, ".consumer-command-log"),
+    env: {
+      CONSUMER_HARNESS: harness, CONSUMER_LOG: path.join(root, ".consumer-command-log"),
+      CONSUMER_SOURCE: snapshot.file, CONSUMER_TEST: testSnapshot.file,
+      CONSUMER_SOURCE_HASH: snapshot.hash, CONSUMER_TEST_HASH: testSnapshot.hash,
+      CONSUMER_SOURCE_MARKER: spec.sourceMarker, CONSUMER_ARGV: JSON.stringify(spec.argv),
+      CONSUMER_PACKAGE_ROOT: packageRoot, CONSUMER_WORKSPACE_ROOT: workspaceRoot,
+    },
+    packageRoot, workspaceRoot, managerPath,
+  };
 }
 
 function readCommands(log) {
   if (!fs.existsSync(log)) return [];
-  return fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => {
-    const [cwd, manager, ...rest] = line.split("|");
-    return { cwd, manager, args: rest.join("|") };
-  });
+  const lines = fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
+  try { return lines.map((line) => JSON.parse(line)); } catch (error) { fail("command-log", `consumer command log is malformed: ${error.message}`); }
 }
 
-function runMutation(binary, root, expectation) {
-  enableMutation(root);
-  const shims = createCommandShims(root);
-  const args = [
-    "mutate",
-    "--scoped",
-    expectation.scope,
-    "--max-mutants",
-    "1",
-    "--timeout",
-    "1",
-    "--format",
-    "json",
-  ];
-  const result = runProcess({ binary, args, cwd: root, env: shims.env, timeout: 20_000 });
-  const commands = readCommands(shims.log);
-  const matching = commands.find((command) => {
-    if (command.manager !== expectation.manager) return false;
-    const rendered = `${command.manager} ${command.args}`;
-    return (expectation.includes ?? []).every((term) => rendered.includes(term)) && (!expectation.cwdSuffix || command.cwd.endsWith(expectation.cwdSuffix));
-  });
-  if (matching) {
-    return {
-      status: "pass",
-      exitCode: result.status,
-      command: matching,
-      commands,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+function mutationProcessFailure(result) {
+  if (result.status === 1 && /no source files found for mutation testing|no viable AST mutation points/i.test(result.stderr)) return ["no-target", "mutation run found no eligible production target"];
+  if (result.status === 1 && /unmutated baseline/i.test(result.stderr)) return ["baseline-failure", "mutation baseline failed before mutants were executed"];
+  return processFailure(result, 0, "mutation");
+}
+
+function earlyMutationFailure(processError, result, commands) {
+  if (!processError) return null;
+  const immediate = ["baseline-failure", "no-target", "spawn-error", "signal", "timeout", "no-exit-status"];
+  return immediate.includes(processError[0]) ? failureResult(processError[0], processError[1], result, { commands }) : null;
+}
+
+function parseMutationReport(result, commands) {
+  try {
+    return { report: validateMutationReport(parseExactJson(result.stdout, "mutation")), failure: null };
+  } catch (error) {
+    return { report: null, failure: failureResult(error.code ?? "malformed-report", error.message, result, { commands }) };
   }
-  return {
-    status: "pending",
-    exitCode: result.status,
-    commands,
-    diagnostics: `resolved command did not match manager=${expectation.manager} terms=${JSON.stringify(expectation.includes ?? [])}`,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    requirement: expectation.requirement,
-  };
 }
 
-function checkLegacyText(result, expectation) {
-  if (result.status !== "pass") return result;
-  const report = result.report ?? {};
-  const evidence = [...(report.advisories ?? []), ...(report.orchestration_violations ?? []).flatMap((item) => [item.step, item.output, item.recommendation]), ...(report.complexity_violations ?? []).flatMap((item) => [item.message, item.recommendation]), ...(report.budget_violations ?? []).flatMap((item) => [item.metric, item.message])];
-  if (!expectation.requireText.test(`${evidence.join("\n")}\n${result.stderr}`)) return { status: "pending", diagnostics: "legacy run has no baseline/reference/ratchet evidence", requirement: expectation.requirement };
-  return result;
+function mutationSummaryFailure(report, result, commands) {
+  const truthful = report.passed && report.stats.killed === 1 && report.stats.survived === 0 && report.stats.total === 1 && report.score === 100;
+  return truthful ? null : failureResult("mutation-report-failed", "mutation report did not record one truthful killed mutant", result, { commands });
+}
+
+function mutationResultFailures(report, spec) {
+  const mutationResult = report.results[0];
+  const mutant = mutationResult?.mutant;
+  const failures = [];
+  if (!mutationResult || mutationResult.outcome !== "Killed") failures.push("representative mutant was not killed");
+  if (!mutant || mutant.file !== spec.sourcePath) failures.push(`mutation target must be exactly ${spec.sourcePath}`);
+  if (mutationResult?.command !== `${spec.manager} ${spec.argv.join(" ")}`) failures.push("mutation command does not match the resolved selector");
+  if (!mutationResult?.source_restored) failures.push("mutation report did not confirm source restoration");
+  return failures;
+}
+
+function invocationIdentityFailures(command, position, harness, spec) {
+  const failures = [];
+  if (command.manager !== spec.manager || JSON.stringify(command.argv) !== JSON.stringify(spec.argv)) failures.push(`invocation ${position} manager/argv mismatch`);
+  if (command.cwd !== harness.packageRoot) failures.push(`invocation ${position} CWD mismatch`);
+  if (command.executable !== fs.realpathSync(harness.managerPath)) failures.push(`invocation ${position} did not use package-local .bin`);
+  if (command.packageRoot !== harness.packageRoot || command.workspaceRoot !== harness.workspaceRoot) failures.push(`invocation ${position} workspace provenance mismatch`);
+  return failures;
+}
+
+function invocationAssertionFailures(command, index, snapshot) {
+  const failures = [];
+  const position = index + 1;
+  if (index === 0 && command.sourceHash !== snapshot.hash) failures.push("baseline did not assert original source bytes");
+  if (index === 1 && command.sourceHash === snapshot.hash) failures.push("mutant did not change the fixture assertion outcome");
+  if (!command.testExists || !command.argvExpected || command.sourceMarker !== (index === 0)) failures.push(`invocation ${position} fixture assertion failed`);
+  return failures;
+}
+
+function invocationFailures(command, index, context) {
+  return [
+    ...invocationIdentityFailures(command, index + 1, context.harness, context.spec),
+    ...invocationAssertionFailures(command, index, context.snapshot),
+  ];
+}
+
+function mutationEvidenceFailures(report, commands, context) {
+  const failures = mutationResultFailures(report, context.spec);
+  if (commands.length !== 2) failures.push(`expected exactly two test invocations, got ${commands.length}`);
+  commands.forEach((command, index) => failures.push(...invocationFailures(command, index, context)));
+  const restored = sourceSnapshot(context.root, context.spec.sourcePath);
+  if (restored.hash !== context.snapshot.hash || !restored.bytes.equals(context.snapshot.bytes) || restored.mode !== context.snapshot.mode) failures.push("production source bytes/hash/mode were not restored exactly");
+  return failures;
+}
+
+export function runMutation(binary, root, spec) {
+  enableMutation(root);
+  const snapshot = sourceSnapshot(root, spec.sourcePath);
+  const testSnapshot = sourceSnapshot(root, spec.testPath);
+  const harness = installHarness(root, spec, snapshot, testSnapshot);
+  const result = runProcess({ binary, args: ["mutate", "--scoped", spec.scope, "--max-mutants", "1", "--timeout", "10", "--format", "json"], cwd: root, env: harness.env, timeout: 30_000 });
+  const commands = readCommands(harness.log);
+  const processError = mutationProcessFailure(result);
+  const earlyFailure = earlyMutationFailure(processError, result, commands);
+  if (earlyFailure) return earlyFailure;
+  const parsed = parseMutationReport(result, commands);
+  if (parsed.failure) return parsed.failure;
+  if (processError) return failureResult("mutation-report-failed", `mutation process/report status mismatch: ${processError[1]}`, result, { commands });
+  const summaryFailure = mutationSummaryFailure(parsed.report, result, commands);
+  if (summaryFailure) return summaryFailure;
+  const failures = mutationEvidenceFailures(parsed.report, commands, { harness, snapshot, spec, root });
+  if (failures.length) return failureResult("mutation-evidence-mismatch", failures.join("; "), result, { commands });
+  return { status: "pass", reasonCode: "ok", diagnostics: "", exitCode: result.status, signal: null, timedOut: false, report: parsed.report, commands };
 }
 
 function prepareCase(binary, testCase) {
@@ -230,55 +290,44 @@ function prepareCase(binary, testCase) {
   return root;
 }
 
-function caseStatus(check, mutation) {
-  const results = [check, mutation].filter(Boolean);
-  if (results.some((result) => result.status === "fail")) return "fail";
-  if (results.some((result) => result.status === "pending")) return "pending";
-  return "pass";
-}
-
-function runCase(binary, testCase, keepTemp) {
+export function runCase(binary, testCase, keepTemp = false) {
   let root;
+  let outcome;
   try {
     root = prepareCase(binary, testCase);
     const check = runCheck(binary, root, testCase.check, Boolean(testCase.legacy));
-    const checked = testCase.legacy ? checkLegacyText(check, testCase.check) : check;
     const mutation = testCase.mutation ? runMutation(binary, root, testCase.mutation) : null;
-    return {
-      id: testCase.id,
-      fixture: testCase.fixture,
-      status: caseStatus(checked, mutation),
-      requirement: testCase.mutation?.requirement ?? testCase.check?.requirement,
-      check: checked,
-      mutation,
-      tempRoot: keepTemp ? root : undefined,
-    };
+    const status = [check, mutation].some((item) => item?.status === "fail") ? "fail" : "pass";
+    outcome = { id: testCase.id, fixture: testCase.fixture, status, requirement: testCase.mutation?.requirement ?? testCase.check?.requirement ?? null, check, mutation, diagnostics: null };
   } catch (error) {
-    return { id: testCase.id, fixture: testCase.fixture, status: "fail", diagnostics: error.message };
-  } finally {
-    if (root && !keepTemp) fs.rmSync(root, { recursive: true, force: true });
+    outcome = { id: testCase.id, fixture: testCase.fixture, status: "fail", requirement: testCase.mutation?.requirement ?? testCase.check?.requirement ?? null, check: null, mutation: null, diagnostics: bounded(error.message) };
   }
+  if (root && !keepTemp) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch (error) {
+      outcome = { ...outcome, status: "fail", diagnostics: bounded(`fixture temp cleanup failed: ${error.message}`) };
+    }
+  }
+  return outcome;
 }
 
-export function runConsumerMatrix(options) {
+export function runConsumerMatrix(options = {}) {
   const binary = resolveBinary(options);
-  const selected = options.caseIds.length === 0
-    ? CONSUMER_CASES
-    : CONSUMER_CASES.filter((testCase) => options.caseIds.includes(testCase.id));
-  if (selected.length === 0) throw new Error("no consumer fixtures matched --case");
-  const cases = selected.map((testCase) => runCase(binary, testCase, options.keepTemp));
-  const summary = cases.reduce(
-    (counts, result) => ({ ...counts, [result.status]: counts[result.status] + 1 }),
-    { pass: 0, pending: 0, fail: 0 },
-  );
-  return { binary, allowPending: options.allowPending, cases, summary };
+  const ids = options.caseIds ?? [];
+  const unknown = ids.filter((id) => !CONSUMER_CASES.some((testCase) => testCase.id === id));
+  if (unknown.length) fail("case-missing", `unknown consumer case id: ${unknown.join(", ")}`);
+  const selected = ids.length ? CONSUMER_CASES.filter((testCase) => ids.includes(testCase.id)) : CONSUMER_CASES;
+  if (!selected.length) fail("case-missing", "no consumer fixtures matched --case");
+  const cases = selected.map((testCase) => runCase(binary, testCase, Boolean(options.keepTemp)));
+  const summary = cases.reduce((counts, item) => { counts[item.status] += 1; return counts; }, { pass: 0, pending: 0, fail: 0 });
+  return { binary, cases, summary };
 }
 
 export function renderHuman(report) {
   for (const result of report.cases) {
     const detail = result.diagnostics || result.mutation?.diagnostics || result.check?.diagnostics || "";
-    console.log(`${result.status.toUpperCase().padEnd(7)} ${caseLabel(result)}${detail ? ` — ${detail}` : ""}`);
-    if (result.status === "pending" && result.requirement) console.log(`         requires: ${result.requirement}`);
+    console.log(`${result.status.toUpperCase().padEnd(7)} ${caseLabel(result)}${detail ? ` — ${bounded(detail)}` : ""}`);
   }
   console.log(`consumer matrix: ${report.summary.pass} pass, ${report.summary.pending} pending, ${report.summary.fail} fail`);
 }

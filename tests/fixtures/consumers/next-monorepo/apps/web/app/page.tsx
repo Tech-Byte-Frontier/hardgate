@@ -1,4 +1,3 @@
-export default function Page() {
-  const title = "Next" + " fixture";
-  return <main data-fixture="next">{title}</main>;
+export function pageTitle(name: string): string {
+  return "Next:" + name;
 }

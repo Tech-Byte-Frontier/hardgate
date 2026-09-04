@@ -3,7 +3,3 @@ settings:
   autoInstallPeers: true
 importers:
   .:
-    devDependencies:
-      vite:
-        specifier: 0.0.0-fixture
-        version: 0.0.0-fixture

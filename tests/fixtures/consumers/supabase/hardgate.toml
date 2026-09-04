@@ -9,3 +9,8 @@ enabled = false
 
 [mutation]
 enabled = false
+
+[generated]
+enabled = true
+freshness_command = "node supabase/check-generated.mjs"
+timeout_secs = 5

@@ -1,3 +1,3 @@
-export function handler(name: string): Response {
-  return new Response(`hello ${name}`);
+export function hello(name: string): string {
+  return "hello:" + name;
 }
