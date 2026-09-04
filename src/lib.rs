@@ -60,19 +60,31 @@
 //! ## Command boundaries
 //!
 //! `check` runs static engines plus enabled report and freshness evaluators.
-//! `check --diff` scopes static files to changed/staged inventory when no
-//! ratchet is enabled, compares clones against a full repository index, and
-//! evaluates changed executable LCOV lines; an enabled legacy ratchet disables
-//! diff filtering but honors explicit path filters, using the full current
-//! selected scope (the whole tree when no paths are supplied) for static/clone
-//! comparison with changed-hunk attribution. `check --all`
+//! `check --diff` selects Git-changed/staged inventory by default, adds
+//! explicit existing paths to static/clone selection, compares clones against
+//! a full repository index, and evaluates LCOV only on actual changed
+//! executable lines; an enabled legacy ratchet disables diff filtering but
+//! honors explicit path filters, using the full current selected scope (the
+//! whole tree when no paths are supplied) for static/clone comparison with
+//! changed-hunk attribution. `check --all`
 //! additionally runs configured formatter, linter, and test commands. `verify`
-//! runs full static and configured evidence by default; optional path filters
-//! scope only static inventory and coverage source matching while mutation
-//! reports, freshness, and legacy ratchet evidence remain configured/full.
+//! runs full static/dead-code and configured evidence by default; optional path
+//! filters scope only current static/dead-code inventory and coverage source
+//! matching while mutation reports and freshness remain configured/full. The
+//! ratchet still loads and validates the full configured reference snapshot,
+//! then compares it only to selected current static/dead-code findings without
+//! widening explicit paths.
 //! It does not run orchestration or native mutation. When enabled, `mutate`
 //! runs the native unmutated baseline and AST mutants; when disabled, it emits
 //! a note and succeeds without target discovery or execution.
+//! Native mutation is supported only on the six Linux/macOS release target
+//! families (Linux x64/arm64 glibc and musl, macOS x64/arm64); all other
+//! targets, including other Unix systems, fail closed before baseline or
+//! source writes.
+//! After an explicit scope is validated, a `mutate --diff` run (including
+//! `--scoped`) with no changed production source is a successful no-op. Missing,
+//! invalid, unsupported, or non-source explicit scopes fail closed; only a
+//! non-diff unrestricted or scoped run with no eligible source target fails.
 //!
 //! ## Example: loading configuration and discovering files
 //!
@@ -96,10 +108,17 @@
 //! `hardgate mcp` serves MCP over stdio. The static-only tools are
 //! `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and
 //! `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the
-//! static gate and fails closed on invalid configuration or arguments, empty
-//! scopes/discovery, unreadable or unparsable files, and Git failures. It does
-//! not run coverage, mutation, freshness, dead-code, orchestration, or native
-//! mutation.
+//! static gate; `diff` selects Git-changed/staged inventory by default, and
+//! explicit existing paths add to static/clone selection with full-index clone
+//! matching. MCP never runs
+//! coverage, mutation, freshness, dead-code, orchestration, or native
+//! mutation. Invalid arguments/configuration, missing paths, empty
+//! scopes/discovery, and Git failures are outer tool errors. Read/parse
+//! failures remain report-level Hardgate `Failed` findings whose effective
+//! role severity makes them errors, advisories, or omitted findings (`error`,
+//! `warning`, or `ignore`). For `hardgate_scan_file`, a read failure is an
+//! outer tool error while parse/static findings remain in its per-file report;
+//! `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
 //!
 //! ## Build identity
 //!

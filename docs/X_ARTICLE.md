@@ -15,10 +15,10 @@ The policy is role-aware. Source, test, generated, fixture, and migration roles 
 The command boundaries are deliberate:
 
 - `hardgate check` runs static engines plus enabled coverage/mutation reports and freshness;
-- `hardgate check --diff` scopes ordinary static findings to changed files, compares clones against a full repository index, and scores changed executable LCOV lines; with a legacy ratchet, static and clone comparison uses the full current selected scope (the whole tree when no path filters are supplied);
+- `hardgate check --diff` selects Git-changed/staged inventory by default, adds explicit existing paths to static/clone selection, compares clones against a full repository index, and scores only actual changed executable LCOV lines; with a legacy ratchet, static and clone comparison uses the full current selected scope (the whole tree when no paths are supplied);
 - `hardgate check --all` adds only formatter/linter/test commands configured by the repository;
-- `hardgate verify` runs full static and configured evidence, with optional paths narrowing only static inventory and coverage source matching; mutation reports/freshness/legacy ratchet remain configured/full, without orchestration or native mutation;
-- `hardgate mutate` runs a native unmutated baseline and AST mutants when enabled, and prints a disabled-policy note before a successful no-op when disabled.
+- `hardgate verify` runs full static/dead-code and configured evidence, with optional paths narrowing only current static/dead-code inventory and coverage source matching; mutation reports and freshness remain configured/full, while the ratchet loads the full configured reference snapshot but compares it only to selected current static/dead-code findings without widening explicit paths;
+- `hardgate mutate` runs a native unmutated baseline and AST mutants when enabled on the six Linux/macOS release target families (Linux x64/arm64 glibc and musl, macOS x64/arm64), and prints a disabled-policy note before a successful no-op when disabled; after explicit scope validation, `--diff` (including `--scoped`) is also a successful no-op when no changed production source exists; missing, invalid, unsupported, or non-source explicit scopes fail closed; other targets, including other Unix systems, fail closed before baseline or source writes.
 
 Enabled evidence is not optional by accident. Empty, missing, unreadable, or malformed reports fail closed. Disabled policies do not read stale report files. A configured legacy reference resolves a Git merge base and can grandfather existing non-worsened static/dead-code debt while keeping new or worsened findings with effective role severity `error` blocking; `warning` findings remain advisories and `ignore` findings are omitted. Coverage, mutation, freshness, and configured orchestration remain current blocking evidence whenever their checks run and are never ratcheted. Stable clone fingerprints and rename lineage preserve safe identities without depending on physical line numbers.
 
@@ -34,13 +34,14 @@ matching test and falls back to the full suite. A project-specific
 `--test-cmd` remains authoritative. The resolver uses local manager commands
 and does not download packages at runtime.
 
-Agents can consume `--format agent` or JSON. MCP is stdio-only and intentionally static-only: `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` fails closed on invalid configuration or arguments, missing paths, empty scopes/discovery, unreadable or unparsable files, and Git failures; `hardgate_scan_file` reports read/parse failures in its per-file static report, while `hardgate_get_metrics` reports read or missing-symbol errors.
+Agents can consume `--format agent` or JSON. MCP is stdio-only and intentionally static-only: `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` and `hardgate_scan_file` use static reports; `diff` defaults to Git-changed/staged inventory, explicit existing paths add to static/clone selection, and clone matching uses the full repository index, while MCP never runs coverage. Invalid arguments/configuration, missing paths, empty scopes/discovery, and Git failures are outer tool errors. Read/parse failures remain report-level Hardgate `Failed` findings, with effective role severity `error` failing, `warning` advising, and `ignore` omitting the finding. For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors.
 
 Hardgate complements language linters, formatters, coverage providers, mutation runners, clone tools, and hosted products such as Qlty Cloud. Those tools own their language semantics, execution, or history. Hardgate owns the repository's local policy and the evidence boundary that says what was actually checked.
 
 For the v0.5.0 release contract, the channel contract covers Cargo, the npm
-wrapper, and the shell installer. It specifies six Unix artifacts, verifies
+wrapper, and the shell installer. It specifies exactly six Linux/macOS
+artifacts (Linux x64/arm64 glibc and musl, macOS x64/arm64), verifies
 `SHA256SUMS` and `BUILD-METADATA.json`, and checks the binary's exact version,
 target marker, and full source commit; this describes intended release
-behavior, not publication already completed. The supported installer surface
-is Unix; Windows and Homebrew are not part of this contract.
+behavior, not publication already completed. Other Unix targets, Windows, and
+Homebrew are not part of this contract.

@@ -49,11 +49,11 @@ hardgate check --diff
 hardgate check --diff src/routes/revenue.ts
 ```
 
-Git status and diff evidence select changed or staged inventory files, including untracked inventory files. A missing Git worktree or malformed Git evidence fails closed. Static findings are scoped to that selection when no legacy ratchet is enabled.
+Git status and diff evidence select changed or staged inventory files by default, including untracked inventory files. Explicit existing paths add to static/clone selection. A missing Git worktree or malformed Git evidence fails closed. Static findings are scoped to the Git selection when no legacy ratchet is enabled.
 
-In ordinary diff mode, clone analysis is different: it builds a full repository index of eligible role groups, then reports only clone pairs touching a changed file. This catches a new copy against an unchanged file. Clone fingerprints are content-only and line-independent, so the legacy matcher can preserve identity across a safe rename.
+In ordinary diff mode, clone analysis is different: it builds a full repository index of eligible role groups, then reports only clone pairs touching Git-changed/staged files or explicitly selected existing paths. This catches a new copy against an unchanged file. Clone fingerprints are content-only and line-independent, so the legacy matcher can preserve identity across a safe rename.
 
-When `[legacy].ratchet = true`, static and clone analysis disables diff filtering but still honors explicit path filters: it uses the full current selected scope (the whole tree when no paths are supplied) to compare against the configured reference merge-base, even though ordinary `--diff` static mode selects changed/staged files. Existing non-worsened static findings (and configured dead-code findings) may be grandfathered as advisories; new or worsened findings with effective role severity `error` remain blocking, `warning` findings remain advisories, and `ignore` findings are omitted. Retained findings are annotated with changed-file or changed-hunk context. Enabled coverage is evaluated only on changed executable lines from AST-supported source-role files. Mutation reports and generated freshness remain current blocking evidence; orchestration still requires `--all`.
+When `[legacy].ratchet = true`, static and clone analysis disables diff filtering but still honors explicit path filters: it uses the full current selected scope (the whole tree when no paths are supplied) to compare against the configured reference merge-base, even though ordinary `--diff` static mode selects changed/staged files by default. The ratchet still loads and validates the full configured reference snapshot, then compares it only to the selected current static/dead-code findings; explicit paths never widen that current selection. Existing non-worsened static findings (and configured dead-code findings) may be grandfathered as advisories; new or worsened findings with effective role severity `error` remain blocking, `warning` findings remain advisories, and `ignore` findings are omitted. Retained findings are annotated with changed-file or changed-hunk context. Enabled coverage is evaluated only on actual changed executable lines from AST-supported source-role files. Mutation reports and generated freshness remain current blocking evidence; orchestration still requires `--all`.
 
 ## `hardgate check --all`
 
@@ -67,10 +67,13 @@ An absent command is skipped because it was not configured; a configured command
 
 ## `hardgate verify`
 
-`verify` runs the full-tree static and configured evidence gate by default.
-Optional path arguments scope the static inventory and coverage source matching
-only; mutation-report ingestion, generated freshness, and legacy ratchet
-evidence continue to use their configured/full scope:
+`verify` runs the full-tree static/dead-code and configured evidence gate by
+default. Optional path arguments scope the current static/dead-code inventory
+and coverage source matching only; mutation-report ingestion and generated
+freshness continue to use their configured/full scope. The ratchet still loads
+and validates the full configured reference snapshot, then compares it only to
+the selected current static/dead-code findings; explicit paths do not widen that
+current selection:
 
 ```sh
 hardgate verify
@@ -119,16 +122,19 @@ The native runner:
 
 A scope with no viable mutation points fails. Native mutation is independent of mutation-report ingestion and does not invoke Stryker or cargo-mutants.
 
-Any `mutate --diff` invocation, including one with `--scoped`, is an explicitly
-reported no-op when no changed production targets exist. Only a non-diff
-unrestricted invocation or explicit scope with no eligible source-role target
-fails before mutation execution.
+After an explicit scope is validated, any `mutate --diff` invocation, including
+one with `--scoped`, is an explicitly reported no-op when no changed production
+source exists. Missing, invalid, unsupported, or non-source explicit scopes
+fail closed. Only a non-diff unrestricted invocation or explicit scope with no
+eligible source-role target fails before mutation execution.
 
-Native mutation is Unix-only in the v0.5.0 contract. On non-Unix builds,
-`mutate` fails closed before running commands because the required
-process-group cleanup and atomic source-restoration guarantees are
-unavailable. Static `check` and `scan` are separate commands; no Windows
-release artifact is specified.
+Native mutation is supported only on the six Linux/macOS release target
+families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
+including other Unix systems, fail closed before baseline or source writes
+because the required process-group cleanup and atomic source-restoration
+guarantees are unavailable. Static `check` and `scan` are separate commands;
+the release/archive contract specifies exactly those six artifacts and no
+Windows artifact.
 
 ### JavaScript/TypeScript command resolution
 
@@ -182,7 +188,7 @@ It accepts newline-delimited or `Content-Length`-framed JSON-RPC. The tool names
 | `hardgate_scan_file` | required `path: string` | One-file safety and AST report |
 | `hardgate_get_metrics` | required `path: string`, `symbol: string` | Metrics for one named function |
 
-`hardgate_check` is fail-closed: invalid arguments/configuration, missing paths, empty path arrays, empty discovery, unreadable files, parser failures, and Git failures return an explicit failed response. It never runs coverage/mutation reports, generated freshness, dead-code analysis, orchestration, or native mutation. The static report uses the same engine path as the CLI; optional `diff` selects Git-modified scope and full-index clone matching.
+`hardgate_check` is fail-closed for outer tool errors: invalid arguments/configuration, missing paths, empty path arrays, empty discovery, and Git failures return an explicit failed response. Read/parse failures remain report-level Hardgate `Failed` findings, with effective role severity `error` failing the report, `warning` producing an advisory, and `ignore` omitting the finding. It never runs coverage/mutation reports, generated freshness, dead-code analysis, orchestration, or native mutation. The static report uses the same engine path as the CLI; optional `diff` selects Git-changed/staged scope by default, explicit existing paths add to static/clone selection, and clone matching uses the full repository index. MCP never runs coverage. For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
 
 Register the stdio server with an MCP-capable client:
 

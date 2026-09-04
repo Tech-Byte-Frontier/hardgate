@@ -10,13 +10,13 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 
 ## What is enforced
 
-- **Role-aware discovery.** Inventory files are classified as source, test, generated, fixture, migration, configuration, documentation, vendor, or unknown before engines choose their inputs. Dependency and build-output directories are pruned by default. A user exclusion belongs only to the engine that owns it and remains visible as an advisory.
+- **Role-aware discovery.** Inventory files are classified as source, test, generated, fixture, migration, configuration, documentation, vendor, or unknown before engines choose their inputs. Dependency and build-output directories are pruned by default. File-budget and clone exclusions belong only to their owning engines and remain visible as advisories; dead-code exclusions are engine-local and silent.
 - **Structural budgets.** Tree-sitter metrics cover Rust, JavaScript, TypeScript, TSX, Python, and Go. File bytes/lines and per-function cyclomatic, cognitive, Halstead, ABC, parameter, statement, body-line, and nesting ceilings are configurable.
 - **Anti-gaming policy.** Known suppression directives and project-forbidden tokens can be blocking findings on safety-checked roles. The current configuration has no inline approval or suppression exception channel.
 - **Architectural boundaries.** Declarative path-scoped rules inspect import strings, call names, and tokens. This is a local rule scanner, not module resolution or type checking.
 - **Clone debt.** Bounded token windows compare eligible files using verified normalized token sequences. Current clone findings carry a stable content fingerprint that does not include path or line numbers, so rename lineage can be matched during legacy adoption.
 - **Evidence.** Enabled LCOV coverage and JSON mutation reports are required inputs. Empty, missing, unreadable, or malformed required evidence is a blocking finding. Disabled engines do not consume stale report files. Generated-artifact freshness is a separate required check when enabled.
-- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is separate from report ingestion and is Unix-only in the v0.5.0 contract; non-Unix builds fail closed before execution because process-group cleanup and atomic restoration are unavailable there.
+- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is separate from report ingestion and is supported only on the six Linux/macOS release target families (Linux x64/arm64 glibc and musl, macOS x64/arm64); all other targets, including other Unix systems, fail closed before baseline or source writes because process-group cleanup and atomic restoration are unavailable there.
 - **Orchestration.** `check --all` runs only formatter, linter, and test commands configured by the repository. Hardgate never invents a command or treats an unconfigured test suite as evidence.
 
 Invariant checking is enabled by default; with no configured rules it has nothing to report. Set `[invariants].enforce = false` to disable it explicitly.
@@ -73,7 +73,7 @@ bun add -d @tech-byte-frontier/hardgate
 bunx --no-install hardgate scan src/index.ts
 ```
 
-The v0.5.0 release contract defines exactly six Unix optional packages and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
+The v0.5.0 release contract defines exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
 
 | Target | Package |
 | --- | --- |
@@ -103,7 +103,7 @@ cargo install --path . --locked
 
 ### Shell installer
 
-The v0.5.0 release installer contract supports the same six Unix targets. It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects the libc and takes precedence over automatic detection. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
+The v0.5.0 release installer contract supports exactly the six Linux/macOS targets listed above (Linux x64/arm64 glibc and musl, macOS x64/arm64). It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects the libc and takes precedence over automatic detection. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
@@ -139,10 +139,10 @@ For a non-custom preset, TOML merging is presence-based. Only keys that are actu
 # Static engines plus enabled report and generated-freshness evidence.
 hardgate check
 
-# Changed/staged static scope (or full current selected static comparison when a
-# legacy ratchet is enabled; whole tree when no path filters are supplied).
-# Ordinary diff clone matching uses a full repository index; enabled LCOV is
-# attributed to changed executable source lines.
+# Git-changed/staged static scope by default; explicit existing paths add to
+# static/clone selection. With a legacy ratchet, static/clone comparison uses
+# the full current selected scope (whole tree when no paths are supplied).
+# LCOV always intersects actual changed executable source lines.
 hardgate check --diff
 
 # Add configured formatter, linter, and test commands.
@@ -151,8 +151,9 @@ hardgate check --all
 # Opt in to configured dead-code analysis.
 hardgate check --dead-code
 
-# Full static verification plus enabled reports, freshness, and legacy ratchet;
-# path filters only narrow static inventory and coverage source matching.
+# Full static/dead-code verification plus enabled reports, freshness, and legacy
+# ratchet; path filters only narrow current static/dead-code inventory and
+# coverage source matching.
 hardgate verify
 
 # Native baseline + AST-mutant execution (not report ingestion).
@@ -169,21 +170,25 @@ The command contract is:
 | Command | Runs | Does not run |
 | --- | --- | --- |
 | `check` | Static engines, enabled coverage/mutation reports, enabled generated freshness; optional configured dead code | Formatter/linter/test orchestration unless `--all`; native mutation |
-| `check --diff` | Changed/staged static files when no ratchet is enabled, with a full clone index filtered to changed matches and changed executable LCOV; with a ratchet, static/clone analysis uses the full current selected scope (whole tree when no path filters are supplied) while LCOV remains diff-scoped | Native mutation; orchestration unless `--all` |
+| `check --diff` | Git-changed/staged static files by default; explicit existing paths add to static/clone selection, with full-index clone matching; with a ratchet, static/clone analysis uses the full current selected scope (whole tree when no paths are supplied). LCOV always intersects actual changed executable lines | Native mutation; orchestration unless `--all` |
 | `check --all` | Everything in `check` plus configured orchestration steps | Native mutation |
-| `verify` | Full-tree static and configured evidence by default; path filters scope only static inventory and coverage source matching, while mutation reports, freshness, and legacy ratchet evidence remain configured/full | Orchestration and native mutation |
+| `verify` | Full-tree static/dead-code and configured evidence by default; path filters scope only current static/dead-code inventory and coverage source matching, while mutation reports and freshness remain configured/full. The ratchet loads the full configured reference snapshot but compares only selected current static/dead-code findings | Orchestration and native mutation |
 | `mutate` | When enabled, native unmutated baseline and bounded mutants; when disabled, a note and successful no-op | Coverage/mutation report ingestion |
 
-`verify` path arguments do not narrow mutation-report ingestion, generated
-freshness, or legacy ratchet evidence; those remain configured/full checks.
+`verify` path arguments do not narrow mutation-report ingestion or generated
+freshness; those remain configured/full checks. The ratchet still loads and
+validates the full configured reference snapshot, then compares it only to the
+selected current static/dead-code findings; explicit paths do not widen that
+current selection.
 
 Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
 
 When native mutation is enabled, it requires a source-role target and at least
-one viable mutant. Any `mutate --diff` invocation, including one with
-`--scoped`, is an explicitly reported no-op when no changed production target
-exists. Only a non-diff unrestricted or scoped run with no eligible target
-fails.
+one viable mutant. After an explicit scope is validated, a `mutate --diff`
+invocation with no changed production source is an explicitly reported no-op,
+including when `--scoped` is supplied. Missing, invalid, unsupported, or
+non-source explicit scopes fail closed. Only a non-diff unrestricted or scoped
+run with no eligible target fails.
 
 ## Roles, legacy adoption, and clones
 
@@ -195,7 +200,7 @@ When `[legacy].ratchet = true`, Hardgate resolves the configured reference and m
 
 ## MCP and agent integration
 
-`hardgate mcp` serves MCP over standard input/output. The static-only `hardgate_check(paths?, diff?)` tool routes through the same static gate as the CLI. It accepts optional path strings and a boolean `diff`; it does not run reports, freshness, orchestration, native mutation, or dead code. Invalid configuration, missing paths, empty scopes, unreadable files, parser failures, Git failures, and empty discovery return an explicit failed response instead of a successful empty report.
+`hardgate mcp` serves MCP over standard input/output. The static-only `hardgate_check(paths?, diff?)` tool routes through the same static gate as the CLI. It accepts optional path strings and a boolean `diff`; Git-changed/staged inventory is the default diff selection, while explicit existing paths add to static/clone selection and clone matching uses the full repository index. MCP never runs coverage or other report/freshness/orchestration/dead-code/native-mutation engines. Invalid arguments/configuration, missing paths, empty scopes/discovery, and Git failures are outer tool errors. Read/parse failures remain report-level Hardgate `Failed` findings: effective role severity `error` fails the report, `warning` is an advisory, and `ignore` omits the finding. For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
 
 The other tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. Register the server with an MCP client:
 

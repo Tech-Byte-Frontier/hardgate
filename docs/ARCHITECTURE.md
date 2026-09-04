@@ -25,7 +25,7 @@ config (preset + presence merge) -> discovery -> role classification
 
 `HardgateConfig::load_or_default` loads `hardgate.toml`, or the `strict-agent` preset when no file exists. `hardgate init --preset strict-agent` serializes the same object. For non-custom presets, a TOML section/key overlays the preset only when that key is present. Explicit `false` and empty values remain explicit; omitted keys retain preset values.
 
-The walker inventories source and text/data extensions while pruning dependency/build directories (`node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, `__pycache__`). User budget or clone exclusions are not discovery pruning. Excluded files remain visible to classification and other engines and produce an advisory from the owning engine.
+The walker inventories source and text/data extensions while pruning dependency/build directories (`node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, `__pycache__`). User budget or clone exclusions are not discovery pruning. Those excluded files remain visible to classification and other engines and produce an advisory from the owning engine; dead-code exclusions are local to that analyzer and silent.
 
 Each file becomes a `ClassifiedFile` with a role and AST-support flag. Ordered custom classification rules run before built-ins; vendor/build pruning cannot be overridden by a user rule.
 
@@ -39,7 +39,7 @@ The first-class policy roles are source, test, generated, fixture, and migration
 - **Fixture:** safety and role-group clone analysis; no complexity by default.
 - **Migration:** safety checks; no native mutation or clone analysis by default.
 
-Configuration and documentation files remain inventoried for applicable policy, vendor files are pruned, and unknown files can fail when `gate.enforce_classified_sources` is enabled. A role severity of `error`, `warning`, or `ignore` determines whether a role finding blocks, becomes an advisory, or is omitted. Static evidence without a role override falls back to `gate.strict`.
+Configuration and documentation files remain inventoried for applicable policy, vendor files are pruned, and unknown files can fail when `gate.enforce_classified_sources` is enabled. A role severity of `error`, `warning`, or `ignore` determines whether a role finding blocks, becomes an advisory, or is omitted. Static evidence without a role override falls back to `gate.strict`, except enforced unknown-role classification gaps, which are always blocking.
 
 ### Node and Supabase boundaries
 
@@ -75,7 +75,7 @@ The invariant engine is enabled by default; an empty rule list is a no-op, while
 
 ### Clones
 
-The clone detector tokenizes non-comment code, normalizes literal values, indexes bounded windows with a rolling hash, verifies token sequences, and coalesces adjacent matches. Source, test, and fixture files are analyzed in independent role groups with independently configurable thresholds. In diff mode the index contains the full discovered repository; only pairs touching a changed file are emitted.
+The clone detector tokenizes non-comment code, normalizes literal values, indexes bounded windows with a rolling hash, verifies token sequences, and coalesces adjacent matches. Source, test, and fixture files are analyzed in independent role groups with independently configurable thresholds. In diff mode the index contains the full discovered repository; only pairs touching Git-changed/staged files or explicitly selected existing paths are emitted.
 
 Each violation carries a stable fingerprint computed from normalized token kinds. Paths and physical line numbers are excluded from that fingerprint. Git rename lineage can therefore map a current path to its baseline path without changing clone identity.
 
@@ -100,23 +100,29 @@ With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference a
 ## Command boundaries
 
 - `check`: static engines, enabled reports, freshness, and optional configured dead code.
-- `check --diff`: changed/staged static scope when no ratchet is enabled, with full-index clone matching and changed executable LCOV; with a legacy ratchet, static/clone analysis uses the full current selected scope (whole tree when no paths are supplied) while LCOV remains diff-scoped.
+- `check --diff`: Git-changed/staged static scope by default, with explicit existing paths added to static/clone selection and full-index clone matching; with a legacy ratchet, static/clone analysis uses the full current selected scope (whole tree when no paths are supplied). LCOV always intersects actual changed executable lines.
 - `check --all`: `check` plus configured formatter/linter/test orchestration.
-- `verify`: full static tree and configured evidence by default; optional path filters scope only static inventory and coverage source matching, while mutation reports, freshness, and legacy ratchet evidence remain configured/full; no orchestration or native mutation.
+- `verify`: full static/dead-code tree and configured evidence by default; optional path filters scope only current static/dead-code inventory and coverage source matching, while mutation reports and freshness remain configured/full. The ratchet loads the full configured reference snapshot but compares only selected current static/dead-code findings; no orchestration or native mutation.
 - `mutate`: when `[mutation].enabled = true`, native unmutated baseline and AST mutants; when disabled, prints a note and succeeds without target discovery or execution; no report ingestion.
 
 Orchestration commands run sequentially from the repository root; a local `node_modules/.bin` is prepended to `PATH`. An unconfigured command is not inferred. A configured command that is empty, unavailable, times out, or exits non-zero yields an orchestration finding.
 
 ## Native mutation and JavaScript resolution
 
-Native mutation is source-role only and Unix-only in the v0.5.0 contract. When
-`[mutation].enabled = false`, the command exits successfully without target
-discovery or execution. When enabled, it resolves a test command per file,
-runs a passing unmutated baseline, mutates one AST point at a time, classifies
-outcomes, and verifies byte-for-byte restoration. A failed baseline or zero
-viable mutants fails before a green result; non-Unix builds fail closed before
-execution because robust process-group cleanup and atomic restoration are not
-available.
+Native mutation is source-role only and is supported only on the six Linux/macOS
+release target families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All
+other targets, including other Unix systems, fail closed before baseline or
+source writes because robust process-group cleanup and atomic restoration are
+not available. When `[mutation].enabled = false`, the command exits
+successfully without target discovery or execution. When enabled, it resolves a
+test command per file, runs a passing unmutated baseline, mutates one AST point
+at a time, classifies outcomes, and verifies byte-for-byte restoration. A
+failed baseline or zero viable mutants fails before a green result.
+
+After an explicit scope is validated, a `mutate --diff` run (including
+`--scoped`) with no changed production source is a successful no-op. Missing,
+invalid, unsupported, or non-source explicit scopes fail closed; only a non-diff
+unrestricted or scoped run with no eligible source target fails.
 
 For JS/TS files, the resolver validates every encountered `package.json`; a
 malformed or unreadable manifest fails closed, with `--test-cmd` as the explicit
@@ -139,7 +145,7 @@ runs. Manager-local `test`/`run`/`exec` commands are used, with
 
 The report aggregator records scan/function counts, violations, advisories, and duration, then renders terminal, agent Markdown, JSON, compact, or summary output. CLI empty discovery is an advisory while enabled evidence still runs; malformed or missing required evidence remains blocking. The MCP check surface rejects empty discovery before producing a report.
 
-The MCP server uses newline-delimited or `Content-Length`-framed JSON-RPC over stdio. Its tools are `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the static gate only, accepts optional paths and `diff`, and fails closed on invalid config/arguments, empty scopes, unreadable or unparsable files, Git failures, and empty discovery. MCP does not run coverage, mutation, freshness, dead code, orchestration, or native mutation.
+The MCP server uses newline-delimited or `Content-Length`-framed JSON-RPC over stdio. Its tools are `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the static gate only; `diff` defaults to Git-changed/staged inventory, explicit existing paths add to static/clone selection, and clone matching uses the full repository index. MCP does not run coverage, mutation, freshness, dead code, orchestration, or native mutation. Invalid arguments/configuration, missing paths, empty scopes/discovery, and Git failures are outer tool errors. Read/parse failures are report-level Hardgate `Failed` findings whose effective role severity makes them errors, advisories, or omitted findings (`error`, `warning`, or `ignore`). For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
 
 ## Build identity
 

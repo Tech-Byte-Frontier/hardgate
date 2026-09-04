@@ -21,9 +21,10 @@ bunx --no-install hardgate scan src/index.ts
 
 ## Platform packages and fallback
 
-The v0.5.0 release contract defines exactly six Unix optional
-dependencies; this matrix describes intended channel behavior and does not
-claim that publication has already occurred:
+The v0.5.0 release contract defines exactly six Linux/macOS optional
+dependencies (Linux x64/arm64 glibc and musl, macOS x64/arm64); this matrix
+describes intended channel behavior and does not claim that publication has
+already occurred:
 
 - `hardgate-linux-x64` (glibc)
 - `hardgate-linux-x64-musl`
@@ -49,24 +50,33 @@ The wrapper forwards arguments to the Rust CLI:
 
 ```sh
 npx hardgate check                 # static engines + enabled reports/freshness
-npx hardgate check --diff          # changed static scope + full-index clones + diff LCOV
+npx hardgate check --diff          # Git-changed/staged + explicit paths; diff LCOV
 npx hardgate check --all           # add configured formatter/linter/test commands
 npx hardgate verify                # full static + enabled evidence/ratchet
 npx hardgate mutate --diff        # native baseline + AST mutants when enabled
 npx hardgate init --preset strict-agent
 ```
 
-`verify` path arguments only narrow static inventory and coverage source
-matching; mutation reports, generated freshness, and legacy ratchet evidence
-remain configured/full checks.
+`verify` path arguments only narrow current static/dead-code inventory and
+coverage source matching; mutation reports and generated freshness remain
+configured/full checks. The ratchet still loads and validates the full
+configured reference snapshot, then compares it only to selected current
+static/dead-code findings without widening explicit paths.
 
 No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation. If `[mutation].enabled = false`, it prints a disabled-policy note and succeeds without target discovery, baseline execution, or mutants; target/no-target rules apply only when enabled.
 
-Native `mutate` is Unix-only in the v0.5.0 contract and fails closed on
-non-Unix builds before running commands, because robust process-group cleanup
-and atomic source restoration are unavailable there. Static `check` and `scan`
-remain separate commands; the six-package release matrix does not include a
-Windows artifact.
+Native `mutate` is supported only on the six Linux/macOS release target
+families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
+including other Unix systems, fail closed before baseline or source writes
+because robust process-group cleanup and atomic source restoration are
+unavailable there. Static `check` and `scan` remain separate commands; the
+release/archive contract specifies exactly those six artifacts and no Windows
+artifact.
+
+After an explicit scope is validated, a `mutate --diff` run (including
+`--scoped`) with no changed production source is a successful no-op. Missing,
+invalid, unsupported, or non-source explicit scopes fail closed; only a non-diff
+unrestricted or scoped run with no eligible source target fails.
 
 For JavaScript/TypeScript mutation targets, Hardgate validates encountered
 package manifests, recognizes only declared workspaces (lockfiles are manager
@@ -81,12 +91,13 @@ a matching test where possible, and otherwise runs the full suite.
 
 ## MCP
 
-The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is `hardgate_check(paths?, diff?)`; companion tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. The check tool does not run reports, freshness, orchestration, dead code, or native mutation and returns explicit failures for invalid config, empty scopes, missing/unreadable files, parser/Git errors, and empty discovery.
+The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is `hardgate_check(paths?, diff?)`; companion tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. `diff` selects Git-changed/staged inventory by default, while explicit existing paths add to static/clone selection and clone matching uses the full repository index. MCP never runs coverage or other reports, freshness, orchestration, dead code, or native mutation. Invalid arguments/configuration, missing paths, empty scopes/discovery, and Git failures are outer tool errors. Read/parse failures remain report-level Hardgate `Failed` findings whose effective role severity makes them errors, advisories, or omitted findings (`error`, `warning`, or `ignore`). For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
 
 ## Release identity
 
-The v0.5.0 shell-installer and release-archive contract supports the same six
-Unix artifacts. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects
+The v0.5.0 shell-installer and release-archive contract supports exactly the
+six Linux/macOS artifacts listed above (Linux x64/arm64 glibc and musl, macOS
+x64/arm64). On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects
 the libc and takes precedence over automatic detection. Archives are listed in `SHA256SUMS`;
 `BUILD-METADATA.json` records target, package, version, and full source commit.
 Installation verifies the unique checksum entry before extraction and

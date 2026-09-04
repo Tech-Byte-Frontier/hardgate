@@ -20,7 +20,13 @@ strict = true
 
 For every non-custom preset, merging is presence-based. Hardgate inspects the TOML table and overlays only keys that are actually present; omitted sections and keys retain the preset value. An explicit `false`, empty array, or other explicit value is not treated as omission. This lets a project change one field without copying the rest of the preset.
 
-The `strict` flag controls static/classification evidence fallback: unknown roles, parser/read failures, and similar static evidence can be blocking (`true`) or advisories (`false`) when no role-specific severity overrides them. Explicitly enabled coverage, mutation, generated-freshness, and legacy-reference evidence is required and blocking regardless of `strict`.
+The `strict` flag controls static/classification evidence fallback: parser/read
+failures and similar static evidence can be blocking (`true`) or advisories
+(`false`) when no role-specific severity overrides them. An unknown-role gap is
+always blocking when `gate.enforce_classified_sources = true`, regardless of
+`strict`; the flag applies to other evidence without a role override.
+Explicitly enabled coverage, mutation, generated-freshness, and legacy-reference
+evidence is required and blocking regardless of `strict`.
 
 ## Gate identity
 
@@ -39,7 +45,7 @@ enforce_classified_sources = false
 
 ## Discovery, classification, and role policies
 
-Each inventory file receives one role before engines choose inputs. Built-in pruning always skips `node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, and `__pycache__`. A user exclusion is not global pruning: the file remains available to classification and other engines, and the owning engine emits an advisory.
+Each inventory file receives one role before engines choose inputs. Built-in pruning always skips `node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, and `__pycache__`. File-budget and clone exclusions are not global pruning: excluded files remain available to classification and other engines, and the owning engine emits an advisory. Dead-code exclusions are local to that analyzer and silent.
 
 Built-in role behavior:
 
@@ -197,7 +203,7 @@ min_tokens = 50
 excludes = ["tests/fixtures/**"]
 ```
 
-Eligible source, test, and fixture files are analyzed in separate role groups using normalized lexical token streams and bounded rolling-hash windows. `excludes` belongs only to clone detection and emits an advisory when matching files are present. In `check --diff`, Hardgate indexes the full repository and retains clone pairs touching changed files. Every current clone violation has a stable fingerprint over normalized token kinds; it excludes paths and physical line numbers, allowing rename lineage to preserve identity.
+Eligible source, test, and fixture files are analyzed in separate role groups using normalized lexical token streams and bounded rolling-hash windows. `excludes` belongs only to clone detection and emits an advisory when matching files are present. In `check --diff`, Git-changed/staged inventory is selected by default, explicit existing paths add to static/clone selection, and Hardgate indexes the full repository to retain clone pairs touching Git-changed/staged files or explicitly selected existing paths. Every current clone violation has a stable fingerprint over normalized token kinds; it excludes paths and physical line numbers, allowing rename lineage to preserve identity.
 
 ## Generated-artifact freshness
 
@@ -222,11 +228,14 @@ ratchet = true
 
 The ratchet applies only to static and configured dead-code findings. Coverage, mutation, generated freshness, and orchestration are evaluated against the current tree and remain blocking; they are never grandfathered. If the reference, merge base, snapshot, or baseline analysis cannot be loaded, the ratchet reports a blocking evidence failure.
 
-With the ratchet enabled, `check --diff` still uses changed executable lines
-for LCOV, while static and clone analysis disables diff filtering but honors
-explicit path filters: the selected scope is the full current tree when no
-paths are supplied. Without a ratchet, ordinary diff static findings remain
-scoped to changed/staged inventory files and clone pairs touching those files.
+With the ratchet enabled, `check --diff` still uses actual Git-changed
+executable lines for LCOV, while static and clone analysis disables diff
+filtering but honors explicit existing paths added to the selected static/clone
+scope: the selected scope is the full current tree when no paths are supplied.
+The ratchet still loads and validates the full configured reference snapshot,
+then compares it only to selected current static/dead-code findings. Without a
+ratchet, Git-changed/staged inventory is the default and explicit existing
+paths add to static/clone selection.
 
 ## Coverage and CRAP evidence
 
@@ -241,11 +250,14 @@ max_crap_score = 25.0
 critical_paths = ["src/core.ts"]
 ```
 
-Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. A missing, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
+Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. A missing, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
-`verify` accepts optional path arguments for static inventory and coverage source
-matching only. Mutation-report ingestion, generated freshness, and the legacy
-ratchet continue to evaluate their configured/full evidence scope.
+`verify` accepts optional path arguments for the current static/dead-code
+inventory and coverage source matching only. Mutation-report ingestion and
+generated freshness remain configured/full. The ratchet still loads and
+validates the full configured reference snapshot, then compares it only to the
+selected current static/dead-code findings; explicit paths do not widen that
+current selection.
 
 ## Mutation report evidence
 
@@ -263,11 +275,18 @@ reports = ["reports/stryker-mutation.json"]
 
 `hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool. When `[mutation].enabled = false`, it prints a disabled-policy note and exits successfully without target discovery or execution; the native baseline and no-target rules apply only when enabled.
 
-Native mutation is Unix-only in the v0.5.0 contract. Non-Unix builds fail
-closed before executing `mutate`, because robust process-group cleanup and
-atomic source restoration are not available there. This limitation applies to
-native mutation; static `check` and `scan` remain separate capabilities, and
-no Windows release artifact is specified.
+Native mutation is supported only on the six Linux/macOS release target
+families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
+including other Unix systems, fail closed before baseline or source writes
+because robust process-group cleanup and atomic source restoration are not
+available there. This limitation applies to native mutation; static `check` and
+`scan` remain separate capabilities, and the release/archive contract specifies
+exactly those six artifacts with no Windows artifact.
+
+After an explicit scope is validated, a `mutate --diff` run (including
+`--scoped`) with no changed production source is a successful no-op. Missing,
+invalid, unsupported, or non-source explicit scopes fail closed; only a non-diff
+unrestricted or scoped run with no eligible source target fails.
 
 ## Orchestration and dead code
 
