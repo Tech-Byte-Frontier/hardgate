@@ -7,6 +7,8 @@ mod apply;
 #[path = "baseline.rs"]
 mod baseline;
 pub(crate) use baseline::BaselineRunContext;
+#[cfg(test)]
+pub(crate) use baseline::BaselineSources;
 #[path = "plan.rs"]
 mod plan;
 #[path = "restore.rs"]

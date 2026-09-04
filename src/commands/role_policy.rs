@@ -3,8 +3,8 @@ mod findings;
 
 pub(crate) use clone_analysis::{CloneRun, run_clone_analysis};
 pub(crate) use findings::{
-    apply_budget_findings, apply_clone_findings, apply_complexity_findings,
-    apply_dead_code_findings, apply_invariant_findings, apply_suppression_findings,
+    apply_budget_findings, apply_complexity_findings, apply_dead_code_findings,
+    apply_invariant_findings, apply_suppression_findings,
 };
 
 use super::evidence::{EvidenceFailure, record_evidence_failure};

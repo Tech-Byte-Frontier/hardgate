@@ -1,4 +1,6 @@
+#[path = "role_config/classification.rs"]
 mod classification;
+#[path = "role_config/fs.rs"]
 mod fs;
 
 use hardgate::config::{HardgateConfig, LegacyConfig, Preset, RolePoliciesConfig, Severity};
