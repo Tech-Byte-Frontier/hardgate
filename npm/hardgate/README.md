@@ -21,6 +21,23 @@ bunx --no-install hardgate scan src/index.ts
 
 The npm wrapper requires Node.js 18 or newer.
 
+## Global CLI use
+
+Global npm and pnpm installs expose the same `hardgate` binary from any
+project:
+
+```sh
+npm install --global @tech-byte-frontier/hardgate@0.5.0
+# or
+pnpm add --global @tech-byte-frontier/hardgate@0.5.0
+
+hardgate --version
+```
+
+If pnpm has no global bin directory yet, run `pnpm setup` once and open a new
+shell so `PNPM_HOME` is on `PATH`. For reproducible CI and team use, prefer the
+pinned project-local installation shown above.
+
 ## Platform packages and fallback
 
 The v0.5.0 release contract defines exactly six Linux/macOS optional

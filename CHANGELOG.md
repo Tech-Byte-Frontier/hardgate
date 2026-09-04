@@ -25,6 +25,8 @@ Migration notes:
   shell-installer distribution remains exactly six Linux/macOS target
   artifacts; Windows, Homebrew, and cargo-dist are not release channels for
   0.5.0.
+- The published READMEs now document global npm/pnpm installation and Cargo
+  `PATH` troubleshooting without implying that pinned installs auto-update.
 
 The release is intentionally `0.5.0`, rather than `0.4.3`, because Cargo treats
 the left-most non-zero component of a `0.y.z` version as its compatibility

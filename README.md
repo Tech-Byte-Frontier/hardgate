@@ -75,6 +75,24 @@ bunx --no-install hardgate scan src/index.ts
 
 The npm wrapper requires Node.js 18 or newer.
 
+### Global CLI use
+
+The wrapper also supports a global install when one `hardgate` command should
+be available from any project:
+
+```sh
+npm install --global @tech-byte-frontier/hardgate@0.5.0
+# or
+pnpm add --global @tech-byte-frontier/hardgate@0.5.0
+
+hardgate --version
+```
+
+For pnpm, run `pnpm setup` once if pnpm reports that it cannot find a global
+bin directory, then open a new shell so `PNPM_HOME` is on `PATH`. A pinned
+project-local development dependency remains the more reproducible choice for
+CI and teams.
+
 The v0.5.0 release contract defines exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
 
 | Target | Package |
@@ -102,6 +120,19 @@ cargo install hardgate --locked
 git clone https://github.com/Tech-Byte-Frontier/hardgate.git
 cd hardgate
 cargo install --path . --locked
+```
+
+Cargo installs executables under the selected install root's `bin` directory.
+`--root` takes precedence, followed by `CARGO_INSTALL_ROOT`, Cargo's
+`install.root` setting, and finally `$CARGO_HOME` (normally `$HOME/.cargo`). If
+installation succeeds but a different shell reports `hardgate: command not
+found`, put that `bin` directory on `PATH`. A rustup installation can load its
+standard environment file with:
+
+```sh
+. "$HOME/.cargo/env"
+command -v hardgate
+hardgate --version
 ```
 
 Hardgate v0.5.0 requires Rust 1.98.1 when installed from source. It is a
