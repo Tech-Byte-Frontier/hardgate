@@ -347,7 +347,7 @@ fn all_negative_workspace_patterns_fail_closed() {
         manifest_error_case(
             label,
             &format!(r#"{{"workspaces":{workspaces}}}"#),
-            "at least one positive pattern",
+            "invalid workspace pattern",
         );
     }
 }
