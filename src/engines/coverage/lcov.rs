@@ -276,8 +276,6 @@ impl RecordBuilder {
             seen_counts: &self.seen_counts,
             functions_found: self.coverage.functions_found,
             functions_hit: self.coverage.functions_hit,
-            branches_found: self.coverage.branches_found,
-            branches_hit: self.coverage.branches_hit,
             require_functions,
             require_branches,
         })?;

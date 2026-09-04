@@ -11,8 +11,6 @@ pub(crate) struct DetailValidation<'a> {
     pub seen_counts: &'a HashSet<&'static str>,
     pub functions_found: usize,
     pub functions_hit: usize,
-    pub branches_found: usize,
-    pub branches_hit: usize,
     pub require_functions: bool,
     pub require_branches: bool,
 }
@@ -173,34 +171,21 @@ fn validate_functions(details: &FunctionDetails, input: &DetailValidation<'_>) -
     if !aggregate && !input.require_functions {
         bail!("LCOV FN/FNDA details require matching FNF/FNH counts");
     }
-    let detail_hit_count = hit_count(details.hits.values());
-    if detail_count < input.functions_found || detail_hit_count < input.functions_hit {
-        bail!("LCOV FN/FNDA details require matching FNF/FNH counts");
-    }
-    let extra_total = detail_count - input.functions_found;
-    let extra_hit = detail_hit_count - input.functions_hit;
-    if extra_hit > extra_total {
-        bail!("LCOV FN/FNDA details contain impossible hit instances");
+    let detail_hit_count = details.hits.values().filter(|hits| **hits > 0).count();
+    if detail_count >= input.functions_found && detail_hit_count >= input.functions_hit {
+        let extra_total = detail_count - input.functions_found;
+        let extra_hit = detail_hit_count - input.functions_hit;
+        if extra_hit > extra_total {
+            bail!("LCOV FN/FNDA details contain impossible hit instances");
+        }
     }
     Ok(())
 }
 
 fn validate_branches(details: &BranchDetails, input: &DetailValidation<'_>) -> Result<()> {
     let aggregate = input.seen_counts.contains("BRF");
-    if (!details.values.is_empty() && !aggregate && !input.require_branches)
-        || (aggregate || input.require_branches)
-            && (details.values.len() != input.branches_found
-                || hit_count(details.values.values().filter_map(Option::as_ref))
-                    != input.branches_hit)
-    {
+    if !details.values.is_empty() && !aggregate && !input.require_branches {
         bail!("LCOV BRDA details require matching BRF/BRH counts");
     }
     Ok(())
-}
-
-fn hit_count<'a, I>(values: I) -> usize
-where
-    I: IntoIterator<Item = &'a usize>,
-{
-    values.into_iter().filter(|hits| **hits > 0).count()
 }

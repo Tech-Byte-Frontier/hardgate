@@ -216,7 +216,7 @@ fn evaluate_coverage_report(
                 EvidenceFailure {
                     step: "coverage-report",
                     target: p,
-                    message: format!("Failed to parse required coverage report: {e}"),
+                    message: format!("Failed to parse required coverage report: {e:#}"),
                 },
             );
         }

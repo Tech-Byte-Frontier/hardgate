@@ -1,5 +1,7 @@
 use super::{assert_invalid_lcov, detail_report, fs, metrics, strict_scorer};
+use hardgate::commands::verify::verify_coverage;
 use hardgate::config::CoverageConfig;
+use hardgate::diagnostics::GateReport;
 use hardgate::engines::CoverageScorer;
 use hardgate::engines::coverage::FileCoverage;
 use std::collections::HashMap;
@@ -107,6 +109,55 @@ fn lcov_parser_accepts_llvm22_summary_supersets() {
 }
 
 #[test]
+fn lcov_parser_accepts_llvm22_projected_function_details() {
+    let config = detail_config(Some(1.0), None);
+    let body = detail_report("FN:1,first\nFNDA:1,first\n", "FNF:2\nFNH:2");
+    let parsed = parse_valid_lcov(&config, &body, "lcov-llvm22-projected-functions");
+    assert_eq!(parsed.len(), 1);
+}
+
+#[test]
+fn verify_coverage_reports_inner_lcov_error_chain() {
+    let config = detail_config(None, None);
+    let tmp = fs::tempdir("lcov-error-chain");
+    let report = tmp.join("report.info");
+    std::fs::write(
+        &report,
+        "SF:src/lib.rs\nDA:not-a-line,1\nLF:1\nLH:1\nend_of_record\n",
+    )
+    .unwrap();
+    let mut gate_report = GateReport::new("verify".to_string());
+    verify_coverage(
+        &hardgate::config::HardgateConfig {
+            coverage: config,
+            ..Default::default()
+        },
+        Some(report.display().to_string()),
+        &[],
+        &mut gate_report,
+    );
+    let output = &gate_report.orchestration_violations[0].output;
+    assert!(output.contains("Malformed LCOV DA line number"));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn lcov_parser_accepts_llvm22_projected_branch_details() {
+    let config = detail_config(None, Some(1.0));
+    for (details, counts) in [
+        ("BRDA:1,0,0,1\nBRDA:1,0,1,1\n", "BRF:2\nBRH:1"),
+        ("BRDA:1,0,0,1\n", "BRF:2\nBRH:2"),
+    ] {
+        let parsed = parse_valid_lcov(
+            &config,
+            &detail_report(details, counts),
+            "lcov-llvm22-projected-branches",
+        );
+        assert_eq!(parsed.len(), 1);
+    }
+}
+
+#[test]
 fn lcov_parser_accepts_comments_checksums_and_summary_only_counters() {
     let config = detail_config(Some(1.0), None);
     let body = "# outside comment\nTN:\nSF: src/lib.rs \nVER:1.0\n# inside comment\n".to_string()
@@ -178,7 +229,6 @@ fn lcov_parser_rejects_function_detail_mismatches_and_duplicates() {
         "FN:1,compute\nFN:2,compute\nFNDA:1,compute\nFNF:1\nFNH:1\n",
         "FN:1,compute\nFNDA:1,other\nFNF:1\nFNH:1\n",
         "FN:1,\nFNF:1\nFNH:0\n",
-        "FN:1,2,compute\nFNDA:1,compute\nFNF:2\nFNH:1\n",
     ] {
         assert_invalid_lcov(&config, &detail_report(details, ""));
     }
@@ -212,7 +262,6 @@ fn lcov_parser_rejects_branch_detail_mismatches_and_malformed_fields() {
     ] {
         assert_invalid_lcov(&config, &detail_report(details, ""));
     }
-    assert_invalid_lcov(&config, &detail_report("BRDA:1,0,0,1\n", "BRF:2\nBRH:1"));
 }
 
 #[test]
@@ -290,15 +339,13 @@ fn lcov_parser_requires_paired_function_and_branch_counts_when_floors_enabled() 
 }
 
 #[test]
-fn lcov_parser_rejects_impossible_function_supersets() {
+fn lcov_parser_rejects_impossible_function_detail_hits() {
     let config = detail_config(Some(1.0), None);
-    for details in [
-        ("FN:1,first\nFNDA:1,first\n", "FNF:2\nFNH:1\n"),
-        (
+    assert_invalid_lcov(
+        &config,
+        &detail_report(
             "FN:1,first\nFN:2,second\nFNDA:1,first\nFNDA:1,second\n",
-            "FNF:1\nFNH:0\n",
+            "FNF:1\nFNH:0",
         ),
-    ] {
-        assert_invalid_lcov(&config, &detail_report(details.0, details.1));
-    }
+    );
 }
