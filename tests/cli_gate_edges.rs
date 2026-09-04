@@ -192,7 +192,10 @@ fn check_diff_uses_valid_legacy_reference_for_changed_coverage() {
             })
     );
 
-    let summary = run(&fixture, &["check", "--all", "--format", "summary"]);
+    let summary = run(
+        fixture.as_ref(),
+        &["check", "--all", "--format", "summary"],
+    );
     assert_success(&summary, "complete evidence summary");
     assert!(stdout(&summary).contains("result: pass"));
 }
