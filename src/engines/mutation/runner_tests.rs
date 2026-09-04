@@ -191,3 +191,42 @@ fn expected_present_mismatch_preserves_concurrent_replacement() {
 fn expected_missing_mismatch_preserves_concurrent_recreation() {
     assert_expected_mismatch("expected-missing", MismatchKind::Missing);
 }
+
+#[test]
+fn expected_missing_refuses_symlink_and_directory_targets() {
+    use std::os::unix::fs::symlink;
+
+    let (root, target, location, original) = opened_fixture("expected-missing-nonregular");
+    let outside = root.join("outside.txt");
+    fs::write(&outside, b"outside\n").unwrap();
+    fs::remove_file(&target).unwrap();
+    symlink(&outside, &target).unwrap();
+
+    let symlink_error = super::restore::restore_location(
+        &location,
+        &original,
+        super::restore::ExpectedEntry::Missing,
+    )
+    .unwrap_err();
+    assert_eq!(symlink_error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(symlink_error.to_string().contains("target is a symlink"));
+    assert_eq!(fs::read(&outside).unwrap(), b"outside\n");
+
+    fs::remove_file(&target).unwrap();
+    fs::create_dir(&target).unwrap();
+    let directory_error = super::restore::restore_location(
+        &location,
+        &original,
+        super::restore::ExpectedEntry::Missing,
+    )
+    .unwrap_err();
+    assert_eq!(directory_error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        directory_error
+            .to_string()
+            .contains("target is not a regular file")
+    );
+
+    fs::remove_dir(&target).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
