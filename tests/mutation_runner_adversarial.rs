@@ -163,6 +163,32 @@ fn restoration_refuses_symlinked_ancestor_without_touching_external_file() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn baseline_refuses_detached_parent_without_restoring_live_replacement() {
+    let root = fs::tempdir("mutation-runner-baseline-detached-parent");
+    let nested = root.join("nested");
+    let detached = root.join("nested.detached");
+    let live_target = nested.join("fixture.rs");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(&live_target, b"true\n").unwrap();
+    let runner = NativeMutationRunner::new(
+        2,
+        Some("sh -c 'mv nested nested.detached; mkdir nested; printf outside > nested/fixture.rs; printf changed > nested.detached/fixture.rs'".to_string()),
+    );
+
+    let result = runner.run_baseline(Path::new("nested/fixture.rs"), Path::new(&root));
+
+    assert_eq!(result.outcome, BaselineOutcome::RunnerError);
+    assert!(result.diagnostic.contains("parent identity changed"));
+    assert_eq!(std::fs::read(&live_target).unwrap(), b"outside");
+    assert_eq!(
+        std::fs::read(detached.join("fixture.rs")).unwrap(),
+        b"changed"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn rollback_refuses_detached_parent_and_does_not_write_old_directory() {
     let root = fs::tempdir("mutation-runner-detached-parent");
     let nested = root.join("nested");

@@ -122,6 +122,7 @@ fn open_parent(root_fd: &File, relative: &Path, path: &Path) -> io::Result<File>
     }
 }
 
+#[cfg(target_os = "linux")]
 fn openat2_checked(
     base: &File,
     relative: &Path,
@@ -139,6 +140,7 @@ fn openat2_checked(
     .map(Into::into)
 }
 
+#[cfg(target_os = "linux")]
 fn descriptor_open_error(path: &Path, part: &Path, error: rustix::io::Errno) -> io::Error {
     if error == rustix::io::Errno::NOSYS {
         io::Error::new(

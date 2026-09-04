@@ -1,7 +1,9 @@
 use super::super::js::TestSelection;
 use super::super::process::{CommandExecution, baseline_outcome, execute_with_timeout};
 use super::plan::process_roots;
-use super::restore::{SourceSnapshot, snapshot_protected_file, verify_and_restore};
+use super::restore::{
+    RestoreLocation, SourceSnapshot, snapshot_protected_location, verify_and_restore,
+};
 use super::{BaselineExecutionResult, BaselineOutcome, NativeMutationRunner};
 use crate::engines::process::append_output;
 use std::io;
@@ -17,6 +19,7 @@ pub(crate) struct BaselineSources {
 
 struct ProtectedSource {
     path: PathBuf,
+    location: RestoreLocation,
     snapshot: SourceSnapshot,
 }
 
@@ -33,8 +36,12 @@ pub(crate) fn snapshot_baseline_sources(
         {
             continue;
         }
-        let snapshot = snapshot_protected_file(&path, root)?;
-        entries.push(ProtectedSource { path, snapshot });
+        let (location, snapshot) = snapshot_protected_location(&path, root)?;
+        entries.push(ProtectedSource {
+            path,
+            location,
+            snapshot,
+        });
     }
     if entries.is_empty() {
         return Err(io::Error::new(
@@ -130,7 +137,7 @@ pub(crate) fn baseline_integrity(
     let mut outcome = baseline_outcome(&execution);
     let mut diagnostic = execution.diagnostic;
     for source in &protected.entries {
-        match verify_and_restore(&source.path, root, &source.snapshot) {
+        match verify_and_restore(&source.location, &source.path, root, &source.snapshot) {
             Ok(false) => {}
             Ok(true) => {
                 outcome = super::BaselineOutcome::RunnerError;
@@ -163,7 +170,7 @@ pub(crate) fn baseline_integrity(
 pub(crate) fn baseline_preflight(root: &Path, protected: &BaselineSources) -> Option<String> {
     let mut diagnostic = String::new();
     for source in &protected.entries {
-        match verify_and_restore(&source.path, root, &source.snapshot) {
+        match verify_and_restore(&source.location, &source.path, root, &source.snapshot) {
             Ok(false) => {}
             Ok(true) => append_diagnostic(
                 &mut diagnostic,

@@ -30,18 +30,6 @@ pub(super) struct FileIdentity {
     pub(super) mode: u32,
 }
 
-pub(super) fn snapshot_regular_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        unix::snapshot_regular_file(path, root)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (path, root);
-        Err(unsupported_platform_error())
-    }
-}
-
 /// Open a trusted, descriptor-relative target location. The returned handle
 /// keeps the validated repository root and parent directory alive so callers
 /// can verify and replace the same directory entry without a second path
@@ -135,9 +123,23 @@ pub(super) fn atomic_replace_location(
     }
 }
 
-/// Snapshot a protected baseline target and reject pre-existing hardlinks.
-pub(super) fn snapshot_protected_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
-    let snapshot = snapshot_regular_file(path, root)?;
+/// Open and snapshot a protected baseline target, retaining the descriptor
+/// location so later checks cannot silently follow a replaced parent.
+pub(super) fn snapshot_protected_location(
+    path: &Path,
+    root: &Path,
+) -> io::Result<(RestoreLocation, SourceSnapshot)> {
+    let location = open_location(path, root)?;
+    verify_live_path(&location, path, root)?;
+    let snapshot = snapshot_location(&location)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "protected mutation target '{}' does not exist",
+                path.display()
+            ),
+        )
+    })?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if snapshot.identity.links > 1 {
         return Err(io::Error::new(
@@ -149,31 +151,31 @@ pub(super) fn snapshot_protected_file(path: &Path, root: &Path) -> io::Result<So
             ),
         ));
     }
-    Ok(snapshot)
+    Ok((location, snapshot))
 }
 
 pub(super) fn verify_and_restore(
+    location: &RestoreLocation,
     path: &Path,
     root: &Path,
     original: &SourceSnapshot,
 ) -> io::Result<bool> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let location = open_location(path, root)?;
-        verify_live_path(&location, path, root)?;
-        let current = snapshot_location(&location)?;
+        verify_live_path(location, path, root)?;
+        let current = snapshot_location(location)?;
         let changed = match current {
             None => true,
             Some(current) => !same_snapshot(&current, original),
         };
         if changed {
-            restore_location(&location, original, None)?;
+            restore_location(location, original, None)?;
         }
         Ok(changed)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (path, root, original);
+        let _ = (location, path, root, original);
         Err(unsupported_platform_error())
     }
 }

@@ -28,11 +28,6 @@ impl<'a> LocationContext<'a> {
 }
 pub(super) use location::{TargetLocation, verify_live_location};
 
-pub(super) fn snapshot_regular_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
-    let location = TargetLocation::open(path, root)?;
-    Ok(read_location(&location)?.snapshot)
-}
-
 pub(super) fn open_location(path: &Path, root: &Path) -> io::Result<TargetLocation> {
     TargetLocation::open(path, root)
 }
