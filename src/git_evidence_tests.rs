@@ -137,9 +137,9 @@ fn parse_diff_path_handles_null_quoted_and_escaped_paths() {
 #[test]
 fn parse_diff_path_rejects_prefix_trailing_and_escape_errors() {
     for (value, prefix, message) in [
-        ("src/lib.rs", "a/", "lacked prefix"),
+        ("src/lib.rs", "a/", "lacked `a/` prefix"),
         (r#""a/src/lib.rs"x"#, "a/", "malformed quoted diff path"),
-        (r#""a/src/lib.rs"#, "a/", "unterminated quoted path"),
+        (r#""a/src/lib.rs"#, "a/", "unterminated quoted diff path"),
         (r#""a/src/\q.rs""#, "a/", "unknown quoted path escape"),
         ("\"a/src/lib.rs\\", "a/", "incomplete quoted path escape"),
         (r#""a/src/\777.rs""#, "a/", "octal escape overflowed"),
