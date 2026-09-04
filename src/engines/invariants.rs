@@ -256,9 +256,10 @@ fn expand_import_candidates(import: &str) -> Vec<String> {
     if base.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![base.clone()];
+    let mut out = Vec::new();
     push_brace_expansions(&base, &mut out);
     push_comma_expansions(&base, &mut out);
+    out.push(base);
     out
 }
 

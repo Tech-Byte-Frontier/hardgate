@@ -48,6 +48,7 @@ fn hash_comments_ignore_strings_and_preserve_rust_attributes() {
         "value = `# not a comment` "
     );
     assert_eq!(strip_line_comment("# shell comment"), "");
+    assert_eq!(strip_line_comment("#!/usr/bin/env python"), "");
     assert_eq!(strip_line_comment("value // trailing"), "value ");
 
     // Rust attributes are code, not hash comments. These assertions document
