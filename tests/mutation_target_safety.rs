@@ -288,6 +288,7 @@ fn diff_scoped_unchanged_source_file_is_a_noop() {
         "pub fn accepts(value: bool) -> bool { value == true }\n",
     );
     init_repo(&root);
+    commit_baseline(&root, "baseline");
 
     let output = run_mutate(&root, Some(Path::new("src/lib.rs")), true);
 
@@ -309,6 +310,7 @@ fn diff_scoped_changed_source_file_is_selected() {
         "pub fn accepts(value: bool) -> bool { value == true }\n",
     );
     init_repo(&root);
+    commit_baseline(&root, "baseline");
     write(
         &root,
         "src/lib.rs",
@@ -331,6 +333,7 @@ fn diff_scoped_non_source_file_remains_an_error() {
     write(&root, "hardgate.toml", MUTATION_CONFIG);
     write(&root, "tests/example.rs", "#[test] fn example() {}\n");
     init_repo(&root);
+    commit_baseline(&root, "baseline");
     write(
         &root,
         "tests/example.rs",
@@ -352,6 +355,7 @@ fn diff_scoped_missing_file_is_an_error() {
     let root = FixtureRoot::new("mutation-target-diff-missing");
     write(&root, "hardgate.toml", MUTATION_CONFIG);
     init_repo(&root);
+    commit_baseline(&root, "baseline");
 
     let output = run_mutate(&root, Some(Path::new("src/missing.rs")), true);
 
@@ -378,6 +382,7 @@ fn diff_scoped_directory_intersects_changed_production_sources() {
         "pub fn changed(value: bool) -> bool { value == true }\n",
     );
     init_repo(&root);
+    commit_baseline(&root, "baseline");
     write(
         &root,
         "src/changed.rs",
@@ -404,6 +409,7 @@ fn diff_scoped_unchanged_directory_is_a_noop() {
         "pub fn accepts(value: bool) -> bool { value == true }\n",
     );
     init_repo(&root);
+    commit_baseline(&root, "baseline");
 
     let output = run_mutate(&root, Some(Path::new("src")), true);
 
