@@ -382,6 +382,16 @@ fn analyze_function_node(node: Node, ctx: &ParseContext) -> Option<FunctionMetri
 }
 
 fn extract_function_name(node: Node, source: &[u8], lang: SupportedLanguage) -> Option<String> {
+    if (lang == SupportedLanguage::TypeScript
+        || lang == SupportedLanguage::Tsx
+        || lang == SupportedLanguage::JavaScript)
+        && node.kind() == "arrow_function"
+    {
+        return Some(
+            extract_declarator_name(node, source).unwrap_or_else(|| "anonymous".to_string()),
+        );
+    }
+
     for i in 0..node.child_count() {
         let Some(child) = node.child(i) else { continue };
         if is_name_identifier(child.kind()) {

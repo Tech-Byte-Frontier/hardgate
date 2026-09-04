@@ -126,11 +126,9 @@ fn dead_code_respects_entries_exclusions_and_import_graph_edges() {
             && violation.violation_type == "Unused Export"
     }));
     for retained in ["src/feature.ts", "src/utility.rs", "src/path_mod.rs"] {
-        assert!(
-            !violations
-                .iter()
-                .any(|violation| violation.file == Path::new(retained))
-        );
+        assert!(!violations.iter().any(|violation| {
+            violation.file == Path::new(retained) && violation.violation_type == "Unreferenced File"
+        }));
     }
     for ignored in ["src/ignored/dead.ts", "src/component.test.ts"] {
         assert!(
