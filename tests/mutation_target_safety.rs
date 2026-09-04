@@ -81,6 +81,54 @@ fn diagnostic(output: &Output) -> String {
     )
 }
 
+fn unchanged_diff_fixture(prefix: &str) -> FixtureRoot {
+    let root = FixtureRoot::new(prefix);
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == true }\n",
+    );
+    init_repo(&root);
+    commit_baseline(&root, "baseline");
+    root
+}
+
+fn changed_diff_fixture(
+    prefix: &str,
+    baseline_files: &[(&str, &str)],
+    changed_path: &str,
+    changed_contents: &str,
+) -> FixtureRoot {
+    let root = FixtureRoot::new(prefix);
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    for &(path, contents) in baseline_files {
+        write(&root, path, contents);
+    }
+    init_repo(&root);
+    commit_baseline(&root, "baseline");
+    write(&root, changed_path, changed_contents);
+    root
+}
+
+fn assert_diff_noop(output: &Output) {
+    assert!(output.status.success(), "{}", diagnostic(output));
+    assert!(
+        diagnostic(output).contains("no-op"),
+        "{}",
+        diagnostic(output)
+    );
+}
+
+fn assert_one_changed_source_selected(output: &Output) {
+    assert!(output.status.success(), "{}", diagnostic(output));
+    assert!(
+        diagnostic(output).contains("across 1 source files"),
+        "{}",
+        diagnostic(output)
+    );
+}
+
 #[test]
 fn full_mutation_without_targets_fails_but_diff_is_an_explicit_noop() {
     let root = FixtureRoot::new("mutation-target-empty");
@@ -280,51 +328,28 @@ fn valid_in_root_file_and_directory_scopes_are_accepted() {
 
 #[test]
 fn diff_scoped_unchanged_source_file_is_a_noop() {
-    let root = FixtureRoot::new("mutation-target-diff-unchanged-file");
-    write(&root, "hardgate.toml", MUTATION_CONFIG);
-    write(
-        &root,
-        "src/lib.rs",
-        "pub fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    init_repo(&root);
-    commit_baseline(&root, "baseline");
+    let root = unchanged_diff_fixture("mutation-target-diff-unchanged-file");
 
     let output = run_mutate(&root, Some(Path::new("src/lib.rs")), true);
 
-    assert!(output.status.success(), "{}", diagnostic(&output));
-    assert!(
-        diagnostic(&output).contains("no-op"),
-        "{}",
-        diagnostic(&output)
-    );
+    assert_diff_noop(&output);
 }
 
 #[test]
 fn diff_scoped_changed_source_file_is_selected() {
-    let root = FixtureRoot::new("mutation-target-diff-changed-file");
-    write(&root, "hardgate.toml", MUTATION_CONFIG);
-    write(
-        &root,
-        "src/lib.rs",
-        "pub fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    init_repo(&root);
-    commit_baseline(&root, "baseline");
-    write(
-        &root,
+    let root = changed_diff_fixture(
+        "mutation-target-diff-changed-file",
+        &[(
+            "src/lib.rs",
+            "pub fn accepts(value: bool) -> bool { value == true }\n",
+        )],
         "src/lib.rs",
         "pub fn accepts(value: bool) -> bool { value == false }\n",
     );
 
     let output = run_mutate(&root, Some(Path::new("src/lib.rs")), true);
 
-    assert!(output.status.success(), "{}", diagnostic(&output));
-    assert!(
-        diagnostic(&output).contains("across 1 source files"),
-        "{}",
-        diagnostic(&output)
-    );
+    assert_one_changed_source_selected(&output);
 }
 
 #[test]
@@ -369,54 +394,32 @@ fn diff_scoped_missing_file_is_an_error() {
 
 #[test]
 fn diff_scoped_directory_intersects_changed_production_sources() {
-    let root = FixtureRoot::new("mutation-target-diff-directory");
-    write(&root, "hardgate.toml", MUTATION_CONFIG);
-    write(
-        &root,
-        "src/unchanged.rs",
-        "pub fn unchanged(value: bool) -> bool { value == true }\n",
-    );
-    write(
-        &root,
-        "src/changed.rs",
-        "pub fn changed(value: bool) -> bool { value == true }\n",
-    );
-    init_repo(&root);
-    commit_baseline(&root, "baseline");
-    write(
-        &root,
+    let root = changed_diff_fixture(
+        "mutation-target-diff-directory",
+        &[
+            (
+                "src/unchanged.rs",
+                "pub fn unchanged(value: bool) -> bool { value == true }\n",
+            ),
+            (
+                "src/changed.rs",
+                "pub fn changed(value: bool) -> bool { value == true }\n",
+            ),
+        ],
         "src/changed.rs",
         "pub fn changed(value: bool) -> bool { value == false }\n",
     );
 
     let output = run_mutate(&root, Some(Path::new("src")), true);
 
-    assert!(output.status.success(), "{}", diagnostic(&output));
-    assert!(
-        diagnostic(&output).contains("across 1 source files"),
-        "{}",
-        diagnostic(&output)
-    );
+    assert_one_changed_source_selected(&output);
 }
 
 #[test]
 fn diff_scoped_unchanged_directory_is_a_noop() {
-    let root = FixtureRoot::new("mutation-target-diff-unchanged-directory");
-    write(&root, "hardgate.toml", MUTATION_CONFIG);
-    write(
-        &root,
-        "src/lib.rs",
-        "pub fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    init_repo(&root);
-    commit_baseline(&root, "baseline");
+    let root = unchanged_diff_fixture("mutation-target-diff-unchanged-directory");
 
     let output = run_mutate(&root, Some(Path::new("src")), true);
 
-    assert!(output.status.success(), "{}", diagnostic(&output));
-    assert!(
-        diagnostic(&output).contains("no-op"),
-        "{}",
-        diagnostic(&output)
-    );
+    assert_diff_noop(&output);
 }

@@ -27,6 +27,17 @@ fn source_root(tag: &str, contents: &[u8]) -> PathBuf {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn detached_parent_fixture(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = fs::tempdir(tag);
+    let nested = root.join("nested");
+    let detached = root.join("nested.detached");
+    let live_target = nested.join("fixture.rs");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(&live_target, b"true\n").unwrap();
+    (root, nested, detached, live_target)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_restore_case(root: &Path, command: &str) -> (PathBuf, MutantExecutionResult) {
     let outside = root.join("outside.txt");
     std::fs::write(&outside, b"outside\n").unwrap();
@@ -164,12 +175,8 @@ fn restoration_refuses_symlinked_ancestor_without_touching_external_file() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn baseline_refuses_detached_parent_without_restoring_live_replacement() {
-    let root = fs::tempdir("mutation-runner-baseline-detached-parent");
-    let nested = root.join("nested");
-    let detached = root.join("nested.detached");
-    let live_target = nested.join("fixture.rs");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(&live_target, b"true\n").unwrap();
+    let (root, nested, detached, live_target) =
+        detached_parent_fixture("mutation-runner-baseline-detached-parent");
     let runner = NativeMutationRunner::new(
         2,
         Some("sh -c 'mv nested nested.detached; mkdir nested; printf outside > nested/fixture.rs; printf changed > nested.detached/fixture.rs'".to_string()),
@@ -190,12 +197,8 @@ fn baseline_refuses_detached_parent_without_restoring_live_replacement() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn rollback_refuses_detached_parent_and_does_not_write_old_directory() {
-    let root = fs::tempdir("mutation-runner-detached-parent");
-    let nested = root.join("nested");
-    let detached = root.join("nested.detached");
-    let live_target = nested.join("fixture.rs");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(&live_target, b"true\n").unwrap();
+    let (root, nested, detached, live_target) =
+        detached_parent_fixture("mutation-runner-detached-parent");
     let command =
         "sh -c 'mv nested nested.detached; mkdir nested; printf outside > nested/fixture.rs'";
     let runner = NativeMutationRunner::new(2, Some(command.to_string()));
