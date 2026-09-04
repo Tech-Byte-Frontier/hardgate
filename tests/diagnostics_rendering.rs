@@ -16,11 +16,13 @@ fn contribution(line: usize, score: u32, description: &str) -> ComplexityContrib
     }
 }
 
-fn every_category_report() -> GateReport {
-    let mut report = GateReport::new("diagnostics".to_string());
+fn add_advisory(report: &mut GateReport) {
     report
         .advisories
         .push("advisory evidence is visible to every human renderer".to_string());
+}
+
+fn add_suppression(report: &mut GateReport) {
     report.suppression_violations.push(SuppressionViolation {
         file: PathBuf::from("src/main.rs"),
         line_number: 4,
@@ -28,6 +30,9 @@ fn every_category_report() -> GateReport {
         line_content: "#[allow(dead_code)]".to_string(),
         message: "suppression is prohibited".to_string(),
     });
+}
+
+fn add_complexity(report: &mut GateReport) {
     report.complexity_violations.push(ComplexityViolation {
         file: PathBuf::from("src/flow.rs"),
         function_name: "route_request".to_string(),
@@ -54,6 +59,9 @@ fn every_category_report() -> GateReport {
         message: "complexity exceeds the configured budget".to_string(),
         recommendation: "Split the parser into helpers.".to_string(),
     });
+}
+
+fn add_budget(report: &mut GateReport) {
     report.budget_violations.push(BudgetViolation {
         file: PathBuf::from("src/large.rs"),
         metric: "Physical Lines (.rs)".to_string(),
@@ -61,6 +69,9 @@ fn every_category_report() -> GateReport {
         limit: 400,
         message: "file exceeds its physical budget".to_string(),
     });
+}
+
+fn add_invariant(report: &mut GateReport) {
     report.invariant_violations.push(InvariantViolation {
         file: PathBuf::from("src/ui/view.tsx"),
         line_number: 8,
@@ -70,6 +81,9 @@ fn every_category_report() -> GateReport {
         line_content: "import { client } from 'db/client';".to_string(),
         message: "UI code cannot import the database layer".to_string(),
     });
+}
+
+fn add_clone(report: &mut GateReport) {
     report.clone_violations.push(CloneViolation {
         file_a: PathBuf::from("src/a.rs"),
         lines_a: (2, 9),
@@ -81,6 +95,9 @@ fn every_category_report() -> GateReport {
         message: "duplicated token window".to_string(),
         recommendation: "Extract the shared helper.".to_string(),
     });
+}
+
+fn add_coverage(report: &mut GateReport) {
     report.coverage_violations.push(CoverageViolation {
         file: PathBuf::from("src/flow.rs"),
         function_name: Some("route_request".to_string()),
@@ -99,6 +116,9 @@ fn every_category_report() -> GateReport {
         message: "branch floor is not met".to_string(),
         recommendation: "Exercise both sides of each branch.".to_string(),
     });
+}
+
+fn add_mutation(report: &mut GateReport) {
     report.mutation_violations.push(MutationViolation {
         report_file: PathBuf::from("target/mutants.json"),
         metric: "Mutation Score".to_string(),
@@ -107,6 +127,9 @@ fn every_category_report() -> GateReport {
         message: "surviving mutants remain".to_string(),
         recommendation: "Add assertions that kill the survivors.".to_string(),
     });
+}
+
+fn add_dead_code(report: &mut GateReport) {
     report.dead_code_violations.push(DeadCodeViolation {
         file: PathBuf::from("src/orphan.ts"),
         line_number: Some(3),
@@ -123,6 +146,9 @@ fn every_category_report() -> GateReport {
         message: "file is not part of the active graph".to_string(),
         recommendation: "Delete the file or import it.".to_string(),
     });
+}
+
+fn add_orchestration(report: &mut GateReport) {
     report
         .orchestration_violations
         .push(OrchestrationViolation {
@@ -141,6 +167,20 @@ fn every_category_report() -> GateReport {
             output: "process terminated without an exit code".to_string(),
             recommendation: "Rerun the test command and inspect its output.".to_string(),
         });
+}
+
+fn every_category_report() -> GateReport {
+    let mut report = GateReport::new("diagnostics".to_string());
+    add_advisory(&mut report);
+    add_suppression(&mut report);
+    add_complexity(&mut report);
+    add_budget(&mut report);
+    add_invariant(&mut report);
+    add_clone(&mut report);
+    add_coverage(&mut report);
+    add_mutation(&mut report);
+    add_dead_code(&mut report);
+    add_orchestration(&mut report);
     report.finalize(7, 13, 17);
     report
 }
