@@ -460,7 +460,7 @@ fn generated_presets_and_runtime_defaults_have_matching_semantics() {
 }
 
 #[test]
-fn removed_timeout_knob_cannot_weaken_mutation_evidence() {
+fn removed_timeout_knob_is_rejected_instead_of_ignored() {
     assert!(!HardgateConfig::generate_toml_template(Preset::Custom).contains("reject_timeouts"));
     let root = fs::tempdir("custom-mutation-default");
     let path = root.join("hardgate.toml");
@@ -469,13 +469,10 @@ fn removed_timeout_knob_cannot_weaken_mutation_evidence() {
         "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\nreject_timeouts = false\n",
     )
     .unwrap();
-    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
-    assert!(config.mutation.enabled);
-    let report = root.join("timeout.json");
-    std::fs::write(&report, r#"{"killed":1,"timeout":1}"#).unwrap();
-    let violations = hardgate::engines::MutationGatekeeper::new(&config.mutation)
-        .evaluate_report(&report)
-        .unwrap();
-    assert!(violations.iter().any(|v| v.metric == "Mutation Timeouts"));
+    let error = HardgateConfig::load_or_default(Some(&path)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("reject_timeouts"),
+        "{error:#}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

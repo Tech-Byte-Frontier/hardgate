@@ -55,6 +55,16 @@ function assertPinnedPackageManagers() {
   }
 }
 
+function assertReactFixtureCoverage() {
+  const fixture = path.join(root, "tests/fixtures/consumers/vite-react-vitest");
+  const source = fs.readFileSync(path.join(fixture, "src/App.tsx"), "utf8");
+  const test = fs.readFileSync(path.join(fixture, "src/App.test.tsx"), "utf8");
+  for (const marker of ["useReducer", "counterReducer", "count === 0 ?", "onClick={() =>"]) {
+    assert.ok(source.includes(marker), `React fixture must cover ${marker}`);
+  }
+  assert.ok(test.includes('counterReducer(1, "increment")'), "React reducer fixture must be asserted");
+}
+
 function emptyReport(overrides = {}) {
   const report = {
     gate_name: "negative-fixture", files_scanned: 1, functions_analyzed: 1, duration_ms: 0, passed: true,
@@ -263,6 +273,7 @@ assert.doesNotThrow(() => { report = JSON.parse(result.stdout); }, "matrix outpu
 assertKeys(report, ["binary", "cases", "summary"], "matrix");
 assertKeys(report.summary, ["pass", "pending", "fail"], "matrix summary");
 assert.deepEqual(CONSUMER_CASE_IDS, expectedIds, "consumer case IDs must remain exact");
+assertReactFixtureCoverage();
 assert.equal(report.cases.length, expectedIds.length, "matrix must cover every stabilization case exactly once");
 assert.deepEqual(report.cases.map((item) => item.id), expectedIds, "matrix case order must remain deterministic");
 for (const item of report.cases) {

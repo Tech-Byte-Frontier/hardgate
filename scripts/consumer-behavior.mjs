@@ -34,7 +34,14 @@ function execute(source, behavior) {
 
 export function evaluateBehavior(source, test, behavior) {
   if (typeof behavior.testNeedle !== "string" || !test.includes(behavior.testNeedle)) {
-    return { actual: null, passed: false, reason: "selected test assertion was not found" };
+    return withFailureEvidence({ actual: null, passed: false, reason: "selected test assertion was not found" });
   }
-  return execute(source, behavior);
+  return withFailureEvidence(execute(source, behavior));
+}
+
+function withFailureEvidence(result) {
+  if (!result.passed && process.env.CONSUMER_LOG) {
+    process.stderr.write(`AssertionError: ${result.reason ?? "consumer behavior mismatch"}\n`);
+  }
+  return result;
 }

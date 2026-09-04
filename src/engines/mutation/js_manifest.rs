@@ -158,18 +158,28 @@ fn parse_framework_hints(object: &serde_json::Map<String, Value>) -> (Option<Tes
 }
 
 fn parse_workspaces(value: Option<&Value>, manifest: &Path) -> Result<Option<Vec<String>>> {
-    let entries = match value {
-        Some(Value::Array(entries)) => Some(entries.as_slice()),
-        Some(Value::Object(object)) => object
-            .get("packages")
-            .and_then(Value::as_array)
-            .map(|entries| entries.as_slice()),
-        _ => None,
-    };
-    let Some(entries) = entries else {
+    let Some(value) = value else {
         return Ok(None);
     };
-    let Some(patterns) = entries
+    let entries = match value {
+        Value::Array(entries) => entries.as_slice(),
+        Value::Object(object) => object
+            .get("packages")
+            .and_then(Value::as_array)
+            .with_context(|| {
+                format!(
+                    "JavaScript package manifest `{}` has an invalid `workspaces.packages` field",
+                    manifest.display()
+                )
+            })?,
+        _ => {
+            bail!(
+                "JavaScript package manifest `{}` has an invalid `workspaces` field",
+                manifest.display()
+            )
+        }
+    };
+    let patterns = entries
         .iter()
         .map(Value::as_str)
         .map(|pattern| pattern.map(str::trim))
@@ -177,9 +187,12 @@ fn parse_workspaces(value: Option<&Value>, manifest: &Path) -> Result<Option<Vec
         .filter(|patterns| {
             !patterns.is_empty() && patterns.iter().all(|pattern| !pattern.is_empty())
         })
-    else {
-        return Ok(None);
-    };
+        .with_context(|| {
+            format!(
+                "JavaScript package manifest `{}` must declare non-empty string workspace patterns",
+                manifest.display()
+            )
+        })?;
     validate_workspace_patterns(&patterns).with_context(|| {
         format!(
             "JavaScript package manifest `{}` has invalid workspace pattern",

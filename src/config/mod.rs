@@ -223,6 +223,7 @@ pub struct CoverageConfig {
 
 /// Mutation testing policy: kill-rate floor, timeout handling, and runner tuning.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct MutationConfig {
     #[serde(default)]
     pub enabled: bool,

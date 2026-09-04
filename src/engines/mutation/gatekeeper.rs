@@ -108,8 +108,9 @@ impl MutationGatekeeper {
             );
         }
 
-        // Timeouts are always blocking evidence failures. `reject_timeouts` is
-        // retained for configuration compatibility, but cannot weaken P0.
+        // Timeouts are always blocking evidence failures. The removed
+        // `reject_timeouts` setting is rejected while loading configuration,
+        // so no compatibility path can weaken this P0 rule.
         for spec in [
             IntegritySpec {
                 metric: "Mutation Timeouts",

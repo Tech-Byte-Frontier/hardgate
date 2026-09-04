@@ -273,11 +273,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
-    fn invalid_package_workspaces_shapes_do_not_create_boundaries() {
+    fn invalid_package_workspaces_shapes_fail_closed() {
         for (label, workspaces) in [
             ("boolean", "true"),
             ("null", "null"),
             ("empty-array", "[]"),
+            ("object-missing", "{}"),
             ("object-string", r#"{"packages":"packages/*"}"#),
             ("object-empty", r#"{"packages":[]}"#),
             ("array-number", "[1]"),
@@ -289,9 +290,12 @@ mod tests {
             );
             write(&root, "packages/app/package.json", r#"{"name":"app"}"#);
             write_app(&root, "src/value.ts", "export const value = true;\n");
-            let value =
-                resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root).unwrap();
-            assert_eq!(value.workspace_root, root.join("packages/app"), "{label}");
+            let error = resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root)
+                .expect_err("malformed workspace metadata must fail closed");
+            assert!(
+                error.to_string().contains("workspace"),
+                "{label}: {error:#}"
+            );
             let _ = std::fs::remove_dir_all(root);
         }
     }

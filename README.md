@@ -102,6 +102,12 @@ cd hardgate
 cargo install --path . --locked
 ```
 
+Hardgate v0.5.0 requires Rust 1.98.1 when installed from source. It is a
+pre-1.0 compatibility release, not a patch: configuration, public Rust APIs,
+CLI evidence behavior, and supported distribution targets changed from
+v0.4.2. See [the v0.5.0 migration notes](CHANGELOG.md#050) before upgrading a
+library integration or an existing policy file.
+
 ### Shell installer
 
 The v0.5.0 release installer contract supports exactly the six Linux/macOS targets listed above (Linux x64/arm64 glibc and musl, macOS x64/arm64). It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects the libc and takes precedence over automatic detection. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
