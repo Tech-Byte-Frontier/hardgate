@@ -122,7 +122,7 @@ includesAll(release, [
   "node tests/release_contract.install.test.mjs",
   "node tests/release_contract.package.test.mjs",
   "node tests/release_contract.abi.test.mjs",
-  "node scripts/check-consumer-matrix.mjs",
+  "node tests/consumer_matrix.mjs",
   "HARDGATE_BINARY: target/release/hardgate",
   "git cat-file -t \"$RELEASE_TAG\"",
   "fail-fast: true",

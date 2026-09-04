@@ -1,7 +1,10 @@
 #[path = "support/fs.rs"]
 mod fs;
+#[path = "common/fs_git.rs"]
+mod fs_git;
 
 use fs::tempdir;
+use fs_git::{commit_baseline, init_repo, write};
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -12,37 +15,6 @@ fn run(root: &Path, args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("hardgate binary should run")
-}
-
-fn write(root: &Path, path: &str, content: &str) {
-    let target = root.join(path);
-    target
-        .parent()
-        .map(std::fs::create_dir_all)
-        .transpose()
-        .unwrap();
-    std::fs::write(&target, content).unwrap();
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let ok = Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok, "git {args:?} failed");
-}
-
-fn init_repo(root: &Path) {
-    for args in [
-        &["init", "-q"][..],
-        &["config", "user.email", "hardgate@example.invalid"][..],
-        &["config", "user.name", "Hardgate Test"][..],
-        &["config", "commit.gpgsign", "false"][..],
-    ] {
-        git(root, args);
-    }
 }
 
 fn json(output: &Output) -> Value {
@@ -109,8 +81,7 @@ min_line_percent = 90.0
     );
     write(&root, "src/lib.rs", baseline_source);
     init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
+    commit_baseline(&root, "baseline");
     write(&root, "src/lib.rs", current_source);
     write(&root, "coverage.info", coverage);
     root
@@ -137,8 +108,7 @@ ratchet = true
     write(&root, "hardgate.toml", &config);
     write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
     init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "malformed baseline"]);
+    commit_baseline(&root, "malformed baseline");
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     root
 }
@@ -429,8 +399,7 @@ ratchet = true
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
     write(&root, "src/unused.rs", "pub fn old_code() -> i32 { 1 }\n");
     init_repo(&root);
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "baseline"]);
+    commit_baseline(&root, "baseline");
 
     let report = successful_report(&root, "check");
     assert!(
