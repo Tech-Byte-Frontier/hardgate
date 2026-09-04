@@ -40,6 +40,10 @@ env:
   # wait below five minutes while allowing normal eventual-consistency lag.
   HARDGATE_REGISTRY_ATTEMPTS: 10
   HARDGATE_REGISTRY_DELAY: 10
+  # npm may accept a provenance-backed upload and explicitly process it for
+  # several minutes before the exact-version endpoint becomes visible. The
+  # 580s deadline plus one at-most-20s in-flight probe caps this at ten minutes.
+  HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS: 580
   HARDGATE_CRATES_IO_USER_AGENT: "hardgate-release (https://github.com/Tech-Byte-Frontier/hardgate)"
 
 jobs:
@@ -1001,7 +1005,8 @@ jobs:
             shift
             name="$1"
             wanted="$2"
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
+            while :; do
               if actual=$(npm_registry_probe "$name" "$wanted"); then
                 printf '%s\n' "$actual"
                 return 0
@@ -1014,10 +1019,16 @@ jobs:
                   2) ;;
                   *) return "$status" ;;
                 esac
-                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
+                  return "$status"
+                fi
+                remaining=$((deadline - SECONDS))
+                delay="$HARDGATE_REGISTRY_DELAY"
+                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
+                [ "$delay" -gt 0 ] && sleep "$delay"
               fi
             done
-            return "$status"
           }
           publish_platform() {
             pkg="$1"
@@ -1084,7 +1095,8 @@ jobs:
             shift
             name="$1"
             wanted="$2"
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
+            while :; do
               if actual=$(npm_registry_probe "$name" "$wanted"); then
                 printf '%s\n' "$actual"
                 return 0
@@ -1097,10 +1109,16 @@ jobs:
                   2) ;;
                   *) return "$status" ;;
                 esac
-                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
+                  return "$status"
+                fi
+                remaining=$((deadline - SECONDS))
+                delay="$HARDGATE_REGISTRY_DELAY"
+                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
+                [ "$delay" -gt 0 ] && sleep "$delay"
               fi
             done
-            return "$status"
           }
           if current=$(wait_for_registry_version 0 "@tech-byte-frontier/hardgate" "$wanted"); then
             test "$current" = "$wanted"
@@ -1257,7 +1275,8 @@ jobs:
             name="$1"
             wanted="$2"
             status=2
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
+            while :; do
               if actual=$(npm_latest_probe "$name"); then
                 if [ "$actual" = "$wanted" ]; then
                   printf '%s\n' "$actual"
@@ -1272,15 +1291,22 @@ jobs:
                   *) return "$status" ;;
                 esac
               fi
-              [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "npm dist-tags.latest for $name did not settle on $wanted within ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
+                return "$status"
+              fi
+              remaining=$((deadline - SECONDS))
+              delay="$HARDGATE_REGISTRY_DELAY"
+              if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
+              [ "$delay" -gt 0 ] && sleep "$delay"
             done
-            return "$status"
           }
           wait_for_registry_version() {
             retry_absent="$1"
             name="$2"
             wanted="$3"
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
+            while :; do
               if actual=$(npm_registry_probe "$name" "$wanted"); then
                 printf '%s\n' "$actual"
                 return 0
@@ -1293,10 +1319,16 @@ jobs:
                   2) ;;
                   *) return "$status" ;;
                 esac
-                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
+                  return "$status"
+                fi
+                remaining=$((deadline - SECONDS))
+                delay="$HARDGATE_REGISTRY_DELAY"
+                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
+                [ "$delay" -gt 0 ] && sleep "$delay"
               fi
             done
-            return "$status"
           }
           crate_probe() {
             api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"

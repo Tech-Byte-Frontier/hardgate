@@ -147,6 +147,7 @@ HARDGATE_CURL_CONNECT_TIMEOUT: 10
 HARDGATE_CURL_MAX_TIME: 20
 HARDGATE_REGISTRY_ATTEMPTS: 10
 HARDGATE_REGISTRY_DELAY: 10
+HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS: 580
 HARDGATE_CRATES_IO_USER_AGENT: "hardgate-release (https://github.com/Tech-Byte-Frontier/hardgate)"
 --user-agent "$HARDGATE_CRATES_IO_USER_AGENT"
 resume_run_id:
@@ -244,6 +245,13 @@ const registryDelay = Number(release.match(/HARDGATE_REGISTRY_DELAY:\s*(\d+)/)?.
 const curlMaxTime = Number(release.match(/HARDGATE_CURL_MAX_TIME:\s*(\d+)/)?.[1]);
 assert.ok(Number.isInteger(registryAttempts) && Number.isInteger(registryDelay) && Number.isInteger(curlMaxTime));
 assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDelay <= 300, "each registry wait must fit within five minutes");
+const npmVisibilityTimeout = Number(release.match(/HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS:\s*(\d+)/)?.[1]);
+assert.equal(npmVisibilityTimeout, 580, "npm visibility deadline must reserve one final HTTP probe inside ten minutes");
+assert.ok(npmVisibilityTimeout + curlMaxTime <= 600, "npm post-publish visibility must remain bounded by ten minutes");
+assert.equal((release.match(/deadline=\$\(\(SECONDS \+ HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS\)\)/g) ?? []).length, 4, "every npm version/latest wait must use the elapsed-time deadline");
+assert.equal((release.match(/remaining=\$\(\(deadline - SECONDS\)\)/g) ?? []).length, 4, "npm retry sleeps must stay within the elapsed-time deadline");
+assert.equal((release.match(/npm registry version \$name@\$wanted remained unavailable/g) ?? []).length, 3, "each npm visibility timeout must explain the unavailable package");
+assert.equal((release.match(/npm dist-tags\.latest for \$name did not settle on \$wanted/g) ?? []).length, 1, "latest-tag timeout must explain the unsettled npm channel");
 assert.match(release, /explicit gap before the identity probe[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
 assert.doesNotMatch(
