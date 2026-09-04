@@ -10,6 +10,10 @@ import {
   release,
 } from "./release_contract.sources.mjs";
 
+function assertWorkflowIncludes(text, label, snippets) {
+  includesAll(text, snippets.trim().split(/\r?\n/).map((snippet) => snippet.trim()), label);
+}
+
 // Every third-party action is immutable and carries a human-readable release
 // comment. A floating branch/tag is a supply-chain regression.
 for (const [label, text] of [["CI", ci], ["release", release]]) {
@@ -19,124 +23,132 @@ for (const [label, text] of [["CI", ci], ["release", release]]) {
   }
 }
 
-includesAll(ci, [
-  "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0",
-  "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b",
-  "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-  "cargo fmt --all --check",
-  "cargo clippy --all-targets --all-features --locked -- -D warnings",
-  "cargo test --all-targets --all-features --locked",
-  "scripts/dependency-audit.sh",
-  "scripts/self-gate.sh",
-  "CARGO_AUDIT_VERSION: 0.22.2",
-  "CARGO_LLVM_COV_VERSION: 0.9.0",
-  "RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04",
-  "NODE_VERSION: 26.8.1",
-  "NPM_VERSION: 12.0.2",
-  "PNPM_VERSION: 11.25.0",
-  "YARN_VERSION: 4.18.0",
-  "BUN_VERSION: 1.4.0",
-  "components: rustfmt, clippy, llvm-tools-preview",
-  "node scripts/check-npm-quality.mjs",
-  "node tests/npm-wrapper.test.mjs",
-  "node tests/npm-wrapper-regression.test.mjs",
-  "node tests/release_contract.install.test.mjs",
-  "node tests/release_contract.package.test.mjs",
-  "node tests/release_contract.abi.test.mjs",
-  "node tests/consumer_matrix.mjs",
-  "HARDGATE_BINARY: target/release/hardgate",
-], "CI");
-includesAll(release, [
-  "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0",
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-  "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b",
-  "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-  "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
-  "CARGO_AUDIT_VERSION: 0.22.2",
-  "CARGO_LLVM_COV_VERSION: 0.9.0",
-  "NODE_VERSION: 26.8.1",
-  "NPM_VERSION: 12.0.2",
-  "PNPM_VERSION: 11.25.0",
-  "YARN_VERSION: 4.18.0",
-  "BUN_VERSION: 1.4.0",
-  "cargo fmt --all --check",
-  "cargo clippy --all-targets --all-features --locked -- -D warnings",
-  "cargo test --all-targets --all-features --locked",
-  "scripts/dependency-audit.sh",
-  "scripts/self-gate.sh",
-  "node scripts/check-npm-quality.mjs",
-  "RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04",
-  "node tests/npm-wrapper.test.mjs",
-  "node tests/npm-wrapper-regression.test.mjs",
-  "node tests/release_contract.install.test.mjs",
-  "node tests/release_contract.package.test.mjs",
-  "node tests/release_contract.abi.test.mjs",
-  "node tests/consumer_matrix.mjs",
-  "HARDGATE_BINARY: target/release/hardgate",
-  "git cat-file -t \"$RELEASE_TAG\"",
-  "fail-fast: true",
-  "SOURCE_DATE_EPOCH=0",
-  "SHA256SUMS",
-  "sha256sum --check --strict",
-  "scripts/release-package.mjs",
-  "scripts/release-checksums.mjs",
-  "scripts/release-verify.mjs",
-  "scripts/verify-npm-publication.mjs",
-  "scripts/release-sbom.mjs",
-  "scripts/release-sbom-verify.mjs",
-  "scripts/sync-npm-version.mjs --check --tag",
-  "cargo publish --locked",
-  "https://crates.io/api/v1/crates/hardgate/",
-  'version"]["num',
-  "actions/attest",
-  "publish-crates",
-  "verify-channels:",
-  "hardgate-${RELEASE_VERSION}.sbom.cdx.json",
-  "already_published=0",
-  "crate_probe()",
-  "crate_version()",
-  "npm_registry_probe()",
-  "wait_for_registry_version()",
-  "wait_for_crate_version()",
-  'publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"',
-  'unset NODE_AUTH_TOKEN',
-  'NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public',
-  "return 2",
-  "404)",
-  "crates.io version probe failed; refusing to publish",
-  "npm registry version probe failed",
-  "gh release download",
-  "cmp --",
-  "wait_for_registry_version 1",
-  "wait_for_crate_version 1",
-  "cargo install hardgate --version \"=$RELEASE_VERSION\"",
-  "npm install --ignore-scripts",
-  "--package \"$pkg\"",
-  "env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs",
-  "Verify clean npm, pnpm, Yarn, and Bun consumers",
-  "pnpm add --ignore-scripts",
-  "yarn add",
-  "bun add",
-  "HARDGATE_INSTALL_DIR=\"$install_root\" sh scripts/install.sh",
-  "HARDGATE_CURL_CONNECT_TIMEOUT: 10",
-  "HARDGATE_CURL_MAX_TIME: 20",
-  "HARDGATE_REGISTRY_ATTEMPTS: 10",
-  "HARDGATE_REGISTRY_DELAY: 10",
-  "release_error=$(mktemp)",
-  "release_exists=0",
-  "unable to determine whether GitHub release",
-  "tagName,isDraft,isPrerelease",
-  "test \"$release_is_draft\" = false",
-  "test \"$release_is_prerelease\" = false",
-  "latest_release_tag=$(gh release view --json tagName --jq .tagName)",
-  "test \"$latest_release_tag\" = \"$RELEASE_TAG\"",
-  "npm_latest_probe()",
-  "wait_for_latest_tag()",
-  "[\"dist-tags\"][\"latest\"]",
-], "release");
+assertWorkflowIncludes(
+  ci,
+  "CI",
+  `
+actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b
+oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+cargo fmt --all --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+scripts/dependency-audit.sh
+scripts/self-gate.sh
+CARGO_AUDIT_VERSION: 0.22.2
+CARGO_LLVM_COV_VERSION: 0.9.0
+RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
+NODE_VERSION: 26.8.1
+NPM_VERSION: 12.0.2
+PNPM_VERSION: 11.25.0
+YARN_VERSION: 4.18.0
+BUN_VERSION: 1.4.0
+components: rustfmt, clippy, llvm-tools-preview
+node scripts/check-npm-quality.mjs
+node tests/npm-wrapper.test.mjs
+node tests/npm-wrapper-regression.test.mjs
+node tests/release_contract.install.test.mjs
+node tests/release_contract.package.test.mjs
+node tests/release_contract.abi.test.mjs
+node tests/consumer_matrix.mjs
+HARDGATE_BINARY: target/release/hardgate
+`,
+);
+assertWorkflowIncludes(
+  release,
+  "release",
+  `
+actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b
+oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+CARGO_AUDIT_VERSION: 0.22.2
+CARGO_LLVM_COV_VERSION: 0.9.0
+NODE_VERSION: 26.8.1
+NPM_VERSION: 12.0.2
+PNPM_VERSION: 11.25.0
+YARN_VERSION: 4.18.0
+BUN_VERSION: 1.4.0
+cargo fmt --all --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+scripts/dependency-audit.sh
+scripts/self-gate.sh
+node scripts/check-npm-quality.mjs
+RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
+node tests/npm-wrapper.test.mjs
+node tests/npm-wrapper-regression.test.mjs
+node tests/release_contract.install.test.mjs
+node tests/release_contract.package.test.mjs
+node tests/release_contract.abi.test.mjs
+node tests/consumer_matrix.mjs
+HARDGATE_BINARY: target/release/hardgate
+git cat-file -t "$RELEASE_TAG"
+fail-fast: true
+SOURCE_DATE_EPOCH=0
+SHA256SUMS
+sha256sum --check --strict
+scripts/release-package.mjs
+scripts/release-checksums.mjs
+scripts/release-verify.mjs
+scripts/verify-npm-publication.mjs
+scripts/release-sbom.mjs
+scripts/release-sbom-verify.mjs
+scripts/sync-npm-version.mjs --check --tag
+cargo publish --locked
+https://crates.io/api/v1/crates/hardgate/
+version"]["num
+actions/attest
+publish-crates
+verify-channels:
+hardgate-\${RELEASE_VERSION}.sbom.cdx.json
+already_published=0
+crate_probe()
+crate_version()
+npm_registry_probe()
+wait_for_registry_version()
+wait_for_crate_version()
+publish_token="\${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
+unset NODE_AUTH_TOKEN
+NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public
+return 2
+404)
+crates.io version probe failed; refusing to publish
+npm registry version probe failed
+gh release download
+cmp --
+wait_for_registry_version 1
+wait_for_crate_version 1
+cargo install hardgate --version "=$RELEASE_VERSION"
+npm install --ignore-scripts
+--package "$pkg"
+env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs
+Verify clean npm, pnpm, Yarn, and Bun consumers
+pnpm add --ignore-scripts
+yarn add
+bun add
+HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
+HARDGATE_CURL_CONNECT_TIMEOUT: 10
+HARDGATE_CURL_MAX_TIME: 20
+HARDGATE_REGISTRY_ATTEMPTS: 10
+HARDGATE_REGISTRY_DELAY: 10
+release_error=$(mktemp)
+release_exists=0
+unable to determine whether GitHub release
+tagName,isDraft,isPrerelease
+test "$release_is_draft" = false
+test "$release_is_prerelease" = false
+latest_release_tag=$(gh release view --json tagName --jq .tagName)
+test "$latest_release_tag" = "$RELEASE_TAG"
+npm_latest_probe()
+wait_for_latest_tag()
+["dist-tags"]["latest"]
+`,
+);
 
 const ciSelfGate = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
 const releaseQualityGate = release.slice(release.indexOf("  quality-gate:"), release.indexOf("  build:"));
