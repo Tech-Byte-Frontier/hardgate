@@ -2,12 +2,12 @@ use super::mutation_output::{MutationSummaryContext, render_mutation_output};
 use crate::config::HardgateConfig;
 use crate::discovery::{ClassifiedFile, DiscoverOptions, discover_files};
 use crate::engines::{
-    AstMutant, AstMutationGenerator, BaselineOutcome, MutantExecutionResult, MutantOutcome,
-    MutationStats, NativeMutationRunner,
+    AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
+    MutantExecutionResult, MutantOutcome, MutationStats, NativeMutationRunner,
 };
 use anyhow::{Context, Result, bail};
 use colored::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -23,6 +23,14 @@ pub struct MutateOptions {
     pub format: Option<String>,
 }
 
+struct MutationRun<'a> {
+    config: &'a HardgateConfig,
+    opts: &'a MutateOptions,
+    results: &'a [MutantExecutionResult],
+    stats: &'a MutationStats,
+    start_time: Instant,
+}
+
 /// Run native Tree-sitter AST mutation testing: generate mutants, execute the
 /// test suite per mutant with timeouts and RAII rollbacks, then report the
 /// kill score. Exits non-zero below the configured floor.
@@ -30,28 +38,56 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let start_time = Instant::now();
     let config = HardgateConfig::load_or_default(None)?;
     let root = Path::new(".");
-
     if !config.mutation.enabled {
-        println!(
-            "{} mutation testing is disabled by `[mutation].enabled = false`.",
-            "note:".green().bold()
-        );
+        print_disabled_mutation();
         return Ok(());
     }
-
     let target_files = discover_targets(&opts, &config, root)?;
     if target_files.is_empty() {
         print_no_targets(opts.diff);
         return Ok(());
     }
+    print_generation_notice(&target_files, opts.diff);
+    let test_cmd = opts
+        .test_cmd
+        .clone()
+        .or_else(|| config.mutation.test_cmd.clone());
+    let max_count = resolve_max_mutants(&opts, &config)?;
+    let timeout = resolve_timeout(&opts, &config, &target_files, root)?;
+    let runner = NativeMutationRunner::new(timeout, test_cmd);
+    run_unmutated_baselines(&runner, &target_files, root)?;
+    let mutants = generate_target_mutants(&target_files, max_count)?;
+    if mutants.is_empty() {
+        bail!("no viable AST mutation points were found in the selected production sources");
+    }
+    print_mutant_notice(mutants.len(), timeout);
+    let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
+    finish_mutation_run(MutationRun {
+        config: &config,
+        opts: &opts,
+        results: &results,
+        stats: &stats,
+        start_time,
+    })
+}
 
+fn print_disabled_mutation() {
+    println!(
+        "{} mutation testing is disabled by `[mutation].enabled = false`.",
+        "note:".green().bold()
+    );
+}
+
+fn print_generation_notice(files: &[PathBuf], diff: bool) {
     println!(
         "{} generating AST mutations across {} source files (diff: {})...",
         "note:".bold(),
-        target_files.len().to_string().cyan(),
-        opts.diff
+        files.len().to_string().cyan(),
+        diff
     );
+}
 
+fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<usize> {
     let max_count = opts
         .max_mutants
         .or(config.mutation.max_mutants)
@@ -59,54 +95,58 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     if max_count == 0 {
         bail!("mutation max_mutants must be greater than zero");
     }
+    Ok(max_count)
+}
 
+fn resolve_timeout(
+    opts: &MutateOptions,
+    config: &HardgateConfig,
+    files: &[PathBuf],
+    root: &Path,
+) -> Result<u64> {
+    let test_cmd = opts
+        .test_cmd
+        .as_deref()
+        .or(config.mutation.test_cmd.as_deref());
     let timeout = opts
         .timeout_secs
         .or(config.mutation.timeout_secs)
-        .unwrap_or(10);
+        .unwrap_or_else(|| NativeMutationRunner::default_timeout_secs(files, root, test_cmd));
     if timeout == 0 {
         bail!("mutation timeout_secs must be greater than zero");
     }
-    let test_cmd = opts
-        .test_cmd
-        .clone()
-        .or_else(|| config.mutation.test_cmd.clone());
-    let runner = NativeMutationRunner::new(timeout, test_cmd);
+    Ok(timeout)
+}
 
-    run_unmutated_baselines(&runner, &target_files, root)?;
-    let mutants = generate_target_mutants(&target_files, max_count)?;
-    if mutants.is_empty() {
-        bail!("no viable AST mutation points were found in the selected production sources");
-    }
-
+fn print_mutant_notice(count: usize, timeout: u64) {
     println!(
         "{} running {} mutants (timeout: {}s per mutant)...",
         "note:".bold(),
-        mutants.len().to_string().cyan(),
+        count.to_string().cyan(),
         timeout
     );
+}
 
-    let (results, stats) = run_mutant_batch(&mutants, &runner, root)?;
-    let score = stats.score_percent();
-    let min_score = config.mutation.min_score.unwrap_or(85.0);
-    let passed = mutation_run_passed(&stats, score, min_score);
-    let elapsed = start_time.elapsed().as_millis();
-
-    let summary_ctx = MutationSummaryContext {
-        stats: &stats,
-        results: &results,
-        score,
-        min_score,
-        passed,
-        elapsed,
-    };
-
-    render_mutation_output(&summary_ctx, opts.format.as_deref());
-
-    if !passed {
-        std::process::exit(1);
+fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
+    let score = run.stats.score_percent();
+    let min_score = run.config.mutation.min_score.unwrap_or(85.0);
+    let passed = mutation_run_passed(run.stats, score, min_score);
+    render_mutation_output(
+        &MutationSummaryContext {
+            stats: run.stats,
+            results: run.results,
+            score,
+            min_score,
+            passed,
+            elapsed: run.start_time.elapsed().as_millis(),
+        },
+        run.opts.format.as_deref(),
+    );
+    if passed {
+        Ok(())
+    } else {
+        std::process::exit(1)
     }
-    Ok(())
 }
 
 fn discover_targets(
@@ -167,8 +207,9 @@ fn run_unmutated_baselines(
 ) -> Result<()> {
     let mut commands = BTreeMap::new();
     for file in files {
+        let plan = runner.resolve_test_plan(file, root);
         commands
-            .entry(runner.resolve_test_command(file, root))
+            .entry((plan.working_dir, plan.command))
             .or_insert_with(|| file.clone());
     }
 
@@ -177,26 +218,37 @@ fn run_unmutated_baselines(
         "note:".bold(),
         commands.len().to_string().cyan()
     );
-    for (command, file) in commands {
+    for ((working_dir, command), file) in commands {
+        let plan = runner.resolve_test_plan(&file, root);
+        println!(
+            "   {} ({}) in {}",
+            command.dimmed(),
+            plan.selection.description().dimmed(),
+            working_dir.display()
+        );
         let result = runner.run_baseline(&file, root);
         if result.outcome == BaselineOutcome::Passed {
-            println!("   {} ... {}", command.dimmed(), "passed".green().bold());
+            println!("      ... {}", "passed".green().bold());
             continue;
         }
-        let diagnostic = if result.diagnostic.trim().is_empty() {
-            "no diagnostic output".to_string()
-        } else {
-            result.diagnostic
-        };
-        bail!(
-            "unmutated baseline {:?} for `{}` using `{}`:\n{}",
-            result.outcome,
-            file.display(),
-            result.command,
-            diagnostic
-        );
+        return Err(baseline_failure(&result, &file));
     }
     Ok(())
+}
+
+fn baseline_failure(result: &BaselineExecutionResult, file: &Path) -> anyhow::Error {
+    let diagnostic = if result.diagnostic.trim().is_empty() {
+        "no diagnostic output".to_string()
+    } else {
+        result.diagnostic.clone()
+    };
+    anyhow::anyhow!(
+        "unmutated baseline {:?} for `{}` using `{}`:\n{}",
+        result.outcome,
+        file.display(),
+        result.command,
+        diagnostic
+    )
 }
 
 fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
@@ -210,66 +262,108 @@ fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<As
     Ok(select_representative_mutants(all, max_count))
 }
 
-fn select_representative_mutants(
+pub fn select_representative_mutants(
     mut candidates: Vec<AstMutant>,
     max_count: usize,
 ) -> Vec<AstMutant> {
-    candidates.sort_by(|left, right| {
-        (
-            &left.file,
-            left.line,
-            left.column,
-            &left.original,
-            &left.replacement,
-        )
-            .cmp(&(
-                &right.file,
-                right.line,
-                right.column,
-                &right.original,
-                &right.replacement,
-            ))
-    });
-
-    let mut per_family_rank = BTreeMap::new();
-    let mut ranked = Vec::with_capacity(candidates.len());
+    let mut grouped: BTreeMap<PathBuf, BTreeMap<(String, String), Vec<AstMutant>>> =
+        BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    candidates.sort_by(mutant_order);
     for mutant in candidates {
-        let family = (
+        let identity = (
             mutant.file.clone(),
+            mutant.start_byte,
+            mutant.end_byte,
             mutant.original.clone(),
             mutant.replacement.clone(),
         );
-        let rank = per_family_rank.entry(family).or_insert(0_usize);
-        ranked.push((*rank, mutant));
-        *rank += 1;
+        if seen.insert(identity) {
+            grouped
+                .entry(mutant.file.clone())
+                .or_default()
+                .entry((mutant.original.clone(), mutant.replacement.clone()))
+                .or_default()
+                .push(mutant);
+        }
     }
-    ranked.sort_by(|(left_rank, left), (right_rank, right)| {
-        (
-            left_rank,
-            &left.file,
-            &left.original,
-            &left.replacement,
-            left.line,
-            left.column,
-        )
-            .cmp(&(
-                right_rank,
-                &right.file,
-                &right.original,
-                &right.replacement,
-                right.line,
-                right.column,
-            ))
-    });
-    ranked
+    let selected = round_robin_mutants(grouped, max_count);
+    selected
         .into_iter()
-        .take(max_count)
         .enumerate()
-        .map(|(index, (_, mut mutant))| {
+        .map(|(index, mut mutant)| {
             mutant.id = index + 1;
             mutant
         })
         .collect()
+}
+
+fn mutant_order(left: &AstMutant, right: &AstMutant) -> std::cmp::Ordering {
+    (
+        &left.file,
+        left.line,
+        left.column,
+        left.start_byte,
+        left.end_byte,
+        &left.original,
+        &left.replacement,
+        &left.description,
+    )
+        .cmp(&(
+            &right.file,
+            right.line,
+            right.column,
+            right.start_byte,
+            right.end_byte,
+            &right.original,
+            &right.replacement,
+            &right.description,
+        ))
+}
+
+fn round_robin_mutants(
+    mut grouped: BTreeMap<PathBuf, BTreeMap<(String, String), Vec<AstMutant>>>,
+    max_count: usize,
+) -> Vec<AstMutant> {
+    let mut selected = Vec::with_capacity(max_count.min(grouped.len()));
+    let mut offsets = BTreeMap::new();
+    while selected.len() < max_count {
+        let mut progressed = false;
+        for (file, families) in &mut grouped {
+            let offset = offsets.entry(file.clone()).or_insert(0);
+            if let Some(mutant) = take_next_family(families, offset) {
+                selected.push(mutant);
+                progressed = true;
+                if selected.len() == max_count {
+                    return selected;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    selected
+}
+
+fn take_next_family(
+    families: &mut BTreeMap<(String, String), Vec<AstMutant>>,
+    offset: &mut usize,
+) -> Option<AstMutant> {
+    let keys = families.keys().cloned().collect::<Vec<_>>();
+    if keys.is_empty() {
+        return None;
+    }
+    for attempt in 0..keys.len() {
+        let index = (*offset + attempt) % keys.len();
+        let key = &keys[index];
+        let mutants = families.get_mut(key)?;
+        if let Some(mutant) = (!mutants.is_empty()).then(|| mutants.remove(0)) {
+            *offset = (index + 1) % keys.len();
+            return Some(mutant);
+        }
+    }
+    None
 }
 
 fn run_mutant_batch(
@@ -295,40 +389,52 @@ fn run_mutant_batch(
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let res = runner.run_mutant(mutant, root);
-        match res.outcome {
-            MutantOutcome::Killed => {
-                stats.killed += 1;
-                println!("{}", "killed".green().bold());
-            }
-            MutantOutcome::Survived => {
-                stats.survived += 1;
-                println!("{}", "survived".red().bold());
-            }
-            MutantOutcome::Timeout => {
-                stats.timeout += 1;
-                println!("{}", "timeout".yellow().bold());
-            }
-            MutantOutcome::CompileError => {
-                stats.compile_error += 1;
-                println!("{}", "compile error".red().bold());
-            }
-            MutantOutcome::RunnerError => {
-                stats.runner_error += 1;
-                println!("{}", "runner error".red().bold());
-            }
-            MutantOutcome::Equivalent => {
-                stats.equivalent += 1;
-                println!("{}", "equivalent".yellow());
-            }
-            MutantOutcome::Unviable => {
-                stats.unviable += 1;
-                println!("{}", "unviable".red().bold());
-            }
-        }
+        print_outcome(&mut stats, res.outcome);
         results.push(res);
     }
 
     Ok((results, stats))
+}
+
+fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) {
+    let (label, style) = outcome_label(outcome);
+    increment_stats(stats, outcome);
+    match style {
+        OutcomeStyle::Green => println!("{}", label.green().bold()),
+        OutcomeStyle::Red => println!("{}", label.red().bold()),
+        OutcomeStyle::Yellow => println!("{}", label.yellow().bold()),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OutcomeStyle {
+    Green,
+    Red,
+    Yellow,
+}
+
+fn outcome_label(outcome: MutantOutcome) -> (&'static str, OutcomeStyle) {
+    match outcome {
+        MutantOutcome::Killed => ("killed", OutcomeStyle::Green),
+        MutantOutcome::Survived => ("survived", OutcomeStyle::Red),
+        MutantOutcome::Timeout => ("timeout", OutcomeStyle::Yellow),
+        MutantOutcome::CompileError => ("compile error", OutcomeStyle::Red),
+        MutantOutcome::RunnerError => ("runner error", OutcomeStyle::Red),
+        MutantOutcome::Equivalent => ("equivalent", OutcomeStyle::Yellow),
+        MutantOutcome::Unviable => ("unviable", OutcomeStyle::Red),
+    }
+}
+
+fn increment_stats(stats: &mut MutationStats, outcome: MutantOutcome) {
+    match outcome {
+        MutantOutcome::Killed => stats.killed += 1,
+        MutantOutcome::Survived => stats.survived += 1,
+        MutantOutcome::Timeout => stats.timeout += 1,
+        MutantOutcome::CompileError => stats.compile_error += 1,
+        MutantOutcome::RunnerError => stats.runner_error += 1,
+        MutantOutcome::Equivalent => stats.equivalent += 1,
+        MutantOutcome::Unviable => stats.unviable += 1,
+    }
 }
 
 fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> bool {

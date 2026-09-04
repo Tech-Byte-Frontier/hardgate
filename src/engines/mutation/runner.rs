@@ -1,21 +1,16 @@
 use super::generator::AstMutant;
+use super::js::{ResolvedTestPlan, TestSelection, is_javascript_path, resolve_js_test_plan};
+use super::process::{CommandExecution, execute_with_timeout};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
-use std::time::{Duration, Instant};
-/// Maximum amount of output retained from each command stream.
-///
-/// Mutation commands can be noisy (especially compilers). Keeping the streams
-/// bounded prevents a failed mutant from consuming unbounded memory while
-/// still retaining enough context to classify compile failures.
-const MAX_DIAGNOSTIC_STREAM_BYTES: usize = 32 * 1024;
-const MAX_DIAGNOSTIC_BYTES: usize = MAX_DIAGNOSTIC_STREAM_BYTES * 2;
-const DIAGNOSTIC_READER_TIMEOUT: Duration = Duration::from_secs(1);
-const TERMINATION_GRACE: Duration = Duration::from_millis(200);
+use std::time::Instant;
+
+/// Maximum timeout used when a JavaScript project has no trustworthy file
+/// mapping and the complete test suite must run.
+pub const FULL_SUITE_TIMEOUT_SECS: u64 = 60;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MutantOutcome {
     Killed,
@@ -26,6 +21,7 @@ pub enum MutantOutcome {
     Equivalent,
     Unviable,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutantExecutionResult {
     pub mutant: AstMutant,
@@ -37,6 +33,7 @@ pub struct MutantExecutionResult {
     /// Whether the original source bytes were restored and verified.
     pub source_restored: bool,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaselineOutcome {
     Passed,
@@ -44,6 +41,7 @@ pub enum BaselineOutcome {
     Timeout,
     RunnerError,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaselineExecutionResult {
     pub file: PathBuf,
@@ -53,15 +51,18 @@ pub struct BaselineExecutionResult {
     /// Bounded stdout/stderr from the baseline command or a runner diagnostic.
     pub diagnostic: String,
 }
+
 pub struct NativeMutationRunner {
     timeout_secs: u64,
     test_cmd: Option<String>,
 }
+
 struct RollbackGuard<'a> {
     file_path: &'a Path,
     original_bytes: &'a [u8],
     restored: bool,
 }
+
 impl<'a> RollbackGuard<'a> {
     fn new(file_path: &'a Path, original_bytes: &'a [u8]) -> Self {
         Self {
@@ -70,11 +71,10 @@ impl<'a> RollbackGuard<'a> {
             restored: false,
         }
     }
-    /// Restore the source and verify byte-for-byte equality.
+
     fn restore(&mut self) -> std::io::Result<()> {
         fs::write(self.file_path, self.original_bytes)?;
-        let restored = fs::read(self.file_path)?;
-        if restored != self.original_bytes {
+        if fs::read(self.file_path)? != self.original_bytes {
             return Err(std::io::Error::other(
                 "restored source bytes differ from the original",
             ));
@@ -83,60 +83,94 @@ impl<'a> RollbackGuard<'a> {
         Ok(())
     }
 }
-impl<'a> Drop for RollbackGuard<'a> {
+
+impl Drop for RollbackGuard<'_> {
     fn drop(&mut self) {
         if self.restored {
             return;
         }
-        if let Err(e) = fs::write(self.file_path, self.original_bytes) {
+        if let Err(error) = fs::write(self.file_path, self.original_bytes) {
             eprintln!(
                 "hardgate: failed to restore {} after mutation: {}",
                 self.file_path.display(),
-                e
+                error
             );
         }
     }
 }
+
 impl NativeMutationRunner {
     pub fn new(timeout_secs: u64, test_cmd: Option<String>) -> Self {
         Self {
-            timeout_secs,
+            timeout_secs: timeout_secs.max(1),
             test_cmd,
         }
     }
+
+    /// Resolve command, package manager, framework, workspace root, and test
+    /// selection. The metadata makes a full-suite fallback explicit to callers.
+    pub fn resolve_test_plan(&self, file: &Path, root: &Path) -> ResolvedTestPlan {
+        if let Some(command) = self.test_cmd.as_deref() {
+            return custom_plan(command, file, root);
+        }
+        if is_javascript_path(file) {
+            return resolve_js_test_plan(file, root);
+        }
+        if file.extension().and_then(|value| value.to_str()) == Some("rs") {
+            rust_plan(file, root)
+        } else {
+            plain_plan("cargo test".to_string(), root, TestSelection::Custom)
+        }
+    }
+
+    pub fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
+        self.resolve_test_plan(file, root).command
+    }
+
+    /// Pick a safe default timeout when an automatically resolved JS command
+    /// has to execute an entire suite. Explicit user/configured values win.
+    pub fn default_timeout_secs(files: &[PathBuf], root: &Path, test_cmd: Option<&str>) -> u64 {
+        if test_cmd.is_none()
+            && files.iter().any(|file| {
+                is_javascript_path(file)
+                    && resolve_js_test_plan(file, root).selection.is_full_suite()
+            })
+        {
+            FULL_SUITE_TIMEOUT_SECS
+        } else {
+            DEFAULT_TIMEOUT_SECS
+        }
+    }
+
     /// Run one mutant and restore the source before returning.
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
         let target_path = resolve_target_path(&mutant.file, root);
-        let command = self.resolve_test_command(&mutant.file, root);
+        let plan = self.resolve_test_plan(&mutant.file, root);
         let original_bytes = match fs::read(&target_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                return MutantExecutionResult {
-                    mutant: mutant.clone(),
-                    outcome: MutantOutcome::RunnerError,
-                    duration_ms: start.elapsed().as_millis(),
-                    command,
-                    diagnostic: format!(
+                return failed_mutant(
+                    mutant,
+                    &plan.command,
+                    start,
+                    format!(
                         "Failed to read mutation target '{}': {error}",
                         target_path.display()
                     ),
-                    source_restored: false,
-                };
+                );
             }
         };
         let mut guard = RollbackGuard::new(&target_path, &original_bytes);
-        let mut execution = match apply_mutant_bytes(&target_path, mutant, &original_bytes) {
-            Ok(()) => self.execute_test_with_timeout(&command, root),
-            Err(error) => CommandExecution {
-                outcome: if error.kind() == std::io::ErrorKind::InvalidInput {
-                    MutantOutcome::Unviable
-                } else {
-                    MutantOutcome::RunnerError
-                },
-                diagnostic: format!("Failed to apply mutant {}: {error}", mutant.id),
+        let mut execution = apply_and_execute(
+            self,
+            MutationInput {
+                mutant,
+                target_path: &target_path,
+                original_bytes: &original_bytes,
+                plan: &plan,
             },
-        };
+        );
         let source_restored = guard.restore().is_ok();
         if !source_restored {
             execution.outcome = MutantOutcome::RunnerError;
@@ -149,99 +183,131 @@ impl NativeMutationRunner {
             );
         }
         drop(guard);
-
         MutantExecutionResult {
             mutant: mutant.clone(),
             outcome: execution.outcome,
             duration_ms: start.elapsed().as_millis(),
-            command,
+            command: plan.command,
             diagnostic: execution.diagnostic,
             source_restored,
         }
     }
+
     /// Run the resolved test command against the unmodified source tree.
     pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
         let start = Instant::now();
-        let command = self.resolve_test_command(file, root);
-        let execution = self.execute_test_with_timeout(&command, root);
-        let outcome = match execution.outcome {
-            MutantOutcome::Survived => BaselineOutcome::Passed,
-            MutantOutcome::Timeout => BaselineOutcome::Timeout,
-            MutantOutcome::RunnerError => BaselineOutcome::RunnerError,
-            MutantOutcome::Killed
-            | MutantOutcome::CompileError
-            | MutantOutcome::Equivalent
-            | MutantOutcome::Unviable => BaselineOutcome::Failed,
-        };
-
+        let plan = self.resolve_test_plan(file, root);
+        let execution = execute_with_timeout(&plan.command, &plan.working_dir, self.timeout_secs);
         BaselineExecutionResult {
             file: file.to_path_buf(),
-            outcome,
+            outcome: baseline_outcome(execution.outcome),
             duration_ms: start.elapsed().as_millis(),
-            command,
-            diagnostic: execution.diagnostic,
-        }
-    }
-    pub(crate) fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
-        if let Some(ref cmd) = self.test_cmd {
-            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            return cmd
-                .replace("{file}", &file.to_string_lossy())
-                .replace("{stem}", stem);
-        }
-
-        let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-
-        match ext {
-            "rs" => resolve_rust_test_cmd(stem),
-            "ts" | "tsx" | "js" | "jsx" => resolve_js_test_cmd(file, root, stem, ext),
-            _ => "cargo test".to_string(),
-        }
-    }
-    fn execute_test_with_timeout(&self, cmd_str: &str, root: &Path) -> CommandExecution {
-        let tokens = crate::engines::orchestration::shell_words_split(cmd_str);
-        if tokens.is_empty() {
-            return CommandExecution {
-                outcome: MutantOutcome::RunnerError,
-                diagnostic: "Empty command string".to_string(),
-            };
-        }
-        let mut child = match spawn_quiet(&tokens, root) {
-            Ok(child) => child,
-            Err(error) => {
-                return CommandExecution {
-                    outcome: MutantOutcome::RunnerError,
-                    diagnostic: format!("Failed to execute '{}': {error}", tokens[0]),
-                };
-            }
-        };
-
-        let output = CapturedOutput::from_child(&mut child);
-        let wait = wait_for_child(&mut child, Duration::from_secs(self.timeout_secs));
-        let diagnostic = output.collect();
-
-        match wait {
-            ProcessWait::Exited(status) => CommandExecution {
-                outcome: outcome_from_status(&status, &diagnostic),
-                diagnostic,
-            },
-            ProcessWait::Timeout => CommandExecution {
-                outcome: MutantOutcome::Timeout,
-                diagnostic,
-            },
-            ProcessWait::RunnerError(error) => CommandExecution {
-                outcome: MutantOutcome::RunnerError,
-                diagnostic: append_text(diagnostic, error),
-            },
+            command: plan.command,
+            diagnostic: baseline_diagnostic(execution.diagnostic, &plan.selection),
         }
     }
 }
 
-#[derive(Debug)]
-struct CommandExecution {
-    outcome: MutantOutcome,
+fn custom_plan(command: &str, file: &Path, root: &Path) -> ResolvedTestPlan {
+    let stem = file
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .unwrap_or("");
+    let command = command
+        .replace("{file}", &file.to_string_lossy())
+        .replace("{stem}", stem);
+    plain_plan(command, root, TestSelection::Custom)
+}
+
+fn rust_plan(file: &Path, root: &Path) -> ResolvedTestPlan {
+    let stem = file
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .unwrap_or("");
+    let command = if stem.is_empty() || matches!(stem, "main" | "lib" | "mod") {
+        "cargo test".to_string()
+    } else {
+        format!("cargo test {stem}")
+    };
+    plain_plan(command, root, TestSelection::Custom)
+}
+
+fn plain_plan(command: String, root: &Path, selection: TestSelection) -> ResolvedTestPlan {
+    ResolvedTestPlan {
+        command,
+        working_dir: root.to_path_buf(),
+        package_root: root.to_path_buf(),
+        workspace_root: root.to_path_buf(),
+        manager: None,
+        framework: None,
+        selection,
+        recommended_timeout_secs: DEFAULT_TIMEOUT_SECS,
+    }
+}
+
+struct MutationInput<'a> {
+    mutant: &'a AstMutant,
+    target_path: &'a Path,
+    original_bytes: &'a [u8],
+    plan: &'a ResolvedTestPlan,
+}
+
+fn apply_and_execute(runner: &NativeMutationRunner, input: MutationInput<'_>) -> CommandExecution {
+    match apply_mutant_bytes(input.target_path, input.mutant, input.original_bytes) {
+        Ok(()) => execute_with_timeout(
+            &input.plan.command,
+            &input.plan.working_dir,
+            runner.timeout_secs,
+        ),
+        Err(error) => CommandExecution {
+            outcome: if error.kind() == std::io::ErrorKind::InvalidInput {
+                MutantOutcome::Unviable
+            } else {
+                MutantOutcome::RunnerError
+            },
+            diagnostic: format!("Failed to apply mutant {}: {error}", input.mutant.id),
+        },
+    }
+}
+
+fn failed_mutant(
+    mutant: &AstMutant,
+    command: &str,
+    start: Instant,
     diagnostic: String,
+) -> MutantExecutionResult {
+    MutantExecutionResult {
+        mutant: mutant.clone(),
+        outcome: MutantOutcome::RunnerError,
+        duration_ms: start.elapsed().as_millis(),
+        command: command.to_string(),
+        diagnostic,
+        source_restored: false,
+    }
+}
+
+fn baseline_outcome(outcome: MutantOutcome) -> BaselineOutcome {
+    match outcome {
+        MutantOutcome::Survived => BaselineOutcome::Passed,
+        MutantOutcome::Timeout => BaselineOutcome::Timeout,
+        MutantOutcome::RunnerError => BaselineOutcome::RunnerError,
+        MutantOutcome::Killed
+        | MutantOutcome::CompileError
+        | MutantOutcome::Equivalent
+        | MutantOutcome::Unviable => BaselineOutcome::Failed,
+    }
+}
+
+fn baseline_diagnostic(mut diagnostic: String, selection: &TestSelection) -> String {
+    if selection.is_full_suite() {
+        let note = "full suite selected: no reliable relevant test was found";
+        if diagnostic.is_empty() {
+            return note.to_string();
+        }
+        diagnostic.push('\n');
+        diagnostic.push_str(note);
+    }
+    diagnostic
 }
 
 fn resolve_target_path(file: &Path, root: &Path) -> PathBuf {
@@ -269,228 +335,20 @@ fn apply_mutant_bytes(
             "mutant original text does not match the source bytes",
         ));
     }
-
-    let mut mutated_bytes = Vec::with_capacity(
+    let mut mutated = Vec::with_capacity(
         original_bytes.len() - (mutant.end_byte - mutant.start_byte) + mutant.replacement.len(),
     );
-    mutated_bytes.extend_from_slice(&original_bytes[..mutant.start_byte]);
-    mutated_bytes.extend_from_slice(mutant.replacement.as_bytes());
-    mutated_bytes.extend_from_slice(&original_bytes[mutant.end_byte..]);
-    fs::write(target_path, &mutated_bytes)
-}
-
-fn spawn_quiet(tokens: &[String], root: &Path) -> std::io::Result<Child> {
-    let mut cmd = Command::new(&tokens[0]);
-    cmd.args(&tokens[1..]);
-    cmd.current_dir(root);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    configure_process_group(&mut cmd);
-    cmd.spawn()
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
-
-struct CapturedOutput {
-    stdout: Option<Receiver<Vec<u8>>>,
-    stderr: Option<Receiver<Vec<u8>>>,
-}
-
-impl CapturedOutput {
-    fn from_child(child: &mut Child) -> Self {
-        Self {
-            stdout: child.stdout.take().map(spawn_bounded_reader),
-            stderr: child.stderr.take().map(spawn_bounded_reader),
-        }
-    }
-
-    fn collect(self) -> String {
-        let stdout = receive_output(self.stdout);
-        let stderr = receive_output(self.stderr);
-        combine_diagnostic_streams(&stdout, &stderr)
-    }
-}
-
-fn spawn_bounded_reader<R>(mut reader: R) -> Receiver<Vec<u8>>
-where
-    R: Read + Send + 'static,
-{
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut retained = Vec::with_capacity(MAX_DIAGNOSTIC_STREAM_BYTES);
-        let mut buffer = [0_u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    let remaining = MAX_DIAGNOSTIC_STREAM_BYTES.saturating_sub(retained.len());
-                    if remaining > 0 {
-                        retained.extend_from_slice(&buffer[..read.min(remaining)]);
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let _ = sender.send(retained);
-    });
-    receiver
-}
-
-fn receive_output(receiver: Option<Receiver<Vec<u8>>>) -> Vec<u8> {
-    receiver
-        .and_then(|channel| channel.recv_timeout(DIAGNOSTIC_READER_TIMEOUT).ok())
-        .unwrap_or_default()
-}
-
-fn combine_diagnostic_streams(stdout: &[u8], stderr: &[u8]) -> String {
-    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
-    let combined = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => stdout,
-        (true, false) => stderr,
-        (false, false) => format!("{stdout}\n{stderr}"),
-    };
-    truncate_diagnostic(combined)
-}
-
-fn append_text(existing: String, extra: String) -> String {
-    let combined = if existing.is_empty() {
-        extra
-    } else if extra.is_empty() {
-        existing
-    } else {
-        format!("{existing}\n{extra}")
-    };
-    truncate_diagnostic(combined)
-}
-
-fn truncate_diagnostic(mut text: String) -> String {
-    if text.len() <= MAX_DIAGNOSTIC_BYTES {
-        return text;
-    }
-    let mut end = MAX_DIAGNOSTIC_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
-    text
+    mutated.extend_from_slice(&original_bytes[..mutant.start_byte]);
+    mutated.extend_from_slice(mutant.replacement.as_bytes());
+    mutated.extend_from_slice(&original_bytes[mutant.end_byte..]);
+    fs::write(target_path, mutated)
 }
 
 fn append_diagnostic(existing: &mut String, extra: String) {
-    *existing = append_text(std::mem::take(existing), extra);
-}
-
-enum ProcessWait {
-    Exited(ExitStatus),
-    Timeout,
-    RunnerError(String),
-}
-
-fn wait_for_child(child: &mut Child, max_duration: Duration) -> ProcessWait {
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return ProcessWait::Exited(status),
-            Ok(None) if start.elapsed() >= max_duration => {
-                terminate_process_tree(child);
-                return ProcessWait::Timeout;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                terminate_process_tree(child);
-                return ProcessWait::RunnerError(format!(
-                    "Failed to wait for mutation command: {error}"
-                ));
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn terminate_process_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    signal_process_group("-TERM", &pid);
-    wait_for_termination(child, TERMINATION_GRACE);
-    signal_process_group("-KILL", &pid);
-    let _ = child.wait();
-}
-
-#[cfg(unix)]
-fn signal_process_group(signal: &str, pid: &str) {
-    let _ = Command::new("kill")
-        .args([signal, "--", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-#[cfg(not(unix))]
-fn terminate_process_tree(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn wait_for_termination(child: &mut Child, grace: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < grace {
-        if child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn outcome_from_status(status: &ExitStatus, diagnostic: &str) -> MutantOutcome {
-    if status.success() {
-        MutantOutcome::Survived
-    } else if looks_like_compile_error(diagnostic) {
-        MutantOutcome::CompileError
+    if existing.is_empty() {
+        existing.push_str(&extra);
     } else {
-        MutantOutcome::Killed
+        existing.push('\n');
+        existing.push_str(&extra);
     }
-}
-
-fn looks_like_compile_error(diagnostic: &str) -> bool {
-    let lower = diagnostic.to_ascii_lowercase();
-    [
-        "could not compile",
-        "compilation failed",
-        "compile error",
-        "compile_error",
-        "syntaxerror",
-        "syntax error",
-        "failed to parse",
-        "error[e",
-        "error ts",
-        "typecheck failed",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
-
-fn resolve_rust_test_cmd(stem: &str) -> String {
-    if !stem.is_empty() && stem != "main" && stem != "lib" && stem != "mod" {
-        format!("cargo test {stem}")
-    } else {
-        "cargo test".to_string()
-    }
-}
-
-fn resolve_js_test_cmd(file: &Path, root: &Path, stem: &str, ext: &str) -> String {
-    let candidates = [format!("{stem}.test.{ext}"), format!("{stem}.spec.{ext}")];
-    for candidate in &candidates {
-        if root.join("tests").join(candidate).exists() || file.with_file_name(candidate).exists() {
-            return format!("pnpm test {candidate}");
-        }
-    }
-    "pnpm test".to_string()
 }
