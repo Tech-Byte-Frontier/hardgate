@@ -3,12 +3,13 @@ use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
 use crate::engines::{AntiGamingScanner, CloneDetector, ComplexityAnalyzer, InvariantsChecker};
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use anyhow::{Result, anyhow};
+use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+mod response;
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -16,16 +17,6 @@ struct JsonRpcRequest {
     id: Option<serde_json::Value>,
     method: String,
     params: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<serde_json::Value>,
 }
 
 /// Serve the Model Context Protocol over stdio: `hardgate_check`,
@@ -49,7 +40,6 @@ pub fn run_mcp_server() -> Result<()> {
 
     Ok(())
 }
-
 fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     let mut first = String::new();
     let n = reader.read_line(&mut first)?;
@@ -61,7 +51,9 @@ fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
         // Consume remaining header lines until blank.
         loop {
             let mut hdr = String::new();
-            reader.read_line(&mut hdr)?;
+            if reader.read_line(&mut hdr)? == 0 {
+                return Err(anyhow!("Unexpected EOF in MCP Content-Length headers"));
+            }
             if hdr.trim().is_empty() {
                 break;
             }
@@ -77,26 +69,23 @@ fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     }
     Ok(Some(first))
 }
-
 fn parse_content_length(line: &str) -> Option<usize> {
     let lower = line.to_ascii_lowercase();
     let rest = lower.strip_prefix("content-length:")?;
     rest.trim().parse::<usize>().ok()
 }
-
 fn process_mcp_line<W: Write>(line: &str, out: &mut W) -> Result<()> {
     let request = match serde_json::from_str::<JsonRpcRequest>(line) {
         Ok(req) => req,
-        Err(e) => return send_parse_error(out, e),
+        Err(e) => return response::parse_error(out, e),
     };
 
     if request.jsonrpc != "2.0" {
-        return send_invalid_request_error(out, request.id);
+        return response::invalid_request(out, request.id);
     }
 
     dispatch_mcp_method(&request, out)
 }
-
 fn dispatch_mcp_method<W: Write>(req: &JsonRpcRequest, out: &mut W) -> Result<()> {
     let id = req.id.clone().unwrap_or(serde_json::Value::Null);
 
@@ -106,25 +95,24 @@ fn dispatch_mcp_method<W: Write>(req: &JsonRpcRequest, out: &mut W) -> Result<()
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "hardgate", "version": env!("CARGO_PKG_VERSION") }
         });
-        return send_success(out, id, res);
+        return response::success(out, id, res);
     }
     if req.method == "ping" {
-        return send_success(out, id, json!({}));
+        return response::success(out, id, json!({}));
     }
     if req.method == "tools/list" {
-        return send_success(out, id, get_tools_list());
+        return response::success(out, id, get_tools_list());
     }
     if req.method == "tools/call" {
         let res = handle_tool_call(req.params.as_ref());
-        return send_success(out, id, res);
+        return response::success(out, id, res);
     }
     if req.method == "notifications/initialized" {
         return Ok(());
     }
 
-    send_method_not_found(out, id, &req.method)
+    response::method_not_found(out, id, &req.method)
 }
-
 fn get_tools_list() -> serde_json::Value {
     json!({
         "tools": [
@@ -138,6 +126,10 @@ fn get_tools_list() -> serde_json::Value {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Optional list of file paths to check."
+                        },
+                        "diff": {
+                            "type": "boolean",
+                            "description": "Check only Git-modified files; requires a Git worktree."
                         }
                     }
                 }
@@ -166,78 +158,137 @@ fn get_tools_list() -> serde_json::Value {
         ]
     })
 }
-
 fn handle_tool_call(params: Option<&serde_json::Value>) -> serde_json::Value {
     let Some(params) = params else {
         return tool_error("Missing tool call parameters");
     };
+    let Some(name) = params.get("name").and_then(|n| n.as_str()) else {
+        return tool_error("Missing 'name' parameter in tool call");
+    };
+    let args = match tool_arguments(params) {
+        Ok(value) => value,
+        Err(error) => return tool_error(error),
+    };
+    dispatch_tool(name, &args)
+}
 
-    let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-    let args = params.get("arguments").cloned().unwrap_or(json!({}));
-
-    match name {
-        "hardgate_check" => execute_check_tool(&args),
-        "hardgate_scan_file" => execute_scan_tool(&args),
-        "hardgate_get_metrics" => execute_metrics_tool(&args),
-        _ => tool_error(&format!("Unknown tool: {}", name)),
+fn tool_arguments(params: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
+    match params.get("arguments") {
+        None => Ok(json!({})),
+        Some(value) if value.is_object() => Ok(value.clone()),
+        Some(_) => Err("Tool call 'arguments' must be an object"),
     }
 }
 
-fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
-    let config = match HardgateConfig::load_or_default(None) {
-        Ok(c) => c,
-        Err(e) => return tool_error(&format!("Failed to load hardgate.toml: {}", e)),
-    };
-    let root = Path::new(".");
-    if let Some(arr) = args.get("paths").and_then(|p| p.as_array()) {
-        return execute_scoped_check(arr, &config, root);
+fn dispatch_tool(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    match name {
+        "hardgate_check" => execute_check_tool(args),
+        "hardgate_scan_file" => execute_scan_tool(args),
+        "hardgate_get_metrics" => execute_metrics_tool(args),
+        _ => tool_error(&format!("Unknown tool: {}", name)),
     }
+}
+fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(error) => return error,
+    };
+    execute_check_with_config(args, &config)
+}
 
-    let discovery = discover_files_with_exclusions(DiscoverOptions {
+fn execute_check_with_config(
+    args: &serde_json::Value,
+    config: &HardgateConfig,
+) -> serde_json::Value {
+    let root = Path::new(".");
+    let diff_only = match parse_bool_arg(args, "diff") {
+        Ok(value) => value,
+        Err(error) => return tool_error(&error),
+    };
+    let paths = match paths_arg(args) {
+        Ok(paths) => paths,
+        Err(error) => return tool_error(&error),
+    };
+    if let Some(arr) = paths {
+        return execute_scoped_check(arr, config, root);
+    }
+    execute_discovered_check(config, root, diff_only)
+}
+
+fn load_config() -> Result<HardgateConfig, serde_json::Value> {
+    HardgateConfig::load_or_default(None)
+        .map_err(|error| tool_error(&format!("Failed to load hardgate.toml: {error}")))
+}
+
+fn paths_arg(args: &serde_json::Value) -> Result<Option<&[serde_json::Value]>, String> {
+    match args.get("paths") {
+        None => Ok(None),
+        Some(value) => value
+            .as_array()
+            .map(|paths| Some(paths.as_slice()))
+            .ok_or_else(|| "Parameter 'paths' must be an array of strings".to_string()),
+    }
+}
+
+fn execute_discovered_check(
+    config: &HardgateConfig,
+    root: &Path,
+    diff_only: bool,
+) -> serde_json::Value {
+    let discovery = match discover_files_with_exclusions(DiscoverOptions {
         root,
-        diff_only: false,
+        diff_only,
         exclusions: &config.budgets.files.exclusions.paths,
-    })
-    .unwrap_or_default();
+    }) {
+        Ok(result) => result,
+        Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
+    };
+    if discovery.files.is_empty() {
+        return tool_error("No source files discovered; refusing an empty successful check");
+    }
     finish_check_response(CheckResponseInput {
         target_files: &discovery.files,
         excluded_count: discovery.excluded_files.len(),
-        config: &config,
+        config,
         root,
         extra_advisories: Vec::new(),
     })
 }
-
 fn execute_scoped_check(
     arr: &[serde_json::Value],
     config: &HardgateConfig,
     root: &Path,
 ) -> serde_json::Value {
-    let (files, missing) = partition_existing_paths(arr);
-    if files.is_empty() && !missing.is_empty() {
+    let (files, missing) = match partition_existing_paths(arr) {
+        Ok(result) => result,
+        Err(error) => return tool_error(&error),
+    };
+    if !missing.is_empty() {
         return tool_error(&format!("Files not found: {}", missing.join(", ")));
     }
-    let mut skipped = Vec::new();
-    if !missing.is_empty() {
-        skipped.push(format!(
-            "Skipped {} missing path(s): {}.",
-            missing.len(),
-            missing.join(", ")
-        ));
+    if files.is_empty() {
+        return tool_error("No paths provided; refusing an empty successful check");
     }
     finish_check_response(CheckResponseInput {
         target_files: &files,
         excluded_count: 0,
         config,
         root,
-        extra_advisories: skipped,
+        extra_advisories: Vec::new(),
     })
 }
-
-fn partition_existing_paths(arr: &[serde_json::Value]) -> (Vec<PathBuf>, Vec<String>) {
+fn partition_existing_paths(
+    arr: &[serde_json::Value],
+) -> Result<(Vec<PathBuf>, Vec<String>), String> {
     let mut files = Vec::new();
     let mut missing = Vec::new();
-    for p in arr.iter().filter_map(|p| p.as_str()) {
+    for value in arr {
+        let Some(p) = value.as_str() else {
+            return Err("Parameter 'paths' must contain only strings".to_string());
+        };
+        if p.is_empty() {
+            return Err("Parameter 'paths' must not contain empty paths".to_string());
+        }
         let pb = PathBuf::from(p);
         if pb.exists() {
             files.push(pb);
@@ -245,9 +296,16 @@ fn partition_existing_paths(arr: &[serde_json::Value]) -> (Vec<PathBuf>, Vec<Str
             missing.push(p.to_string());
         }
     }
-    (files, missing)
+    Ok((files, missing))
 }
-
+fn parse_bool_arg(args: &serde_json::Value, key: &str) -> Result<bool, String> {
+    match args.get(key) {
+        None => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("Parameter '{key}' must be a boolean")),
+    }
+}
 struct CheckResponseInput<'a> {
     target_files: &'a [PathBuf],
     excluded_count: usize,
@@ -273,19 +331,34 @@ fn finish_check_response(input: CheckResponseInput) -> serde_json::Value {
             excluded_count, noun
         ));
     }
-    let read_results = read_files_content(target_files);
-    let func_count = analyze_file_list(target_files, config, root, &mut report);
+    let read_results = match read_files_content(target_files) {
+        Ok(contents) => contents,
+        Err(error) => return tool_error(&error),
+    };
+    let func_count = analyze_file_contents(&read_results, config, root, &mut report);
     append_clone_results(&read_results, config, root, &mut report);
 
     report.finalize(target_files.len(), func_count, 0);
     json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
 }
 
-fn read_files_content(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
-    paths
-        .iter()
-        .filter_map(|p| fs::read_to_string(p).ok().map(|c| (p.clone(), c)))
-        .collect()
+fn read_files_content(paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut contents = Vec::with_capacity(paths.len());
+    let mut failures = Vec::new();
+    for path in paths {
+        match fs::read_to_string(path) {
+            Ok(content) => contents.push((path.clone(), content)),
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    if failures.is_empty() {
+        Ok(contents)
+    } else {
+        Err(format!(
+            "Unable to read required source file(s): {}",
+            failures.join("; ")
+        ))
+    }
 }
 
 fn append_clone_results(
@@ -318,20 +391,27 @@ fn execute_scan_tool(args: &serde_json::Value) -> serde_json::Value {
     if !path.exists() {
         return tool_error(&format!("File not found: {}", path_str));
     }
+    execute_scan_path(path)
+}
 
-    let config = match HardgateConfig::load_or_default(None) {
-        Ok(c) => c,
-        Err(e) => return tool_error(&format!("Failed to load hardgate.toml: {}", e)),
+fn execute_scan_path(path: &Path) -> serde_json::Value {
+    let config = match load_config() {
+        Ok(config) => config,
+        Err(error) => return error,
     };
     let mut report = GateReport::new(config.gate.name.clone());
-    let func_count = analyze_file_list(&[path.to_path_buf()], &config, Path::new("."), &mut report);
+    let read_results = match read_files_content(&[path.to_path_buf()]) {
+        Ok(contents) => contents,
+        Err(error) => return tool_error(&error),
+    };
+    let func_count = analyze_file_contents(&read_results, &config, Path::new("."), &mut report);
 
     report.finalize(1, func_count, 0);
     json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
 }
 
-fn analyze_file_list(
-    paths: &[PathBuf],
+fn analyze_file_contents(
+    files: &[(PathBuf, String)],
     config: &HardgateConfig,
     root: &Path,
     report: &mut GateReport,
@@ -340,17 +420,11 @@ fn analyze_file_list(
     let invariants = InvariantsChecker::new(&config.invariants.rules);
     let mut func_count = 0;
 
-    for path in paths {
-        let Ok(content) = fs::read_to_string(path) else {
-            report
-                .advisories
-                .push(format!("Skipped unreadable file `{}`.", path.display()));
-            continue;
-        };
+    for (path, content) in files {
         let funcs = analyze_file_content(
             AnalyzeInput {
                 path,
-                content: &content,
+                content,
                 config,
                 root,
                 anti_gaming: &anti_gaming,
@@ -381,65 +455,21 @@ fn execute_metrics_tool(args: &serde_json::Value) -> serde_json::Value {
     let mut analyzer = ComplexityAnalyzer::new();
     let funcs = analyzer.analyze_file(Path::new(path_str), &content, Path::new("."));
 
-    funcs
-        .iter()
-        .find(|m| m.name == symbol_str)
-        .map(|f| json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(f).unwrap_or_default() }] }))
-        .unwrap_or_else(|| tool_error(&format!("Symbol '{}' not found in {}", symbol_str, path_str)))
+    let Some(function) = funcs.iter().find(|m| m.name == symbol_str) else {
+        return tool_error(&format!(
+            "Symbol '{}' not found in {}",
+            symbol_str, path_str
+        ));
+    };
+    match serde_json::to_string_pretty(function) {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(error) => tool_error(&format!(
+            "Failed to serialize metrics for '{}' in {}: {error}",
+            symbol_str, path_str
+        )),
+    }
 }
 
 fn tool_error(msg: &str) -> serde_json::Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": msg }] })
-}
-
-fn send_success<W: Write>(
-    out: &mut W,
-    id: serde_json::Value,
-    res: serde_json::Value,
-) -> Result<()> {
-    let resp = JsonRpcResponse {
-        jsonrpc: "2.0".to_string(),
-        id,
-        result: Some(res),
-        error: None,
-    };
-    writeln!(out, "{}", serde_json::to_string(&resp)?)?;
-    out.flush()?;
-    Ok(())
-}
-
-fn send_parse_error<W: Write>(out: &mut W, err: serde_json::Error) -> Result<()> {
-    let resp = JsonRpcResponse {
-        jsonrpc: "2.0".to_string(),
-        id: serde_json::Value::Null,
-        result: None,
-        error: Some(json!({ "code": -32700, "message": format!("Parse error: {}", err) })),
-    };
-    writeln!(out, "{}", serde_json::to_string(&resp)?)?;
-    out.flush()?;
-    Ok(())
-}
-
-fn send_invalid_request_error<W: Write>(out: &mut W, id: Option<serde_json::Value>) -> Result<()> {
-    let resp = JsonRpcResponse {
-        jsonrpc: "2.0".to_string(),
-        id: id.unwrap_or(serde_json::Value::Null),
-        result: None,
-        error: Some(json!({ "code": -32600, "message": "Invalid Request: jsonrpc must be '2.0'" })),
-    };
-    writeln!(out, "{}", serde_json::to_string(&resp)?)?;
-    out.flush()?;
-    Ok(())
-}
-
-fn send_method_not_found<W: Write>(out: &mut W, id: serde_json::Value, method: &str) -> Result<()> {
-    let resp = JsonRpcResponse {
-        jsonrpc: "2.0".to_string(),
-        id,
-        result: None,
-        error: Some(json!({ "code": -32601, "message": format!("Method not found: {}", method) })),
-    };
-    writeln!(out, "{}", serde_json::to_string(&resp)?)?;
-    out.flush()?;
-    Ok(())
 }

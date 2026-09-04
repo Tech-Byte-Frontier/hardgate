@@ -1,10 +1,15 @@
+mod process;
+
 use crate::config::OrchestrationConfig;
+use process::{ProcessOutcome, run_command};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-/// One external tool failure (formatter or linter step).
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+const MAX_REPORT_OUTPUT_BYTES: usize = 64 * 1024;
+
+/// One external tool failure (formatter, linter, or test step).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationViolation {
     pub step: String,
@@ -27,10 +32,10 @@ pub struct OrchestrationEngine {
     config: OrchestrationConfig,
 }
 
-struct StepSpec<'a> {
-    step: &'a str,
-    cmd_str: &'a str,
-    recommendation: &'a str,
+pub struct OrchestrationStep<'a> {
+    pub step: &'a str,
+    pub command: &'a str,
+    pub recommendation: &'a str,
 }
 
 impl OrchestrationEngine {
@@ -42,8 +47,20 @@ impl OrchestrationEngine {
 
     pub fn has_orchestration(&self) -> bool {
         self.config.format_check.is_some()
+            || self.config.format.is_some()
             || self.config.lint.is_some()
             || self.config.test_cmd.is_some()
+    }
+
+    /// Run one bounded external command with the configured timeout policy.
+    /// Callers such as generated-artifact checks share the same fail-closed
+    /// process handling as formatter, linter, and test steps.
+    pub fn run_step(
+        &self,
+        spec: OrchestrationStep<'_>,
+        root: &Path,
+    ) -> Result<OrchestrationResult, OrchestrationViolation> {
+        self.execute_step(spec, root)
     }
 
     pub fn run_format_check(
@@ -52,9 +69,9 @@ impl OrchestrationEngine {
     ) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
         self.config.format_check.as_ref().map(|cmd| {
             self.execute_step(
-                StepSpec {
+                OrchestrationStep {
                     step: "format_check",
-                    cmd_str: cmd,
+                    command: cmd,
                     recommendation:
                         "Run `hardgate fmt` or the project formatter directly to fix formatting.",
                 },
@@ -73,9 +90,9 @@ impl OrchestrationEngine {
             .as_ref()
             .or(self.config.format_check.as_ref())?;
         Some(self.execute_step(
-            StepSpec {
+            OrchestrationStep {
                 step: "format",
-                cmd_str: cmd,
+                command: cmd,
                 recommendation: "Format command exited with error.",
             },
             root,
@@ -88,9 +105,9 @@ impl OrchestrationEngine {
     ) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
         self.config.lint.as_ref().map(|cmd| {
             self.execute_step(
-                StepSpec {
+                OrchestrationStep {
                     step: "lint",
-                    cmd_str: cmd,
+                    command: cmd,
                     recommendation: "Resolve linter diagnostics reported above.",
                 },
                 root,
@@ -104,9 +121,9 @@ impl OrchestrationEngine {
     ) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
         self.config.test_cmd.as_ref().map(|cmd| {
             self.execute_step(
-                StepSpec {
+                OrchestrationStep {
                     step: "test",
-                    cmd_str: cmd,
+                    command: cmd,
                     recommendation: "Resolve the failing project tests before accepting the gate.",
                 },
                 root,
@@ -120,140 +137,152 @@ impl OrchestrationEngine {
     ) -> (Vec<OrchestrationResult>, Vec<OrchestrationViolation>) {
         let mut results = Vec::new();
         let mut violations = Vec::new();
-
         self.collect_step(self.run_format_check(root), &mut results, &mut violations);
         self.collect_step(self.run_lint(root), &mut results, &mut violations);
         self.collect_step(self.run_tests(root), &mut results, &mut violations);
-
         (results, violations)
     }
 
     fn collect_step(
         &self,
-        res: Option<Result<OrchestrationResult, OrchestrationViolation>>,
+        result: Option<Result<OrchestrationResult, OrchestrationViolation>>,
         results: &mut Vec<OrchestrationResult>,
         violations: &mut Vec<OrchestrationViolation>,
     ) {
-        let Some(res) = res else { return };
-        match res {
-            Ok(ok) => results.push(ok),
-            Err(err) => violations.push(err),
+        match result {
+            Some(Ok(result)) => results.push(result),
+            Some(Err(violation)) => violations.push(violation),
+            None => {}
         }
     }
 
     fn execute_step(
         &self,
-        spec: StepSpec,
+        spec: OrchestrationStep,
         root: &Path,
     ) -> Result<OrchestrationResult, OrchestrationViolation> {
         let start = Instant::now();
-        let tokens = shell_words_split(spec.cmd_str);
+        let tokens = shell_words_split(spec.command);
         if tokens.is_empty() {
             return Err(empty_command_violation(&spec));
         }
+        let timeout_secs = self.timeout_secs();
+        let outcome = run_command(&tokens, root, Duration::from_secs(timeout_secs));
+        finish_outcome(outcome, spec, start, timeout_secs)
+    }
 
-        let mut cmd = build_command(&tokens, root);
-
-        match cmd.output() {
-            Ok(output) => finish_output(output, &spec, start),
-            Err(e) => Err(spawn_failure_violation(&spec, &tokens[0], &e)),
-        }
+    fn timeout_secs(&self) -> u64 {
+        self.config
+            .timeout_secs
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .max(1)
     }
 }
 
-fn empty_command_violation(spec: &StepSpec) -> OrchestrationViolation {
+fn empty_command_violation(spec: &OrchestrationStep) -> OrchestrationViolation {
     OrchestrationViolation {
         step: spec.step.to_string(),
-        command: spec.cmd_str.to_string(),
+        command: spec.command.to_string(),
         exit_code: Some(1),
-        output: "Empty command string".to_string(),
-        recommendation: spec.recommendation.to_string(),
+        output: "Empty command string; nothing was executed.".to_string(),
+        recommendation: format!("Configure a non-empty {} command.", spec.step),
     }
 }
 
-fn build_command(tokens: &[String], root: &Path) -> Command {
-    let mut cmd = Command::new(&tokens[0]);
-    cmd.args(&tokens[1..]);
-    cmd.current_dir(root);
-    prepend_local_bin(&mut cmd, root);
-    cmd
-}
-
-fn prepend_local_bin(cmd: &mut Command, root: &Path) {
-    let current_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = std::env::split_paths(&current_path).collect::<Vec<_>>();
-    let local_bin = root.join("node_modules").join(".bin");
-    if local_bin.exists() {
-        paths.insert(0, local_bin);
-    }
-    if let Ok(new_path) = std::env::join_paths(paths) {
-        cmd.env("PATH", new_path);
-    }
-}
-
-fn finish_output(
-    output: std::process::Output,
-    spec: &StepSpec,
+fn finish_outcome(
+    outcome: ProcessOutcome,
+    spec: OrchestrationStep,
     start: Instant,
+    timeout_secs: u64,
 ) -> Result<OrchestrationResult, OrchestrationViolation> {
     let duration_ms = start.elapsed().as_millis();
-    let combined = combine_output(&output);
-    if output.status.success() {
-        Ok(OrchestrationResult {
+    match outcome {
+        ProcessOutcome::Completed { status, output } if status.success() => {
+            Ok(OrchestrationResult {
+                step: spec.step.to_string(),
+                command: spec.command.to_string(),
+                success: true,
+                duration_ms,
+                output,
+            })
+        }
+        ProcessOutcome::Completed { status, output } => Err(OrchestrationViolation {
             step: spec.step.to_string(),
-            command: spec.cmd_str.to_string(),
-            success: true,
-            duration_ms,
-            output: combined,
-        })
-    } else {
-        Err(OrchestrationViolation {
-            step: spec.step.to_string(),
-            command: spec.cmd_str.to_string(),
-            exit_code: output.status.code(),
-            output: combined,
+            command: spec.command.to_string(),
+            exit_code: status.code(),
+            output,
             recommendation: spec.recommendation.to_string(),
-        })
+        }),
+        ProcessOutcome::TimedOut { output } => Err(timeout_violation(spec, output, timeout_secs)),
+        ProcessOutcome::Failed { message, output } => Err(runner_violation(spec, message, output)),
     }
 }
 
-fn combine_output(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = if stderr.is_empty() {
-        stdout
-    } else if stdout.is_empty() {
-        stderr
-    } else {
-        format!("{}\n{}", stdout, stderr)
-    };
-    combined.trim().to_string()
-}
-
-fn spawn_failure_violation(
-    spec: &StepSpec,
-    program: &str,
-    e: &std::io::Error,
+fn timeout_violation(
+    spec: OrchestrationStep,
+    output: String,
+    timeout_secs: u64,
 ) -> OrchestrationViolation {
     OrchestrationViolation {
         step: spec.step.to_string(),
-        command: spec.cmd_str.to_string(),
+        command: spec.command.to_string(),
         exit_code: None,
-        output: format!("Failed to execute '{}': {}", program, e),
+        output: append_output(
+            output,
+            format!("Command timed out after {timeout_secs}s; process group terminated."),
+        ),
         recommendation: format!(
-            "Ensure '{}' is installed in project dependencies (e.g., package.json) or global PATH.",
-            program
+            "Fix the {} command or raise orchestration.timeout_secs above {timeout_secs} only when the longer runtime is expected.",
+            spec.step
         ),
     }
 }
 
+fn runner_violation(
+    spec: OrchestrationStep,
+    message: String,
+    output: String,
+) -> OrchestrationViolation {
+    OrchestrationViolation {
+        step: spec.step.to_string(),
+        command: spec.command.to_string(),
+        exit_code: None,
+        output: append_output(output, message),
+        recommendation: format!(
+            "Ensure the {} command is installed, executable, and valid for this project.",
+            spec.step
+        ),
+    }
+}
+
+fn append_output(existing: String, extra: String) -> String {
+    let combined = match (existing.is_empty(), extra.is_empty()) {
+        (true, _) => extra,
+        (_, true) => existing,
+        (false, false) => format!("{existing}\n{extra}"),
+    };
+    truncate_report_output(combined)
+}
+
+fn truncate_report_output(mut output: String) -> String {
+    if output.len() <= MAX_REPORT_OUTPUT_BYTES {
+        return output;
+    }
+    let mut end = MAX_REPORT_OUTPUT_BYTES;
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    output.truncate(end);
+    output
+}
+
 pub fn shell_words_split(cmd: &str) -> Vec<String> {
     // Quote-aware split so `--exact "my test"` and spaced paths survive.
-    let mut lex = ShellLexer::default();
+    let mut lexer = ShellLexer::default();
     for c in cmd.chars() {
-        lex.feed(c);
+        lexer.feed(c);
     }
-    lex.finish()
+    lexer.finish()
 }
 
 #[derive(Default)]
