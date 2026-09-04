@@ -239,8 +239,14 @@ includesAll(
     "wait_for_latest_tag()",
     'wait_for_latest_tag "$pkg" "$RELEASE_VERSION"',
     'wait_for_latest_tag "@tech-byte-frontier/hardgate" "$RELEASE_VERSION"',
+    "npm install --global --ignore-scripts",
+    "pnpm add --global --ignore-scripts",
+    'export PNPM_HOME="$pnpm_root"',
+    'env -i PATH="$npm_global/bin:$node_bin:/usr/bin:/bin"',
+    'env -i PATH="$pnpm_bin:$node_bin:/usr/bin:/bin"',
+    'test "$(command -v hardgate)" = "$1"',
   ],
-  "final npm latest dist-tag verification",
+  "final npm latest dist-tag and global-install verification",
 );
 const finalNpmPlatformLoop = finalNpmVerificationStep.slice(
   finalNpmVerificationStep.indexOf("for pkg in hardgate-linux-x64"),

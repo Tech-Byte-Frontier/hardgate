@@ -1012,6 +1012,36 @@ jobs:
           test -x "$npm_binary"
           test "$("$npm_binary" --version)" = "$expected"
 
+          # Exercise the documented global commands in isolated prefixes. A
+          # minimal fresh-shell PATH proves users do not need the repository's
+          # development PATH or a project-local node_modules directory.
+          node_bin=$(dirname "$(command -v node)")
+          npm_global=$(mktemp -d)
+          npm install --global --ignore-scripts --no-audit --no-fund \
+            --prefix "$npm_global" "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"
+          npm_executable="$npm_global/bin/hardgate"
+          test -x "$npm_executable"
+          env -i PATH="$npm_global/bin:$node_bin:/usr/bin:/bin" EXPECTED="$expected" \
+            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' \
+            sh "$npm_executable"
+
+          pnpm_root=$(mktemp -d)
+          mkdir -p "$pnpm_root/home" "$pnpm_root/bin" "$pnpm_root/config"
+          (
+            export HOME="$pnpm_root/home"
+            export XDG_CONFIG_HOME="$pnpm_root/config"
+            export PNPM_HOME="$pnpm_root"
+            export PATH="$PNPM_HOME:$PNPM_HOME/bin:$PATH"
+            pnpm add --global --ignore-scripts "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"
+          )
+          pnpm_bin=$(HOME="$pnpm_root/home" XDG_CONFIG_HOME="$pnpm_root/config" \
+            PNPM_HOME="$pnpm_root" PATH="$pnpm_root:$pnpm_root/bin:$PATH" pnpm bin --global)
+          pnpm_executable="$pnpm_bin/hardgate"
+          test -x "$pnpm_executable"
+          env -i PATH="$pnpm_bin:$node_bin:/usr/bin:/bin" EXPECTED="$expected" \
+            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' \
+            sh "$pnpm_executable"
+
       - name: Verify clean npm, pnpm, Yarn, and Bun consumers
         env:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
