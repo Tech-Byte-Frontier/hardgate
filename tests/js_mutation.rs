@@ -123,12 +123,16 @@ fn resolve_bun_plan(
     timeout_secs: u64,
 ) -> (PathBuf, ResolvedTestPlan) {
     let source = root.join(source_path);
-    let plan = NativeMutationRunner::new(timeout_secs, None).resolve_test_plan(&source, root);
+    let plan = NativeMutationRunner::new(timeout_secs, None)
+        .resolve_test_plan(&source, root)
+        .expect("valid Bun fixture should resolve");
     (source, plan)
 }
 
 fn plan_for(root: &Path, source_path: &str) -> ResolvedTestPlan {
-    NativeMutationRunner::new(60, None).resolve_test_plan(&root.join(source_path), root)
+    NativeMutationRunner::new(60, None)
+        .resolve_test_plan(&root.join(source_path), root)
+        .expect("valid package fixture should resolve")
 }
 
 fn write_app_fixtures(root: &Path) {
@@ -177,7 +181,9 @@ fn resolves_nearest_pnpm_package_and_vitest_file() {
     write_app_fixtures(&root);
 
     let source = root.join("packages/app/src/service.ts");
-    let plan = NativeMutationRunner::new(5, None).resolve_test_plan(&source, &root);
+    let plan = NativeMutationRunner::new(5, None)
+        .resolve_test_plan(&source, &root)
+        .expect("valid pnpm package should resolve");
     assert_relevant_plan(
         &plan,
         ExpectedPlan {
@@ -210,7 +216,9 @@ fn resolves_root_jest_config_for_package_without_local_script() {
     write_web_fixtures(&root);
 
     let source = root.join("packages/web/src/page.tsx");
-    let plan = NativeMutationRunner::new(5, None).resolve_test_plan(&source, &root);
+    let plan = NativeMutationRunner::new(5, None)
+        .resolve_test_plan(&source, &root)
+        .expect("valid Jest package should resolve");
     assert_relevant_plan(
         &plan,
         ExpectedPlan {
@@ -348,7 +356,8 @@ fn custom_placeholders_remain_unchanged() {
     write(&root, "src/widget.ts", "export const widget = true;\n");
     let source = PathBuf::from("src/widget.ts");
     let plan = NativeMutationRunner::new(5, Some("echo {file} {stem}".to_string()))
-        .resolve_test_plan(&source, &root);
+        .resolve_test_plan(&source, &root)
+        .expect("custom test command should resolve");
     assert_eq!(plan.command, "echo src/widget.ts widget");
     assert_eq!(plan.selection, TestSelection::Custom);
     assert_eq!(plan.working_dir, root);
