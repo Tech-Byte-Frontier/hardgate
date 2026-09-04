@@ -256,6 +256,11 @@ critical_paths = ["src/core.ts"]
 
 Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check`, `check --all`, and `verify` resolve the report the same way: an explicit CLI path takes precedence over `coverage.report`; neither command auto-discovers conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
+This repository's self-gate generates branch LCOV with the pinned
+`RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
+instrumentation is unstable. The producer-only nightly toolchain does not
+change the Rust 1.98.1 crate MSRV or normal build/test gates.
+
 `verify` accepts optional path arguments for the current static/dead-code
 inventory and coverage source matching only. Mutation-report ingestion and
 generated freshness remain configured/full. The ratchet still loads and

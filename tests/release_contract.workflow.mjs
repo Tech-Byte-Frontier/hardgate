@@ -31,6 +31,7 @@ includesAll(ci, [
   "scripts/self-gate.sh",
   "CARGO_AUDIT_VERSION: 0.22.2",
   "CARGO_LLVM_COV_VERSION: 0.9.0",
+  "RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04",
   "NODE_VERSION: 26.8.1",
   "NPM_VERSION: 12.0.2",
   "PNPM_VERSION: 11.25.0",
@@ -67,6 +68,7 @@ includesAll(release, [
   "scripts/dependency-audit.sh",
   "scripts/self-gate.sh",
   "node scripts/check-npm-quality.mjs",
+  "RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04",
   "node tests/npm-wrapper.test.mjs",
   "node tests/npm-wrapper-regression.test.mjs",
   "node tests/release_contract.install.test.mjs",
@@ -135,6 +137,21 @@ includesAll(release, [
   "wait_for_latest_tag()",
   "[\"dist-tags\"][\"latest\"]",
 ], "release");
+
+const ciSelfGate = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
+const releaseQualityGate = release.slice(release.indexOf("  quality-gate:"), release.indexOf("  build:"));
+for (const [label, section] of [["CI hardgate-self", ciSelfGate], ["release quality-gate", releaseQualityGate]]) {
+  const coverageToolchain = section.indexOf("toolchain: ${{ env.RUST_COVERAGE_TOOLCHAIN }}");
+  const stableToolchain = section.indexOf("toolchain: ${{ env.RUST_TOOLCHAIN }}");
+  assert.ok(coverageToolchain >= 0, `${label} must install the pinned coverage toolchain`);
+  assert.ok(stableToolchain > coverageToolchain, `${label} must leave stable Rust as the default toolchain`);
+  assert.match(
+    section.slice(coverageToolchain, stableToolchain),
+    /components: llvm-tools-preview/,
+    `${label} coverage toolchain must include llvm-tools-preview`,
+  );
+}
+
 assert.doesNotMatch(release, /--clobber/, "immutable release assets must never be overwritten in place");
 assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
 assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");

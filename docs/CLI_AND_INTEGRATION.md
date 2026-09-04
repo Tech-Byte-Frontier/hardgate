@@ -2,6 +2,11 @@
 
 Commands run from the current repository. Hardgate loads `hardgate.toml` when present; without it, the `strict-agent` default bundle is used. A command exits non-zero when its report contains a blocking finding. Advisories remain visible context.
 
+The repository's self-gate generates branch LCOV with the pinned
+`RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
+instrumentation is unstable. This producer-only toolchain is separate from the
+Rust 1.98.1 crate MSRV and normal build/test gates.
+
 ## `hardgate init`
 
 Write a commented configuration template without overwriting an existing file:
