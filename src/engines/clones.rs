@@ -17,8 +17,9 @@ pub struct CloneViolation {
     pub lines_b: (usize, usize),
     pub tokens: usize,
     pub lines: usize,
-    /// Stable FNV-1a fingerprint of the canonical file pair and normalized
-    /// clone tokens. It intentionally excludes physical line locations.
+    /// Stable FNV-1a fingerprint of the normalized clone tokens. It excludes
+    /// file paths and physical line locations so rename lineage can be handled
+    /// by the adoption key without changing content identity.
     #[serde(default)]
     pub fingerprint: String,
     pub message: String,
@@ -402,7 +403,7 @@ fn build_violation(
         lines_b: (c.start_b, c.end_b),
         tokens: actual_tokens,
         lines: span,
-        fingerprint: clone_fingerprint(&c.file_a, &c.file_b, tokens_a),
+        fingerprint: clone_fingerprint(tokens_a),
         message: format!(
             "Duplicate code clone ({} lines, ~{} tokens) between `{}:{}-{}` and `{}:{}-{}`",
             span,

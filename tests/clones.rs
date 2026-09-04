@@ -107,6 +107,17 @@ fn test_fingerprint_ignores_line_movement() {
 }
 
 #[test]
+fn test_fingerprint_survives_file_rename() {
+    let baseline = clone_pair("src/a.rs", "src/b.rs");
+    let renamed = vec![
+        (PathBuf::from("renamed/a.rs"), baseline[0].1.clone()),
+        (PathBuf::from("renamed/b.rs"), baseline[1].1.clone()),
+    ];
+
+    assert_eq!(first_fingerprint(&baseline), first_fingerprint(&renamed));
+}
+
+#[test]
 fn test_fingerprint_is_independent_of_input_order() {
     let baseline = clone_pair("src/a.rs", "src/b.rs");
     let reversed = vec![baseline[1].clone(), baseline[0].clone()];
