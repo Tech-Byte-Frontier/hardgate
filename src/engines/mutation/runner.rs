@@ -7,7 +7,6 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-
 /// Maximum amount of output retained from each command stream.
 ///
 /// Mutation commands can be noisy (especially compilers). Keeping the streams
@@ -17,7 +16,6 @@ const MAX_DIAGNOSTIC_STREAM_BYTES: usize = 32 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = MAX_DIAGNOSTIC_STREAM_BYTES * 2;
 const DIAGNOSTIC_READER_TIMEOUT: Duration = Duration::from_secs(1);
 const TERMINATION_GRACE: Duration = Duration::from_millis(200);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MutantOutcome {
     Killed,
@@ -28,7 +26,6 @@ pub enum MutantOutcome {
     Equivalent,
     Unviable,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutantExecutionResult {
     pub mutant: AstMutant,
@@ -40,7 +37,6 @@ pub struct MutantExecutionResult {
     /// Whether the original source bytes were restored and verified.
     pub source_restored: bool,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaselineOutcome {
     Passed,
@@ -48,7 +44,6 @@ pub enum BaselineOutcome {
     Timeout,
     RunnerError,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaselineExecutionResult {
     pub file: PathBuf,
@@ -58,18 +53,15 @@ pub struct BaselineExecutionResult {
     /// Bounded stdout/stderr from the baseline command or a runner diagnostic.
     pub diagnostic: String,
 }
-
 pub struct NativeMutationRunner {
     timeout_secs: u64,
     test_cmd: Option<String>,
 }
-
 struct RollbackGuard<'a> {
     file_path: &'a Path,
     original_bytes: &'a [u8],
     restored: bool,
 }
-
 impl<'a> RollbackGuard<'a> {
     fn new(file_path: &'a Path, original_bytes: &'a [u8]) -> Self {
         Self {
@@ -78,7 +70,6 @@ impl<'a> RollbackGuard<'a> {
             restored: false,
         }
     }
-
     /// Restore the source and verify byte-for-byte equality.
     fn restore(&mut self) -> std::io::Result<()> {
         fs::write(self.file_path, self.original_bytes)?;
@@ -92,7 +83,6 @@ impl<'a> RollbackGuard<'a> {
         Ok(())
     }
 }
-
 impl<'a> Drop for RollbackGuard<'a> {
     fn drop(&mut self) {
         if self.restored {
@@ -107,7 +97,6 @@ impl<'a> Drop for RollbackGuard<'a> {
         }
     }
 }
-
 impl NativeMutationRunner {
     pub fn new(timeout_secs: u64, test_cmd: Option<String>) -> Self {
         Self {
@@ -115,13 +104,11 @@ impl NativeMutationRunner {
             test_cmd,
         }
     }
-
     /// Run one mutant and restore the source before returning.
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
         let target_path = resolve_target_path(&mutant.file, root);
         let command = self.resolve_test_command(&mutant.file, root);
-
         let original_bytes = match fs::read(&target_path) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -138,7 +125,6 @@ impl NativeMutationRunner {
                 };
             }
         };
-
         let mut guard = RollbackGuard::new(&target_path, &original_bytes);
         let mut execution = match apply_mutant_bytes(&target_path, mutant, &original_bytes) {
             Ok(()) => self.execute_test_with_timeout(&command, root),
@@ -151,7 +137,6 @@ impl NativeMutationRunner {
                 diagnostic: format!("Failed to apply mutant {}: {error}", mutant.id),
             },
         };
-
         let source_restored = guard.restore().is_ok();
         if !source_restored {
             execution.outcome = MutantOutcome::RunnerError;
@@ -174,7 +159,6 @@ impl NativeMutationRunner {
             source_restored,
         }
     }
-
     /// Run the resolved test command against the unmodified source tree.
     pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
         let start = Instant::now();
@@ -198,7 +182,6 @@ impl NativeMutationRunner {
             diagnostic: execution.diagnostic,
         }
     }
-
     fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
         if let Some(ref cmd) = self.test_cmd {
             let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -216,7 +199,6 @@ impl NativeMutationRunner {
             _ => "cargo test".to_string(),
         }
     }
-
     fn execute_test_with_timeout(&self, cmd_str: &str, root: &Path) -> CommandExecution {
         let tokens = crate::engines::orchestration::shell_words_split(cmd_str);
         if tokens.is_empty() {
@@ -225,7 +207,6 @@ impl NativeMutationRunner {
                 diagnostic: "Empty command string".to_string(),
             };
         }
-
         let mut child = match spawn_quiet(&tokens, root) {
             Ok(child) => child,
             Err(error) => {
