@@ -89,7 +89,8 @@ checks the platform package selected by the matrix. On glibc Linux it can
 fall back to the musl package when the glibc candidate is unavailable; it
 never selects a glibc binary on a musl host. It then tries a development
 binary or `hardgate` on `PATH`. It never downloads a binary at runtime.
-Unsupported platforms fail closed.
+Normal launcher resolution on unsupported platforms fails closed; an explicit
+`HARDGATE_BINARY` override is honored first.
 
 ### Cargo and source
 
