@@ -229,6 +229,50 @@ fn absolute_changed_paths_are_normalized_and_prioritized() {
 }
 
 #[test]
+fn absolute_paths_outside_root_remain_normalized_absolute() {
+    let detector = cap_test_detector();
+    let files = vec![
+        (
+            PathBuf::from("/tmp/hardgate-coverage-peer/../outside/a.rs"),
+            one_token_lines(100, "token_"),
+        ),
+        (
+            PathBuf::from("/tmp/hardgate-coverage-peer/../outside/b.rs"),
+            one_token_lines(100, "token_"),
+        ),
+    ];
+
+    let violations = detector
+        .detect_clones_checked(&files, Path::new("/tmp/hardgate-coverage-root"))
+        .unwrap();
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].file_a, PathBuf::from("/tmp/outside/a.rs"));
+    assert_eq!(violations[0].file_b, PathBuf::from("/tmp/outside/b.rs"));
+}
+
+#[test]
+fn overlapping_clone_windows_coalesce_into_one_span() {
+    let mut config = clone_config();
+    config.min_lines = 1;
+    config.min_tokens = 3;
+    let detector = CloneDetector::new(&config);
+    let content = one_token_lines(10, "unique_");
+    let files = vec![
+        (PathBuf::from("src/a.rs"), content.clone()),
+        (PathBuf::from("src/b.rs"), content),
+    ];
+
+    let violations = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap();
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].lines_a, (1, 10));
+    assert_eq!(violations[0].lines_b, (1, 10));
+    assert_eq!(violations[0].lines, 10);
+    assert_eq!(violations[0].tokens, 10);
+}
+
+#[test]
 fn static_snapshot_turns_hash_truncation_into_required_evidence() {
     let mut config = HardgateConfig::default();
     config.roles.source.clone_min_lines = Some(1);
