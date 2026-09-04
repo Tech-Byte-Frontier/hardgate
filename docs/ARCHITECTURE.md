@@ -109,17 +109,15 @@ Orchestration commands run sequentially from the repository root; a local `node_
 
 ## Native mutation and JavaScript resolution
 
-Native mutation is source-role only and is available to source builds on Linux
-and macOS through the target-OS cfg. On other operating systems it fails closed
-before baseline or source writes because robust process-group cleanup and
-atomic restoration are not available. When `[mutation].enabled = false`, the
-command exits successfully without target discovery or execution. When enabled,
-it resolves a test command per file, runs a passing unmutated baseline, mutates
-one AST point at a time, classifies outcomes, and verifies byte-for-byte
-restoration. A failed baseline or zero viable mutants fails before a green
-result. The prebuilt, npm, and shell-installer release contract remains exactly
-six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc and musl, macOS
-x64/arm64); that distribution matrix does not constrain source builds.
+Native mutation is source-role only and is compiled for Linux and macOS
+targets, including all six prebuilt/npm release binaries. Source builds
+targeting another operating system fail closed before baseline or source writes
+because robust process-group cleanup and atomic restoration are not available.
+When `[mutation].enabled = false`, the command exits successfully without
+target discovery or execution. When enabled, it resolves a test command per
+file, runs a passing unmutated baseline, mutates one AST point at a time,
+classifies outcomes, and verifies byte-for-byte restoration. A failed baseline
+or zero viable mutants fails before a green result.
 
 After an explicit scope is validated, a `mutate --diff` run (including
 `--scoped`) with no changed production source is a successful no-op. Missing,

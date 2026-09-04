@@ -5,11 +5,12 @@ hardgate prebuilt binary: linux x64 (musl, static — Alpine/Docker).
 This is a platform-specific package. Install the main wrapper instead:
 
 ```sh
-npm i -D @tech-byte-frontier/hardgate
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
 npx hardgate check
 ```
 
-Binaries are delivered via `optionalDependencies`, no postinstall downloads.
+The main wrapper receives this binary through `optionalDependencies`; no
+postinstall download runs.
 
 Full docs: https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0
 

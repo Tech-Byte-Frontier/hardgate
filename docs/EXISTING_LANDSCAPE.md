@@ -53,9 +53,8 @@ A project can use all of these tools and still have an ambiguous acceptance rule
 
 Hardgate parses Rust, JavaScript, TypeScript/TSX, Python, and Go with Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates several mutation JSON shapes; and speaks MCP over stdio. It does not claim global module resolution, compiler/type analysis, a broader parser matrix, another MCP transport, or a hosted quality dashboard.
 
-For the v0.5.0 release contract, the npm wrapper and shell installer are
-specified to select exactly six Linux/macOS artifacts (Linux x64/arm64 glibc
-and musl, macOS x64/arm64). The channel specification does not assert that
-publication has already occurred. Release archives are checked with `SHA256SUMS`,
-`BUILD-METADATA.json`, the target marker, and exact version/commit identity.
-There is no Windows or Homebrew installer in this contract.
+For v0.5.0, the npm wrapper and shell installer select exactly six Linux/macOS
+artifacts (Linux x64/arm64 glibc and musl, macOS x64/arm64). Release archives
+are checked with `SHA256SUMS`, `BUILD-METADATA.json`, the target marker, and
+exact version/commit identity. There is no Windows or Homebrew installer in
+this contract.

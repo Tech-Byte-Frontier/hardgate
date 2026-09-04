@@ -134,14 +134,11 @@ source exists. Missing, invalid, unsupported, or non-source explicit scopes
 fail closed. Only a non-diff unrestricted invocation or explicit scope with no
 eligible source-role target fails before mutation execution.
 
-Native mutation is available to source builds on Linux and macOS through the
-target-OS cfg. On other operating systems it fails closed before baseline or
-source writes because the required process-group cleanup and atomic
-source-restoration guarantees are unavailable. Static `check` and `scan` are
-separate commands. The prebuilt, npm, and shell-installer release contract
-remains exactly six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc
-and musl, macOS x64/arm64); that distribution matrix does not constrain source
-builds.
+Native mutation is compiled for Linux and macOS targets, including all six
+prebuilt/npm release binaries. Source builds targeting another operating
+system fail closed before baseline or source writes because the required
+process-group cleanup and atomic source-restoration guarantees are unavailable.
+Static `check` and `scan` remain separate commands.
 
 ### JavaScript/TypeScript command resolution
 

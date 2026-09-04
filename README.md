@@ -16,7 +16,7 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 - **Architectural boundaries.** Declarative path-scoped rules inspect import strings, call names, and tokens. This is a local rule scanner, not module resolution or type checking.
 - **Clone debt.** Bounded token windows compare eligible files using verified normalized token sequences. Current clone findings carry a stable content fingerprint that does not include path or line numbers, so rename lineage can be matched during legacy adoption.
 - **Evidence.** Enabled LCOV coverage and JSON mutation reports are required inputs. Empty, missing, unreadable, or malformed required evidence is a blocking finding. Disabled engines do not consume stale report files. Generated-artifact freshness is a separate required check when enabled. This repository generates its branch LCOV with the pinned `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch instrumentation is unstable; the report includes executable `build.rs` coverage, while Rust 1.98.1 remains the crate MSRV and normal build/test toolchain.
-- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is separate from report ingestion and is available to source builds on Linux and macOS through the target-OS cfg; on other operating systems it fails closed before baseline or source writes because process-group cleanup and atomic restoration are unavailable there. The prebuilt, npm, and shell-installer release contract remains exactly six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc and musl, macOS x64/arm64), which does not constrain source builds.
+- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is compiled for Linux and macOS targets, including all six prebuilt/npm release binaries; source builds targeting another operating system fail closed before baseline or source writes because process-group cleanup and atomic restoration are unavailable there. Static `check` and `scan` remain independent.
 - **Orchestration.** `check --all` runs only formatter, linter, and test commands configured by the repository. Hardgate never invents a command or treats an unconfigured test suite as evidence.
 
 Invariant checking is enabled by default; with no configured rules it has nothing to report. Set `[invariants].enforce = false` to disable it explicitly.
@@ -60,16 +60,16 @@ inventoried as configuration and likewise have no function metrics.
 The main npm package launches a prebuilt binary and does not require a Rust toolchain for ordinary use:
 
 ```sh
-npm i -D @tech-byte-frontier/hardgate
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
 npx hardgate check
 
-pnpm add -D @tech-byte-frontier/hardgate
+pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
 pnpm exec hardgate check --diff
 
-yarn add -D @tech-byte-frontier/hardgate
+yarn add --dev --exact @tech-byte-frontier/hardgate@0.5.0
 yarn exec hardgate verify
 
-bun add -d @tech-byte-frontier/hardgate
+bun add --dev --exact @tech-byte-frontier/hardgate@0.5.0
 bunx --no-install hardgate scan src/index.ts
 ```
 
@@ -88,12 +88,13 @@ pnpm add --global @tech-byte-frontier/hardgate@0.5.0
 hardgate --version
 ```
 
-For pnpm, run `pnpm setup` once if pnpm reports that it cannot find a global
-bin directory, then open a new shell so `PNPM_HOME` is on `PATH`. A pinned
-project-local development dependency remains the more reproducible choice for
-CI and teams.
+For npm, `npm prefix --global` prints the global prefix; its `bin` directory
+must be on `PATH`. For pnpm, run `pnpm setup` once if pnpm reports that it
+cannot find a global bin directory, then open a new shell so `PNPM_HOME` is on
+`PATH`. An exact project-local development dependency plus a committed lockfile
+is the more reproducible choice for CI and teams.
 
-The v0.5.0 release contract defines exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
+The v0.5.0 wrapper ships exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc:
 
 | Target | Package |
 | --- | --- |
@@ -115,9 +116,9 @@ Normal launcher resolution on unsupported platforms fails closed; an explicit
 ### Cargo and source
 
 ```sh
-cargo install hardgate --locked
+cargo install hardgate --version 0.5.0 --locked
 
-git clone https://github.com/Tech-Byte-Frontier/hardgate.git
+git clone --branch v0.5.0 https://github.com/Tech-Byte-Frontier/hardgate.git
 cd hardgate
 cargo install --path . --locked
 ```
@@ -146,26 +147,58 @@ Pinned installs and lockfiles do not auto-update. Upgrade explicitly to 0.5.0:
 
 ```sh
 cargo install hardgate --version 0.5.0 --locked --force
-npm install --save-dev @tech-byte-frontier/hardgate@0.5.0
-pnpm add --save-dev @tech-byte-frontier/hardgate@0.5.0
-yarn up @tech-byte-frontier/hardgate@0.5.0
-bun add --dev @tech-byte-frontier/hardgate@0.5.0
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
+pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
+yarn up --exact @tech-byte-frontier/hardgate@0.5.0
+bun add --dev --exact @tech-byte-frontier/hardgate@0.5.0
+npm install --global @tech-byte-frontier/hardgate@0.5.0
+pnpm add --global @tech-byte-frontier/hardgate@0.5.0
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
+  HARDGATE_VERSION=v0.5.0 sh
 ```
 
-Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
+The exact flags pin the manifest entry; a committed lockfile pins the resolved
+artifact. Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
 
 ### Shell installer
 
 The v0.5.0 release installer contract supports exactly the six Linux/macOS targets listed above (Linux x64/arm64 glibc and musl, macOS x64/arm64). It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects the libc and takes precedence over automatic detection. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | HARDGATE_VERSION=vX.Y.Z sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
+  HARDGATE_VERSION=v0.5.0 sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
+  HARDGATE_VERSION=0.5.0 HARDGATE_INSTALL_DIR="$HOME/.local/bin" sh
+
+# Deliberately track the newest release instead of pinning a version.
 curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | \
-  HARDGATE_VERSION=X.Y.Z HARDGATE_INSTALL_DIR="$HOME/.local/bin" sh
+  HARDGATE_VERSION=latest sh
 ```
 
 There is no Windows or Homebrew installer in this contract.
+
+### Uninstall
+
+Use the command matching the installation channel:
+
+```sh
+cargo uninstall hardgate
+npm uninstall --save-dev @tech-byte-frontier/hardgate
+pnpm remove --save-dev @tech-byte-frontier/hardgate
+yarn remove @tech-byte-frontier/hardgate
+bun remove @tech-byte-frontier/hardgate
+npm uninstall --global @tech-byte-frontier/hardgate
+pnpm remove --global @tech-byte-frontier/hardgate
+```
+
+For a shell installation only, remove the exact destination you selected. The
+default is `$HOME/.cargo/bin/hardgate`; do not remove that path if another
+installation channel now owns it.
+
+```sh
+# Only after confirming this exact file came from scripts/install.sh:
+rm -- "$HOME/.cargo/bin/hardgate"
+```
 
 ## Initialize a policy
 
@@ -217,6 +250,10 @@ hardgate fmt --check
 hardgate check --format agent
 hardgate check --format json
 ```
+
+Use `hardgate check --all` as the normal CI entry point after configuring the
+repository's formatter, linter, and tests. Plain `check` remains the fast,
+non-orchestrating command for local and agent feedback loops.
 
 The command contract is:
 
