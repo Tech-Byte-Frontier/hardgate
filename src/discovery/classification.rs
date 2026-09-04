@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use globset::Glob;
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path};
+use std::path::Path;
 
 use crate::config::ClassificationConfig;
 
@@ -133,7 +133,7 @@ pub fn classify_with_config(
 
     // Discovery prunes these directories, and explicit scans must preserve the
     // same safety boundary even when a user rule tries to override it.
-    if contains_component(path, VENDOR_DIRS) || contains_component_str(&normalized, VENDOR_DIRS) {
+    if has_directory_component(&normalized, VENDOR_DIRS) {
         return Ok((
             FileRole::Vendor,
             "dependency or build-output directory".to_string(),
@@ -168,7 +168,7 @@ fn classify_builtin(path: &Path) -> (FileRole, &'static str) {
 }
 
 fn classify_builtin_parts(path: &str, file_name: &str) -> (FileRole, &'static str) {
-    if contains_component_str(path, VENDOR_DIRS) {
+    if has_directory_component(path, VENDOR_DIRS) {
         return (FileRole::Vendor, "dependency or build-output directory");
     }
     if is_generated(path, file_name) {
@@ -183,7 +183,7 @@ fn classify_builtin_parts(path: &str, file_name: &str) -> (FileRole, &'static st
     if is_migration(path, file_name) {
         return (FileRole::Migration, "migration or seed convention");
     }
-    if is_configuration(file_name) {
+    if is_configuration(path, file_name) {
         return (FileRole::Config, "configuration/data extension");
     }
     if is_documentation(file_name) {
@@ -207,72 +207,64 @@ const VENDOR_DIRS: &[&str] = &[
 ];
 
 fn is_generated(path: &str, file_name: &str) -> bool {
-    contains_any(
-        path,
-        &[
-            "__generated__/",
-            "generated/",
-            "gen/",
-            "/__generated__/",
-            "/generated/",
-            "/gen/",
-        ],
-    ) || contains_any(file_name, &[".generated.", ".gen."])
+    has_directory_component(path, &["__generated__", "generated", "gen"])
+        || has_filename_token(file_name, "generated")
+        || has_filename_token(file_name, "gen")
         || matches!(file_name, "database.types.ts" | "schema.gen.ts")
 }
 
 fn is_fixture(path: &str, file_name: &str) -> bool {
-    contains_any(
+    has_directory_component(
         path,
-        &[
-            "__fixtures__/",
-            "fixtures/",
-            "__snapshots__/",
-            "snapshots/",
-            "/__fixtures__/",
-            "/fixtures/",
-            "/__snapshots__/",
-            "/snapshots/",
-        ],
-    ) || contains_any(file_name, &[".fixture.", ".fixtures.", ".snap"])
+        &["__fixtures__", "fixtures", "__snapshots__", "snapshots"],
+    ) || has_filename_token(file_name, "fixture")
+        || has_filename_token(file_name, "fixtures")
+        || extension(file_name) == "snap"
 }
 
 fn is_test(path: &str, file_name: &str) -> bool {
-    contains_any(
+    has_directory_component(
         path,
         &[
-            "tests/",
-            "test/",
-            "/tests/",
-            "/test/",
-            "__tests__/",
-            "/__tests__/",
-            "__mocks__/",
-            "/__mocks__/",
-            "mocks/",
-            "/mocks/",
-            "stories/",
-            "/stories/",
+            "tests",
+            "test",
+            "__tests__",
+            "__mocks__",
+            "mocks",
+            "stories",
         ],
-    ) || contains_any(file_name, &[".test.", ".spec.", ".stories.", ".mock."])
+    ) || has_filename_token(file_name, "test")
+        || has_filename_token(file_name, "spec")
+        || has_filename_token(file_name, "stories")
+        || has_filename_token(file_name, "mock")
 }
 
 fn is_migration(path: &str, file_name: &str) -> bool {
-    path.contains("/migrations/")
-        || path.starts_with("migrations/")
-        || path.contains("/migration/")
-        || path.starts_with("migration/")
+    has_directory_component(path, &["migrations", "migration"])
         || file_name == "seed.sql"
         || file_name == "seed.ts"
         || file_name.ends_with(".migration.sql")
         || file_name.ends_with(".seed.sql")
 }
 
-fn is_configuration(file_name: &str) -> bool {
-    matches!(
-        extension(file_name),
-        "json" | "jsonc" | "toml" | "yaml" | "yml"
-    )
+fn is_configuration(path: &str, file_name: &str) -> bool {
+    has_directory_component(path, &["config", "configs"])
+        || has_filename_token(file_name, "config")
+        || is_rc_configuration(file_name)
+        || matches!(
+            extension(file_name),
+            "json" | "jsonc" | "toml" | "yaml" | "yml"
+        )
+}
+
+fn is_rc_configuration(file_name: &str) -> bool {
+    let Some(name) = file_name.strip_prefix('.') else {
+        return false;
+    };
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    stem.len() > 2 && stem.ends_with("rc") && INVENTORY_EXTENSIONS.contains(&extension)
 }
 
 fn is_documentation(file_name: &str) -> bool {
@@ -283,23 +275,25 @@ fn extension(file_name: &str) -> &str {
     file_name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
 }
 
-fn contains_component(path: &Path, candidates: &[&str]) -> bool {
-    path.components().any(|component| match component {
-        Component::Normal(value) => value.to_str().is_some_and(|part| {
-            candidates
-                .iter()
-                .any(|candidate| part.eq_ignore_ascii_case(candidate))
-        }),
-        _ => false,
-    })
+fn has_directory_component(path: &str, candidates: &[&str]) -> bool {
+    let mut components = path.split('/');
+    while let Some(component) = components.next() {
+        if candidates.contains(&component) && components.clone().next().is_some() {
+            return true;
+        }
+    }
+    false
 }
 
-fn contains_component_str(path: &str, candidates: &[&str]) -> bool {
-    path.split('/').any(|part| candidates.contains(&part))
-}
-
-fn contains_any(value: &str, markers: &[&str]) -> bool {
-    markers.iter().any(|marker| value.contains(marker))
+/// Match a marker bounded by dots in a filename (for example, `button.test.ts`).
+/// Requiring both delimiters keeps names such as `latest.ts` and
+/// `storybooked.ts` out of the test conventions.
+fn has_filename_token(file_name: &str, token: &str) -> bool {
+    file_name
+        .split('.')
+        .collect::<Vec<_>>()
+        .windows(3)
+        .any(|window| window[1] == token)
 }
 
 fn normalize(path: &Path) -> String {
