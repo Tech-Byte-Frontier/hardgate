@@ -211,8 +211,10 @@ fn rust_mod_regex() -> &'static Regex {
 fn rust_path_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"#\[path\s*=\s*["']([^"']+)["']\]\s*mod\s+[a-zA-Z0-9_]+\s*;"#)
-            .expect("valid path module regex")
+        Regex::new(
+            r#"#\[path\s*=\s*["']([^"']+)["']\]\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[a-zA-Z0-9_]+\s*;"#,
+        )
+        .expect("valid path module regex")
     })
 }
 

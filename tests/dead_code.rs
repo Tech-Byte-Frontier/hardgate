@@ -106,7 +106,7 @@ fn cargo_build_scripts_and_path_modules_are_reachable() {
         entry("src/main.rs", "mod js; mod runner;"),
         entry(
             "src/engines/mutation/js.rs",
-            "#[cfg(test)] #[path = \"js_resolver_tests.rs\"] mod tests;",
+            "#[cfg(test)] #[path = \"js_resolver_tests.rs\"] pub(crate) mod tests;",
         ),
         entry(
             "src/engines/mutation/js_resolver_tests.rs",
