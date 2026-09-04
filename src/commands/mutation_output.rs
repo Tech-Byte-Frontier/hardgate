@@ -136,6 +136,30 @@ pub(crate) struct MutationNoop<'a> {
     pub message: &'a str,
 }
 
+const DISABLED_MUTATION_MESSAGE: &str =
+    "mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.";
+const NO_CHANGED_TARGETS_MESSAGE: &str =
+    "no git-modified files found for mutation testing; no changed production source targets.";
+const DISABLED_MUTATION_NOTICE: MutationNoopNotice = MutationNoopNotice {
+    stage: "policy",
+    kind: "disabled",
+    message: DISABLED_MUTATION_MESSAGE,
+    note: DISABLED_MUTATION_MESSAGE,
+};
+const NO_CHANGED_TARGETS_NOTICE: MutationNoopNotice = MutationNoopNotice {
+    stage: "selection",
+    kind: "no-changed-targets",
+    message: NO_CHANGED_TARGETS_MESSAGE,
+    note: "no git-modified files found for mutation testing; no changed production source targets (no-op).",
+};
+
+struct MutationNoopNotice {
+    stage: &'static str,
+    kind: &'static str,
+    message: &'static str,
+    note: &'static str,
+}
+
 pub(crate) fn render_mutation_noop(
     noop: MutationNoop<'_>,
     format: Option<&str>,
@@ -147,25 +171,7 @@ pub(crate) fn render_mutation_noop(
 }
 
 pub(crate) fn finish_disabled_mutation(format: Option<&str>) -> anyhow::Result<()> {
-    if format == Some("json") {
-        render_mutation_noop(
-            MutationNoop {
-                passed: true,
-                status: "noop",
-                stage: "policy",
-                kind: "disabled",
-                message: "mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.",
-            },
-            format,
-        )
-        .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
-    } else {
-        println!(
-            "{} mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.",
-            "note:".green().bold()
-        );
-    }
-    Ok(())
+    render_noop_or_note(format, DISABLED_MUTATION_NOTICE)
 }
 
 pub(crate) fn handle_no_targets(diff: bool, format: Option<&str>) -> anyhow::Result<()> {
@@ -177,23 +183,24 @@ pub(crate) fn handle_no_targets(diff: bool, format: Option<&str>) -> anyhow::Res
         )
         .into());
     }
+    render_noop_or_note(format, NO_CHANGED_TARGETS_NOTICE)
+}
+
+fn render_noop_or_note(format: Option<&str>, notice: MutationNoopNotice) -> anyhow::Result<()> {
     if format == Some("json") {
         render_mutation_noop(
             MutationNoop {
                 passed: true,
                 status: "noop",
-                stage: "selection",
-                kind: "no-changed-targets",
-                message: "no git-modified files found for mutation testing; no changed production source targets.",
+                stage: notice.stage,
+                kind: notice.kind,
+                message: notice.message,
             },
             format,
         )
         .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
     } else {
-        println!(
-            "{} no git-modified files found for mutation testing; no changed production source targets (no-op).",
-            "note:".green().bold()
-        );
+        println!("{} {}", "note:".green().bold(), notice.note);
     }
     Ok(())
 }

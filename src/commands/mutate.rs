@@ -80,7 +80,13 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     let selected_files = selected_mutant_files(&mutants);
     let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
-    run_unmutated_baselines(&runner, &selected_files, &target_files, root, json)?;
+    run_unmutated_baselines(BaselineRun {
+        runner: &runner,
+        command_files: &selected_files,
+        protected_files: &target_files,
+        root,
+        json,
+    })?;
     if !json {
         print_mutant_notice(mutants.len(), timeout);
     }
@@ -210,14 +216,16 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     targets::effective_mutation_target(path, config)
 }
-fn run_unmutated_baselines(
-    runner: &NativeMutationRunner,
-    command_files: &[PathBuf],
-    protected_files: &[PathBuf],
-    root: &Path,
+struct BaselineRun<'a> {
+    runner: &'a NativeMutationRunner,
+    command_files: &'a [PathBuf],
+    protected_files: &'a [PathBuf],
+    root: &'a Path,
     json: bool,
-) -> Result<()> {
-    let protected = NativeMutationRunner::snapshot_baseline_sources(protected_files, root)
+}
+
+fn run_unmutated_baselines(run: BaselineRun<'_>) -> Result<()> {
+    let protected = NativeMutationRunner::snapshot_baseline_sources(run.protected_files, run.root)
         .map_err(|error| {
             MutationFailure::new(
                 "baseline",
@@ -226,16 +234,17 @@ fn run_unmutated_baselines(
             )
         })?;
     let mut commands = BTreeMap::new();
-    for file in command_files {
-        let plan = runner
-            .resolve_baseline_plan(file, root, &protected)
+    for file in run.command_files {
+        let plan = run
+            .runner
+            .resolve_baseline_plan(file, run.root, &protected)
             .map_err(MutationFailure::from_runner_error)?;
         commands
             .entry((plan.working_dir.clone(), plan.command.clone()))
             .or_insert_with(|| (file.clone(), plan));
     }
 
-    if !json {
+    if !run.json {
         println!(
             "{} running {} unmutated baseline command(s)...",
             "note:".bold(),
@@ -243,7 +252,7 @@ fn run_unmutated_baselines(
         );
     }
     for ((working_dir, command), (file, plan)) in commands {
-        if !json {
+        if !run.json {
             println!(
                 "   {} ({}) in {}",
                 command.dimmed(),
@@ -251,9 +260,11 @@ fn run_unmutated_baselines(
                 working_dir.display()
             );
         }
-        let result = runner.run_resolved_baseline_with_sources(&file, root, &protected, plan);
+        let result = run
+            .runner
+            .run_resolved_baseline_with_sources(&file, run.root, &protected, plan);
         if result.outcome == BaselineOutcome::Passed {
-            if !json {
+            if !run.json {
                 println!("      ... {}", "passed".green().bold());
             }
             continue;
