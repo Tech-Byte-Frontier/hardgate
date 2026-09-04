@@ -1,13 +1,10 @@
-mod process;
-
 use crate::config::OrchestrationConfig;
-use process::{ProcessOutcome, run_command};
+use crate::engines::process::{ProcessOutcome, append_output, run_command};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
-const MAX_REPORT_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// One external tool failure (formatter, linter, or test step).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,7 +164,12 @@ impl OrchestrationEngine {
             return Err(empty_command_violation(&spec));
         }
         let timeout_secs = self.timeout_secs();
-        let outcome = run_command(&tokens, root, Duration::from_secs(timeout_secs));
+        let outcome = run_command(
+            &tokens,
+            root,
+            Duration::from_secs(timeout_secs),
+            "orchestration",
+        );
         finish_outcome(outcome, spec, start, timeout_secs)
     }
 
@@ -253,27 +255,6 @@ fn runner_violation(
             spec.step
         ),
     }
-}
-
-fn append_output(existing: String, extra: String) -> String {
-    let combined = match (existing.is_empty(), extra.is_empty()) {
-        (true, _) => extra,
-        (_, true) => existing,
-        (false, false) => format!("{existing}\n{extra}"),
-    };
-    truncate_report_output(combined)
-}
-
-fn truncate_report_output(mut output: String) -> String {
-    if output.len() <= MAX_REPORT_OUTPUT_BYTES {
-        return output;
-    }
-    let mut end = MAX_REPORT_OUTPUT_BYTES;
-    while !output.is_char_boundary(end) {
-        end -= 1;
-    }
-    output.truncate(end);
-    output
 }
 
 pub fn shell_words_split(cmd: &str) -> Vec<String> {

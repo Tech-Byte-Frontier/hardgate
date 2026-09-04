@@ -17,18 +17,29 @@ pub(crate) enum ProcessOutcome {
     Failed { message: String, output: String },
 }
 
-pub(crate) fn run_command(tokens: &[String], root: &Path, timeout: Duration) -> ProcessOutcome {
+pub(crate) fn run_command(
+    tokens: &[String],
+    root: &Path,
+    timeout: Duration,
+    operation: &str,
+) -> ProcessOutcome {
+    let Some(program) = tokens.first() else {
+        return ProcessOutcome::Failed {
+            message: "Empty command string; nothing was executed.".to_string(),
+            output: String::new(),
+        };
+    };
     let mut child = match spawn_command(tokens, root) {
         Ok(child) => child,
         Err(error) => {
             return ProcessOutcome::Failed {
-                message: format!("Failed to execute '{}': {error}", tokens[0]),
+                message: format!("Failed to execute '{program}': {error}"),
                 output: String::new(),
             };
         }
     };
     let captured = CapturedOutput::from_child(&mut child);
-    match wait_for_child(&mut child, timeout) {
+    match wait_for_child(&mut child, timeout, operation) {
         ProcessWait::Exited(status) => ProcessOutcome::Completed {
             status,
             output: captured.collect(),
@@ -41,6 +52,15 @@ pub(crate) fn run_command(tokens: &[String], root: &Path, timeout: Duration) -> 
             output: captured.collect(),
         },
     }
+}
+
+pub(crate) fn append_output(existing: String, extra: String) -> String {
+    let combined = match (existing.is_empty(), extra.is_empty()) {
+        (true, _) => extra,
+        (_, true) => existing,
+        (false, false) => format!("{existing}\n{extra}"),
+    };
+    truncate_output(combined)
 }
 
 fn spawn_command(tokens: &[String], root: &Path) -> std::io::Result<Child> {
@@ -56,12 +76,13 @@ fn spawn_command(tokens: &[String], root: &Path) -> std::io::Result<Child> {
 }
 
 fn prepend_local_bin(command: &mut Command, root: &Path) {
-    let current_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = std::env::split_paths(&current_path).collect::<Vec<_>>();
     let local_bin = root.join("node_modules").join(".bin");
-    if local_bin.exists() {
-        paths.insert(0, local_bin);
+    if !local_bin.is_dir() {
+        return;
     }
+    let mut paths =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
+    paths.insert(0, local_bin);
     if let Ok(path) = std::env::join_paths(paths) {
         command.env("PATH", path);
     }
@@ -178,7 +199,7 @@ enum ProcessWait {
     Error(String),
 }
 
-fn wait_for_child(child: &mut Child, timeout: Duration) -> ProcessWait {
+fn wait_for_child(child: &mut Child, timeout: Duration, operation: &str) -> ProcessWait {
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -191,7 +212,7 @@ fn wait_for_child(child: &mut Child, timeout: Duration) -> ProcessWait {
             Err(error) => {
                 terminate_process_tree(child);
                 return ProcessWait::Error(format!(
-                    "Failed to wait for orchestration command: {error}"
+                    "Failed to wait for {operation} command: {error}"
                 ));
             }
         }

@@ -7,6 +7,7 @@ pub mod dead_code;
 pub mod invariants;
 pub mod mutation;
 pub mod orchestration;
+pub(crate) mod process;
 pub mod util;
 
 pub use anti_gaming::{AntiGamingScanner, SuppressionViolation};
