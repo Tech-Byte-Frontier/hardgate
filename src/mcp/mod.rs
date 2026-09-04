@@ -46,7 +46,7 @@ fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
         return Ok(None);
     }
     // LSP framing: `Content-Length: <bytes>\r\n\r\n<json>`
-    if let Some(len) = parse_content_length(&first) {
+    if let Some(len) = parse_content_length(&first)? {
         // Consume remaining header lines until blank.
         loop {
             let mut hdr = String::new();
@@ -56,9 +56,15 @@ fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
             if hdr.trim().is_empty() {
                 break;
             }
-            // Allow re-specification (last wins) — uncommon but harmless.
-            if let Some(l) = parse_content_length(&hdr) {
-                let _ = l;
+            // Duplicate declarations are safe only when they agree. A
+            // conflicting length is ambiguous, so reject it before reading
+            // any body bytes.
+            if let Some(value) = parse_content_length(&hdr)?
+                && value != len
+            {
+                return Err(anyhow!(
+                    "Conflicting MCP Content-Length headers: {len} and {value}"
+                ));
             }
         }
         let mut buf = vec![0u8; len];
@@ -68,10 +74,21 @@ fn read_mcp_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     }
     Ok(Some(first))
 }
-fn parse_content_length(line: &str) -> Option<usize> {
+fn parse_content_length(line: &str) -> Result<Option<usize>> {
     let lower = line.to_ascii_lowercase();
-    let rest = lower.strip_prefix("content-length:")?;
-    rest.trim().parse::<usize>().ok()
+    let Some(rest) = lower.strip_prefix("content-length:") else {
+        return Ok(None);
+    };
+    let value = rest.trim();
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(anyhow!(
+            "Malformed MCP Content-Length header value: {value:?}"
+        ));
+    }
+    let length = value
+        .parse::<usize>()
+        .map_err(|_| anyhow!("MCP Content-Length value overflows usize: {value:?}"))?;
+    Ok(Some(length))
 }
 fn process_mcp_line<W: Write>(line: &str, out: &mut W) -> Result<()> {
     let request = match serde_json::from_str::<JsonRpcRequest>(line) {
@@ -390,3 +407,7 @@ fn execute_metrics_tool(args: &serde_json::Value) -> serde_json::Value {
 fn tool_error(msg: &str) -> serde_json::Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": msg }] })
 }
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;
