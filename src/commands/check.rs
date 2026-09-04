@@ -4,8 +4,8 @@ use super::gate_evidence::{
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
 };
 use super::verify::{
-    CoverageScope, CoverageVerification, source_files_for_coverage, verify_coverage_with_scope,
-    verify_mutation,
+    CoverageScope, CoverageVerification, SourceCoverageRequest, source_files_for_coverage,
+    verify_coverage_with_scope, verify_mutation,
 };
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
@@ -159,13 +159,13 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
         .cli_report
         .clone()
         .or_else(|| request.config.coverage.report.clone());
-    let source_files = source_files_for_coverage(
-        request.files,
-        request.functions,
-        request.root,
-        request.config,
-        request.report,
-    );
+    let source_files = source_files_for_coverage(SourceCoverageRequest {
+        files: request.files,
+        functions: request.functions,
+        root: request.root,
+        config: request.config,
+        report: request.report,
+    });
     let scope = CoverageScope {
         source_files: &source_files,
         root: request.root,
