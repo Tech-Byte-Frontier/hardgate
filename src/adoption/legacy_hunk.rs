@@ -23,7 +23,11 @@ impl LegacyFinding for SuppressionViolation {
 
 impl LegacyFinding for ComplexityViolation {
     fn attributable(&self, changes: &ChangeSet) -> bool {
-        changed_line(&self.file, self.line_number, changes)
+        changed_range(
+            &self.file,
+            (self.line_number, self.end_line.max(self.line_number)),
+            changes,
+        )
     }
 }
 
@@ -42,6 +46,9 @@ impl LegacyFinding for CloneViolation {
 
 impl LegacyFinding for DeadCodeViolation {
     fn attributable(&self, changes: &ChangeSet) -> bool {
+        if self.violation_type == "Unreferenced File" {
+            return changed_file(&self.file, changes);
+        }
         self.line_number
             .map(|line| changed_line(&self.file, line, changes))
             .unwrap_or_else(|| changed_file(&self.file, changes))

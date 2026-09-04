@@ -47,6 +47,7 @@ fn complexity(file: &str, line_number: usize, actual: f64) -> ComplexityViolatio
         file: file.into(),
         function_name: "compute".to_string(),
         line_number,
+        end_line: line_number,
         metric: "Cyclomatic Complexity".to_string(),
         actual,
         limit: 5.0,
@@ -482,6 +483,7 @@ fn structured_identity_fields_survive_annotation() {
     assert_eq!(after.file, before.file);
     assert_eq!(after.function_name, before.function_name);
     assert_eq!(after.line_number, before.line_number);
+    assert_eq!(after.end_line, before.end_line);
     assert_eq!(after.metric, before.metric);
     assert_eq!(after.actual, before.actual);
     assert_eq!(after.limit, before.limit);

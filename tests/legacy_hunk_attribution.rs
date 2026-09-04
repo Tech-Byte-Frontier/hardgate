@@ -49,10 +49,20 @@ fn suppression(file: &str, line_number: usize) -> SuppressionViolation {
 }
 
 fn complexity(file: &str, line_number: usize, actual: f64) -> ComplexityViolation {
+    complexity_span(file, line_number, line_number, actual)
+}
+
+fn complexity_span(
+    file: &str,
+    line_number: usize,
+    end_line: usize,
+    actual: f64,
+) -> ComplexityViolation {
     ComplexityViolation {
         file: file.into(),
         function_name: "compute".into(),
         line_number,
+        end_line,
         metric: "Cyclomatic Complexity".into(),
         actual,
         limit: 5.0,
@@ -99,6 +109,17 @@ fn dead_code(file: &str, line_number: Option<usize>) -> DeadCodeViolation {
         line_number,
         symbol: Some("old".into()),
         violation_type: "Unused Export".into(),
+        message: "dead-code debt".into(),
+        recommendation: "remove".into(),
+    }
+}
+
+fn unreferenced_file(file: &str) -> DeadCodeViolation {
+    DeadCodeViolation {
+        file: file.into(),
+        line_number: Some(1),
+        symbol: None,
+        violation_type: "Unreferenced File".into(),
         message: "dead-code debt".into(),
         recommendation: "remove".into(),
     }
@@ -195,6 +216,47 @@ fn equal_debt_edited_on_its_line_remains_blocking() {
 }
 
 #[test]
+fn interior_function_edit_blocks_matching_complexity_debt() {
+    let mut baseline = report();
+    baseline
+        .complexity_violations
+        .push(complexity_span("src/a.rs", 4, 8, 10.0));
+    let mut current = baseline.clone();
+    let outcome = apply_legacy_ratchet(
+        &mut current,
+        &baseline,
+        &changes(&[("src/a.rs", &[6])], &["src/a.rs"], &[]),
+    );
+
+    assert_eq!(outcome.grandfathered, 0);
+    assert_eq!(current.complexity_violations.len(), 1);
+    assert!(!current.passed);
+}
+
+#[test]
+fn legacy_complexity_without_end_line_falls_back_to_start_line() {
+    let baseline_violation = complexity_span("src/a.rs", 4, 8, 10.0);
+    let mut payload = serde_json::to_value(&baseline_violation).unwrap();
+    payload.as_object_mut().unwrap().remove("end_line");
+    let legacy: ComplexityViolation = serde_json::from_value(payload).unwrap();
+    assert_eq!(legacy.end_line, 0);
+
+    let mut baseline = report();
+    baseline.complexity_violations.push(baseline_violation);
+    let mut current = report();
+    current.complexity_violations.push(legacy);
+    let outcome = apply_legacy_ratchet(
+        &mut current,
+        &baseline,
+        &changes(&[("src/a.rs", &[4])], &["src/a.rs"], &[]),
+    );
+
+    assert_eq!(outcome.grandfathered, 0);
+    assert_eq!(current.complexity_violations.len(), 1);
+    assert!(!current.passed);
+}
+
+#[test]
 fn clone_debt_blocks_when_either_current_range_is_touched() {
     let mut baseline = report();
     baseline
@@ -239,6 +301,41 @@ fn line_less_dead_code_and_budget_block_on_renamed_file_without_hunks() {
     assert_eq!(outcome.grandfathered, 0);
     assert_eq!(outcome.retained, 2);
     assert!(!current.passed);
+}
+
+#[test]
+fn unreferenced_file_debt_blocks_when_any_file_line_changes() {
+    let mut baseline = report();
+    baseline
+        .dead_code_violations
+        .push(unreferenced_file("src/a.rs"));
+    let mut current = baseline.clone();
+    let outcome = apply_legacy_ratchet(
+        &mut current,
+        &baseline,
+        &changes(&[("src/a.rs", &[5])], &["src/a.rs"], &[]),
+    );
+
+    assert_eq!(outcome.grandfathered, 0);
+    assert_eq!(current.dead_code_violations.len(), 1);
+    assert!(!current.passed);
+}
+
+#[test]
+fn symbol_dead_code_uses_its_exact_changed_line() {
+    let mut baseline = report();
+    baseline
+        .dead_code_violations
+        .push(dead_code("src/a.rs", Some(1)));
+    let mut current = baseline.clone();
+    let outcome = apply_legacy_ratchet(
+        &mut current,
+        &baseline,
+        &changes(&[("src/a.rs", &[5])], &["src/a.rs"], &[]),
+    );
+
+    assert_eq!(outcome.grandfathered, 1);
+    assert!(current.passed);
 }
 
 #[test]

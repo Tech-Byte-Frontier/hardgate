@@ -11,6 +11,7 @@ pub fn failing_report() -> GateReport {
         file: PathBuf::from("src/main.rs"),
         function_name: "login".to_string(),
         line_number: 1,
+        end_line: 1,
         metric: "Cyclomatic Complexity".to_string(),
         actual: 18.0,
         limit: 10.0,
