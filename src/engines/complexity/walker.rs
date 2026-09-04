@@ -122,6 +122,7 @@ fn check_branch(kind: &str) -> bool {
             | "match_expression"
             | "match_arm"
             | "switch_statement"
+            | "expression_switch_statement"
             | "switch_case"
             | "expression_case"
             | "catch_clause"
@@ -156,7 +157,10 @@ fn human_readable_branch(kind: &str) -> &'static str {
         (&["loop_expression"], "infinite loop (`loop`)"),
         (&["match_expression"], "pattern match (`match`)"),
         (&["match_arm"], "pattern match arm (`match`)"),
-        (&["switch_statement"], "switch (`switch`)"),
+        (
+            &["switch_statement", "expression_switch_statement"],
+            "switch (`switch`)",
+        ),
         (&["switch_case", "expression_case"], "switch case"),
         (
             &["catch_clause", "except_clause", "exception_handler"],

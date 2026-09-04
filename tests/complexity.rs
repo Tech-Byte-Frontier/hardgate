@@ -130,3 +130,87 @@ fn test_complexity_advanced_budgets_enforced() {
     let good = metrics::sample_metrics(1, 2, 1.0, 1.0);
     assert!(ComplexityAnalyzer::check_violations(&[good], &budgets).is_empty());
 }
+
+const CURRENT_AST_REGRESSION_CASES: &[(&str, &str, &str, Option<&str>)] = &[
+    (
+        "src/regression.rs",
+        r#"fn rust_case(value: i32) -> i32 {
+            if value > 0 { value } else { 0 }
+        }"#,
+        "rust_case",
+        Some("if_expression"),
+    ),
+    (
+        "src/regression.ts",
+        r#"function ts_case(items: number[]): number {
+            for (const item of items) { if (item > 0) return item; }
+            return 0;
+        }"#,
+        "ts_case",
+        Some("for_in_statement"),
+    ),
+    (
+        "src/regression.tsx",
+        r#"function tsx_case(value: number) { return <span>{value}</span>; }"#,
+        "tsx_case",
+        None,
+    ),
+    (
+        "src/regression.js",
+        r#"function js_case(items) {
+            using resource = acquire();
+            for (const item of items) { if (item) return resource; }
+            return null;
+        }"#,
+        "js_case",
+        Some("for_in_statement"),
+    ),
+    (
+        "src/regression.py",
+        r#"def py_case(value):
+            try:
+                return value
+            except* ValueError as error:
+                return error
+        "#,
+        "py_case",
+        Some("except_clause"),
+    ),
+    (
+        "src/regression.go",
+        r#"package main
+        func go_case(value int) int {
+            switch value {
+            case 1:
+                return 1
+            default:
+                return 0
+            }
+        }"#,
+        "go_case",
+        Some("expression_case"),
+    ),
+];
+
+#[test]
+fn test_current_tree_sitter_ast_regressions_across_dialects() {
+    for &(path, code, expected_name, expected_branch) in CURRENT_AST_REGRESSION_CASES {
+        let mut analyzer = ComplexityAnalyzer::new();
+        let metrics = analyzer
+            .analyze_file_checked(Path::new(path), code, Path::new("."))
+            .unwrap_or_else(|error| panic!("failed to parse {path}: {error}"));
+        assert_eq!(metrics.len(), 1, "expected one function in {path}");
+        let function = &metrics[0];
+        assert_eq!(function.name, expected_name, "wrong symbol in {path}");
+        if let Some(expected_kind) = expected_branch {
+            assert!(
+                function
+                    .cyclomatic_breakdown
+                    .iter()
+                    .any(|contribution| contribution.kind == expected_kind),
+                "missing {expected_kind} branch in {path}: {:?}",
+                function.cyclomatic_breakdown,
+            );
+        }
+    }
+}
