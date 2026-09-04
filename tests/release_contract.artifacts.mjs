@@ -18,6 +18,8 @@ import {
   npmPackRetry,
   npmPlatformDirectories,
   npmPublication,
+  npmRegistryPack,
+  npmVerificationPolicy,
   packageScript,
   platformPackages,
   release,
@@ -61,8 +63,10 @@ assert.deepEqual(
 );
 includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "hardgate-target:", "expected Cargo target marker", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "-l", "-sW", "-n", "classifyBinaryAbi"], "archive verifier");
 includesAll(releaseAbi, ["classifyBinaryAbi", "ld-musl", "__init_libc", "GLIBC_", "gnu_get_libc_version", "_dl_relocate_static_pie", "NT_GNU_ABI_TAG", "staticBinary", "exact Cargo target marker", "targetMarkerValid"], "ABI evidence classifier");
-includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "--loglevel=error", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS", "isRetryableNpmPackError", "failed without retry"], "npm publication verifier");
-assert.doesNotMatch(npmPublication, /["']--silent["']/, "npm pack must retain diagnostics needed to classify transient registry failures");
+includesAll(npmPublication, ["--platform-only", "--package", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js"], "npm publication verifier");
+includesAll(npmRegistryPack, ["npm pack", "--loglevel=error", "isRetryableNpmPackError", "failed without retry", "exactVersionObserved", "childTimeoutMs"], "npm registry retrieval");
+includesAll(npmVerificationPolicy, ["NPM_VERIFY_ATTEMPTS", "NPM_VERIFY_TIMEOUT_SECONDS", "NPM_VERIFY_CHILD_TIMEOUT_SECONDS", "remainingMs"], "npm verification deadlines");
+assert.doesNotMatch(npmRegistryPack.slice(npmRegistryPack.indexOf("async function packOnce"), npmRegistryPack.indexOf("async function mayRetry")), /["']--silent["']/, "npm pack must retain diagnostics needed to classify transient registry failures");
 includesAll(npmPackRetry, ["isRetryableNpmPackError", "E404", "EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED"], "npm pack retry classifier");
 for (const error of [
   { code: "E404" },
