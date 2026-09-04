@@ -1,12 +1,14 @@
 use crate::config::CloneConfig;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 mod fingerprint;
+mod index;
 mod tokenizer;
-use fingerprint::{clone_fingerprint, hash_token};
-use tokenizer::{Token, tokenize};
+use fingerprint::clone_fingerprint;
+pub use index::CloneIndexError;
+use index::{CloneIndexOptions, RawCloneMatch, build_index, token_kinds_match, token_slice};
+use tokenizer::Token;
 
 /// One duplicated block shared between two locations, with span sizes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,57 +27,6 @@ pub struct CloneViolation {
     pub message: String,
     pub recommendation: String,
 }
-
-#[derive(Debug, Clone)]
-struct TokenLocation {
-    file: PathBuf,
-    stream_idx: usize,
-    start_line: usize,
-    end_line: usize,
-    start_idx: usize,
-    end_idx: usize,
-}
-
-#[derive(Debug, Clone)]
-struct RawCloneMatch {
-    file_a: PathBuf,
-    stream_idx_a: usize,
-    start_a: usize,
-    end_a: usize,
-    start_idx_a: usize,
-    end_idx_a: usize,
-    file_b: PathBuf,
-    stream_idx_b: usize,
-    start_b: usize,
-    end_b: usize,
-    start_idx_b: usize,
-    end_idx_b: usize,
-}
-
-struct CloneIndexState<'a> {
-    window_map: &'a mut HashMap<u64, Vec<TokenLocation>>,
-    raw_matches: &'a mut Vec<RawCloneMatch>,
-}
-
-struct FileWindowInput<'a> {
-    tokens: &'a [Token],
-    rel_path: &'a Path,
-    stream_idx: usize,
-    token_streams: &'a [(PathBuf, Vec<Token>)],
-}
-
-struct WindowCheck<'a> {
-    location: &'a TokenLocation,
-    hash: u64,
-    min_lines: usize,
-    token_streams: &'a [(PathBuf, Vec<Token>)],
-}
-
-// Repeated generated constructs can create O(n^2) comparisons for one hash.
-// A bounded bucket still reports representative clones without allowing an
-// adversarial repeated token stream to exhaust memory or CPU.
-const MAX_WINDOWS_PER_HASH: usize = 64;
-const MAX_RAW_MATCHES: usize = 50_000;
 
 pub struct CloneDetector {
     min_lines: usize,
@@ -128,183 +79,45 @@ impl CloneDetector {
     }
 
     /// Rolling-hash clone detection over token streams, honoring excludes.
+    /// This compatibility wrapper returns no findings when the checked index
+    /// reports dropped evidence; gate code always uses the checked API.
     pub fn detect_clones(&self, files: &[(PathBuf, String)], root: &Path) -> Vec<CloneViolation> {
-        let mut window_map: HashMap<u64, Vec<TokenLocation>> = HashMap::new();
-        let mut raw_matches: Vec<RawCloneMatch> = Vec::new();
-        let token_streams: Vec<(PathBuf, Vec<Token>)> = files
-            .iter()
-            .filter_map(|(abs_path, content)| {
-                let rel_path = abs_path.strip_prefix(root).unwrap_or(abs_path);
-                if self
-                    .exclude_glob
-                    .as_ref()
-                    .is_some_and(|exclude| exclude.is_match(rel_path))
-                {
-                    return None;
-                }
-                Some((rel_path.to_path_buf(), tokenize(content)))
-            })
-            .collect();
-        for (stream_idx, (rel_path, tokens)) in token_streams.iter().enumerate() {
-            let mut state = CloneIndexState {
-                window_map: &mut window_map,
-                raw_matches: &mut raw_matches,
-            };
-            self.index_file_windows(
-                FileWindowInput {
-                    tokens,
-                    rel_path,
-                    stream_idx,
-                    token_streams: &token_streams,
-                },
-                &mut state,
-            );
-            if raw_matches.len() >= MAX_RAW_MATCHES {
-                break;
-            }
-        }
-        coalesce_matches(raw_matches, self.min_tokens, self.min_lines, &token_streams)
+        self.detect_clones_checked(files, root).unwrap_or_default()
     }
 
-    fn index_file_windows(&self, input: FileWindowInput<'_>, state: &mut CloneIndexState) {
-        let FileWindowInput {
-            tokens,
-            rel_path,
-            stream_idx,
-            token_streams,
-        } = input;
-        if tokens.len() < self.min_tokens {
-            return;
-        }
-        const BASE: u64 = 31337;
-        let mut rolling_hash = init_rolling_hash(&tokens[..self.min_tokens], BASE);
-        let pow_base = calc_pow_base(self.min_tokens - 1, BASE);
-        let mut i = 0;
-        loop {
-            let start_line = tokens[i].line;
-            let end_line = tokens[i + self.min_tokens - 1].line;
-            let line_span = end_line.saturating_sub(start_line) + 1;
-            if line_span >= self.min_lines {
-                let loc = TokenLocation {
-                    file: rel_path.to_path_buf(),
-                    stream_idx,
-                    start_line,
-                    end_line,
-                    start_idx: i,
-                    end_idx: i + self.min_tokens - 1,
-                };
-                state.check_and_record(WindowCheck {
-                    location: &loc,
-                    hash: rolling_hash,
-                    min_lines: self.min_lines,
-                    token_streams,
-                });
-                if state.raw_matches.len() >= MAX_RAW_MATCHES {
-                    return;
-                }
-            }
-            if i + self.min_tokens >= tokens.len() {
-                break;
-            }
-            let old_token_hash = hash_token(&tokens[i].kind);
-            let new_token_hash = hash_token(&tokens[i + self.min_tokens].kind);
-            rolling_hash = rolling_hash
-                .wrapping_sub(old_token_hash.wrapping_mul(pow_base))
-                .wrapping_mul(BASE)
-                .wrapping_add(new_token_hash);
-            i += 1;
-        }
+    /// Build a complete clone index and return an explicit error if a bounded
+    /// collection would discard any additional evidence.
+    pub fn detect_clones_checked(
+        &self,
+        files: &[(PathBuf, String)],
+        root: &Path,
+    ) -> Result<Vec<CloneViolation>, CloneIndexError> {
+        self.detect_clones_checked_with_changed_files(files, root, &[])
     }
-}
 
-impl CloneIndexState<'_> {
-    fn check_and_record(&mut self, check: WindowCheck<'_>) {
-        if let Some(existing) = self.window_map.get_mut(&check.hash) {
-            compare_existing_windows(existing, &check, self.raw_matches);
-            if existing.len() < MAX_WINDOWS_PER_HASH {
-                existing.push(check.location.clone());
-            }
-        } else {
-            self.window_map
-                .insert(check.hash, vec![check.location.clone()]);
-        }
-    }
-}
-
-fn init_rolling_hash(slice: &[Token], base: u64) -> u64 {
-    let mut h = 0u64;
-    for t in slice {
-        h = h.wrapping_mul(base).wrapping_add(hash_token(&t.kind));
-    }
-    h
-}
-
-fn calc_pow_base(exp: usize, base: u64) -> u64 {
-    let mut p = 1u64;
-    for _ in 0..exp {
-        p = p.wrapping_mul(base);
-    }
-    p
-}
-
-fn compare_existing_windows(
-    existing: &[TokenLocation],
-    check: &WindowCheck<'_>,
-    raw_matches: &mut Vec<RawCloneMatch>,
-) {
-    for previous in existing {
-        let same_file = previous.file == check.location.file;
-        let too_close = same_file
-            && (check.location.start_line <= previous.end_line.saturating_add(check.min_lines));
-        if !too_close && token_sequences_match(previous, check.location, check.token_streams) {
-            raw_matches.push(raw_clone_match(previous, check.location));
-            if raw_matches.len() >= MAX_RAW_MATCHES {
-                return;
-            }
-        }
-    }
-}
-
-fn raw_clone_match(previous: &TokenLocation, location: &TokenLocation) -> RawCloneMatch {
-    let (a, b) = if location_ordering(previous, location).is_le() {
-        (previous, location)
-    } else {
-        (location, previous)
-    };
-    RawCloneMatch {
-        file_a: a.file.clone(),
-        stream_idx_a: a.stream_idx,
-        start_a: a.start_line,
-        end_a: a.end_line,
-        start_idx_a: a.start_idx,
-        end_idx_a: a.end_idx,
-        file_b: b.file.clone(),
-        stream_idx_b: b.stream_idx,
-        start_b: b.start_line,
-        end_b: b.end_line,
-        start_idx_b: b.start_idx,
-        end_idx_b: b.end_idx,
-    }
-}
-fn location_ordering(left: &TokenLocation, right: &TokenLocation) -> std::cmp::Ordering {
-    left.file
-        .cmp(&right.file)
-        .then(left.stream_idx.cmp(&right.stream_idx))
-        .then(left.start_idx.cmp(&right.start_idx))
-}
-fn token_sequences_match(
-    left: &TokenLocation,
-    right: &TokenLocation,
-    streams: &[(PathBuf, Vec<Token>)],
-) -> bool {
-    token_slice(left.stream_idx, left.start_idx, left.end_idx, streams)
-        .zip(token_slice(
-            right.stream_idx,
-            right.start_idx,
-            right.end_idx,
-            streams,
+    /// Checked clone detection with changed files prioritized for diff mode.
+    /// All files are still indexed and an exhausted cap remains a hard error.
+    pub fn detect_clones_checked_with_changed_files(
+        &self,
+        files: &[(PathBuf, String)],
+        root: &Path,
+        changed_files: &[PathBuf],
+    ) -> Result<Vec<CloneViolation>, CloneIndexError> {
+        let index = build_index(CloneIndexOptions {
+            files,
+            root,
+            exclude_glob: self.exclude_glob.as_ref(),
+            min_lines: self.min_lines,
+            min_tokens: self.min_tokens,
+            changed_files,
+        })?;
+        Ok(coalesce_matches(
+            index.raw_matches,
+            self.min_tokens,
+            self.min_lines,
+            &index.token_streams,
         ))
-        .is_some_and(|(left, right)| token_kinds_match(left, right))
+    }
 }
 fn coalesce_matches(
     mut matches: Vec<RawCloneMatch>,
@@ -440,17 +253,4 @@ fn merged_ranges_match(
         token_streams,
     ))
     .is_some_and(|(left, right)| token_kinds_match(left, right))
-}
-fn token_slice(
-    stream_idx: usize,
-    start_idx: usize,
-    end_idx: usize,
-    streams: &[(PathBuf, Vec<Token>)],
-) -> Option<&[Token]> {
-    streams.get(stream_idx)?.1.get(start_idx..=end_idx)
-}
-fn token_kinds_match(left: &[Token], right: &[Token]) -> bool {
-    left.iter()
-        .map(|token| token.kind.as_str())
-        .eq(right.iter().map(|token| token.kind.as_str()))
 }

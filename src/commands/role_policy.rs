@@ -41,7 +41,6 @@ pub(crate) fn classify_files(
         .map(|path| classify_file(path, config))
         .collect()
 }
-
 /// Resolve a role severity, falling back to the legacy gate strictness when
 /// the role section omits severity (or has no first-class section).
 pub(crate) fn severity(config: &HardgateConfig, role: FileRole) -> Severity {
@@ -74,7 +73,6 @@ pub(crate) fn effective_file_budgets(config: &HardgateConfig, role: FileRole) ->
     }
     budgets
 }
-
 pub(crate) fn effective_function_budgets(
     config: &HardgateConfig,
     role: FileRole,
@@ -109,7 +107,6 @@ pub(crate) fn effective_function_budgets(
     }
     budgets
 }
-
 pub(crate) fn clone_config_for_role(
     config: &HardgateConfig,
     role: FileRole,
@@ -132,7 +129,6 @@ pub(crate) fn clone_config_for_role(
     }
     Some(clone)
 }
-
 pub(crate) fn record_role_evidence_failure(report: &mut GateReport, failure: RoleEvidence<'_>) {
     match severity(failure.config, failure.role) {
         Severity::Error => record_evidence_failure(
@@ -156,7 +152,6 @@ pub(crate) fn record_role_evidence_failure(report: &mut GateReport, failure: Rol
         Severity::Ignore => {}
     }
 }
-
 pub(crate) fn push_advisory(report: &mut GateReport, advisory: Advisory<'_>) {
     report.advisories.push(format!(
         "role {:?} advisory: {} for `{}`: {}",
@@ -166,7 +161,6 @@ pub(crate) fn push_advisory(report: &mut GateReport, advisory: Advisory<'_>) {
         advisory.detail
     ));
 }
-
 pub(crate) fn apply_budget_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -195,7 +189,6 @@ pub(crate) fn apply_budget_findings(
         Severity::Ignore => {}
     }
 }
-
 pub(crate) fn apply_suppression_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -221,7 +214,6 @@ pub(crate) fn apply_suppression_findings(
         Severity::Ignore => {}
     }
 }
-
 fn apply_warning<T, F>(report: &mut GateReport, batch: WarningBatch<T, F>)
 where
     F: Fn(&T) -> (PathBuf, String),
@@ -239,7 +231,6 @@ where
         );
     }
 }
-
 pub(crate) fn apply_invariant_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -265,7 +256,6 @@ pub(crate) fn apply_invariant_findings(
         Severity::Ignore => {}
     }
 }
-
 pub(crate) fn apply_complexity_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -298,7 +288,6 @@ pub(crate) fn apply_complexity_findings(
         Severity::Ignore => {}
     }
 }
-
 pub(crate) fn apply_clone_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -327,7 +316,6 @@ pub(crate) fn apply_clone_findings(
         Severity::Ignore => {}
     }
 }
-
 pub(crate) fn apply_dead_code_findings(
     report: &mut GateReport,
     config: &HardgateConfig,
@@ -361,7 +349,6 @@ pub(crate) fn apply_dead_code_findings(
         Severity::Ignore => {}
     }
 }
-
 pub(crate) struct CloneRun<'a> {
     pub read_results: &'a [(PathBuf, String)],
     pub changed_files: &'a [PathBuf],
@@ -369,7 +356,6 @@ pub(crate) struct CloneRun<'a> {
     pub root: &'a Path,
     pub diff: bool,
 }
-
 pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -> Result<()> {
     if !input.config.clones.enabled {
         return Ok(());
@@ -393,7 +379,6 @@ pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -
     }
     Ok(())
 }
-
 fn run_clone_group(
     role: FileRole,
     files: Vec<(PathBuf, String)>,
@@ -408,14 +393,33 @@ fn run_clone_group(
     if files.len() < 2 {
         return;
     }
-    let mut violations = detector.detect_clones(&files, input.root);
+    let result =
+        detector.detect_clones_checked_with_changed_files(&files, input.root, input.changed_files);
+    if let Err(ref error) = result {
+        record_evidence_failure(
+            report,
+            true,
+            EvidenceFailure {
+                step: "clone-index",
+                target: input.root,
+                message: format!(
+                    "role {role:?} clone index is incomplete: {error}. Raise clone thresholds or narrow this role's clone engine; do not add exclusions or suppressions."
+                ),
+            },
+        );
+        if let Some(failure) = report.orchestration_violations.last_mut() {
+            failure.recommendation =
+                "Raise clone thresholds or narrow this role's clone engine; do not add exclusions or suppressions.".to_string();
+        }
+        return;
+    }
+    let mut violations = result.expect("clone index result checked above");
     if input.diff {
         violations
             .retain(|violation| clone_touches_files(violation, input.changed_files, input.root));
     }
     apply_clone_findings(report, input.config, role, violations);
 }
-
 fn clone_eligible_inputs(
     read_results: &[(PathBuf, String)],
     config: &HardgateConfig,
@@ -431,7 +435,6 @@ fn clone_eligible_inputs(
                 .collect()
         })
 }
-
 fn full_clone_inputs(
     config: &HardgateConfig,
     root: &Path,
@@ -449,7 +452,6 @@ fn full_clone_inputs(
         .collect::<Vec<_>>();
     Ok(read_clone_files(&files, config, report))
 }
-
 fn read_clone_files(
     files: &[ClassifiedFile],
     config: &HardgateConfig,
@@ -473,7 +475,6 @@ fn read_clone_files(
     }
     read
 }
-
 fn record_clone_exclusion_advisory(
     detector: &CloneDetector,
     inputs: &[(PathBuf, String)],
@@ -490,7 +491,6 @@ fn record_clone_exclusion_advisory(
         count, noun
     ));
 }
-
 fn clone_touches_files(violation: &CloneViolation, files: &[PathBuf], root: &Path) -> bool {
     files.iter().any(|path| {
         let rel = path.strip_prefix(root).unwrap_or(path);

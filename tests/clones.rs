@@ -1,9 +1,14 @@
 #[path = "support/clones.rs"]
 mod clones;
+#[path = "support/fs.rs"]
+mod fixture_fs;
 
 use clones::{clone_config, clone_pair};
-use hardgate::engines::CloneDetector;
+use hardgate::commands::run_static_gate_snapshot;
+use hardgate::config::HardgateConfig;
+use hardgate::engines::{CloneDetector, clones::CloneIndexError};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 #[test]
 fn test_clone_detector() {
@@ -68,14 +73,227 @@ fn test_repeated_windows_are_bounded_and_deterministic() {
         (PathBuf::from("src/a.rs"), repeated.clone()),
         (PathBuf::from("src/b.rs"), repeated),
     ];
-    let first = detector.detect_clones(&files, Path::new("."));
-    let second = detector.detect_clones(&files, Path::new("."));
-    assert_eq!(first.len(), second.len());
-    assert!(
-        first.len() < 1_000,
-        "bounded index emitted {} clones",
-        first.len()
+    let first = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap_err();
+    let second = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap_err();
+    assert_eq!(first, second);
+    assert!(matches!(
+        first,
+        CloneIndexError::HashWindowCapacityExceeded { .. }
+    ));
+}
+
+fn one_token_lines(count: usize, prefix: &str) -> String {
+    (0..count)
+        .map(|index| format!("{prefix}{index}\n"))
+        .collect()
+}
+
+fn cap_test_detector() -> CloneDetector {
+    let mut config = clone_config();
+    config.min_lines = 1;
+    config.min_tokens = 1;
+    CloneDetector::new(&config)
+}
+
+#[test]
+fn checked_detector_reports_hash_window_truncation_deterministically() {
+    let detector = cap_test_detector();
+    let files = vec![
+        (PathBuf::from("src/a.rs"), "same\n".repeat(65)),
+        (PathBuf::from("src/b.rs"), "same\n".repeat(65)),
+    ];
+
+    let first = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap_err();
+    let second = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap_err();
+    assert_eq!(first, second);
+    assert!(matches!(
+        first,
+        CloneIndexError::HashWindowCapacityExceeded { limit: 64, .. }
+    ));
+}
+
+#[test]
+fn checked_detector_reports_raw_match_truncation() {
+    let detector = cap_test_detector();
+    let content = one_token_lines(50_001, "token_");
+    let files = vec![
+        (PathBuf::from("src/a.rs"), content.clone()),
+        (PathBuf::from("src/b.rs"), content),
+    ];
+
+    let error = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        CloneIndexError::RawMatchCapacityExceeded { limit: 50_000 }
     );
+}
+
+#[test]
+fn static_snapshot_turns_raw_truncation_into_required_evidence() {
+    let mut config = HardgateConfig::default();
+    config.roles.fixture.clone_min_lines = Some(1);
+    config.roles.fixture.clone_min_tokens = Some(1);
+    let content = one_token_lines(50_001, "token_");
+    let files = vec![
+        (PathBuf::from("tests/a.snap"), content.clone()),
+        (PathBuf::from("tests/b.snap"), content),
+    ];
+
+    let report = run_static_gate_snapshot(&config, &files).unwrap().0;
+    let finding = report
+        .orchestration_violations
+        .iter()
+        .find(|finding| finding.step == "clone-index")
+        .expect("raw truncation must be required evidence");
+    assert!(finding.output.contains("raw clone-match capacity"));
+    assert!(finding.output.contains("role Fixture"));
+    assert!(finding.recommendation.contains("Raise clone thresholds"));
+}
+
+#[test]
+fn checked_detector_reports_below_cap_clones() {
+    let detector = cap_test_detector();
+    let content = one_token_lines(1_000, "token_");
+    let files = vec![
+        (PathBuf::from("src/a.rs"), content.clone()),
+        (PathBuf::from("src/b.rs"), content),
+    ];
+
+    let violations = detector
+        .detect_clones_checked(&files, Path::new("."))
+        .expect("below-cap clone index should be complete");
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].file_a, PathBuf::from("src/a.rs"));
+    assert_eq!(violations[0].file_b, PathBuf::from("src/b.rs"));
+}
+
+#[test]
+fn static_snapshot_turns_hash_truncation_into_required_evidence() {
+    let mut config = HardgateConfig::default();
+    config.roles.source.clone_min_lines = Some(1);
+    config.roles.source.clone_min_tokens = Some(1);
+    let repeated = format!(
+        "fn repeated() {{\n{}\n}}\n",
+        "    let same = 0;\n".repeat(65)
+    );
+    let files = vec![
+        (PathBuf::from("src/a.rs"), repeated.clone()),
+        (PathBuf::from("src/b.rs"), repeated),
+    ];
+
+    let first = run_static_gate_snapshot(&config, &files).unwrap().0;
+    let second = run_static_gate_snapshot(&config, &files).unwrap().0;
+    assert_eq!(
+        serde_json::to_string(&first).unwrap(),
+        serde_json::to_string(&second).unwrap()
+    );
+    let finding = first
+        .orchestration_violations
+        .iter()
+        .find(|finding| finding.step == "clone-index")
+        .expect("hash truncation must be required evidence");
+    assert!(finding.output.contains("role Source"), "{}", finding.output);
+    assert!(
+        finding.output.contains("Raise clone thresholds"),
+        "{}",
+        finding.output
+    );
+    assert!(
+        finding.output.contains("do not add exclusions"),
+        "{}",
+        finding.output
+    );
+    assert!(finding.recommendation.contains("Raise clone thresholds"));
+}
+
+fn write_fixture(root: &Path, path: &str, content: &str) {
+    let target = root.join(path);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(target, content).unwrap();
+}
+
+fn fixture_git(root: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn run_fixture_hardgate(root: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_hardgate"))
+        .args(["check", "--diff", "--format", "json"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn diff_prioritizes_changed_files_but_blocks_on_late_hash_truncation() {
+    let root = fixture_fs::tempdir("clone-cap-diff");
+    write_fixture(
+        &root,
+        "hardgate.toml",
+        r#"
+[gate]
+name = "clone-cap"
+preset = "custom"
+strict = true
+
+[clones]
+enabled = true
+min_lines = 1
+min_tokens = 1
+"#,
+    );
+    let unchanged = format!(
+        "fn repeated() {{\n{}\n}}\n",
+        "    let same = 0;\n".repeat(65)
+    );
+    let copied = "fn copied() {\n    let total = 0;\n    total\n}\n";
+    write_fixture(&root, "src/a-unchanged.rs", &unchanged);
+    write_fixture(&root, "src/original.rs", copied);
+    fixture_git(&root, &["init", "-q"]);
+    fixture_git(&root, &["config", "user.email", "hardgate@example.invalid"]);
+    fixture_git(&root, &["config", "user.name", "Hardgate Test"]);
+    fixture_git(&root, &["config", "commit.gpgsign", "false"]);
+    fixture_git(&root, &["add", "-A"]);
+    fixture_git(&root, &["commit", "-qm", "baseline"]);
+    write_fixture(&root, "src/z-changed.rs", copied);
+
+    let first = run_fixture_hardgate(&root);
+    let second = run_fixture_hardgate(&root);
+    assert!(!first.status.success());
+    let mut report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let mut second_report: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    report["duration_ms"] = serde_json::Value::Null;
+    second_report["duration_ms"] = serde_json::Value::Null;
+    assert_eq!(report, second_report);
+    let finding = report["orchestration_violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["step"] == "clone-index")
+        .expect("diff cap exhaustion must block the gate");
+    assert!(finding["output"].as_str().unwrap().contains("role Source"));
+    assert!(
+        finding["output"]
+            .as_str()
+            .unwrap()
+            .contains("Raise clone thresholds")
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 fn first_fingerprint(files: &[(PathBuf, String)]) -> String {
