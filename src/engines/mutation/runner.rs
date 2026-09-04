@@ -6,6 +6,7 @@ use crate::engines::process::append_output;
 mod apply;
 #[path = "baseline.rs"]
 mod baseline;
+pub(crate) use baseline::BaselineRunContext;
 #[path = "plan.rs"]
 mod plan;
 #[path = "restore.rs"]

@@ -9,6 +9,7 @@ mod targets;
 
 use crate::config::HardgateConfig;
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
+use crate::engines::mutation::runner::BaselineRunContext;
 use crate::engines::{
     AstMutant, AstMutationGenerator, BaselineOutcome, MutantExecutionResult, MutantOutcome,
     MutationStats, NativeMutationRunner,
@@ -262,7 +263,9 @@ fn run_unmutated_baselines(run: BaselineRun<'_>) -> Result<()> {
         }
         let result = run
             .runner
-            .run_resolved_baseline_with_sources(&file, run.root, &protected, plan);
+            .run_resolved_baseline_with_sources(BaselineRunContext::new(
+                &file, run.root, &protected, plan,
+            ));
         if result.outcome == BaselineOutcome::Passed {
             if !run.json {
                 println!("      ... {}", "passed".green().bold());
