@@ -19,11 +19,25 @@ min_score = 0.0
 timeout_secs = 1
 "#;
 
-struct FixtureRoot(PathBuf);
+struct FixtureRoot {
+    path: PathBuf,
+    cleanup: PathBuf,
+}
 
 impl FixtureRoot {
     fn new(prefix: &str) -> Self {
-        Self(fs::tempdir(prefix))
+        let path = fs::tempdir(prefix);
+        Self {
+            cleanup: path.clone(),
+            path,
+        }
+    }
+
+    fn nested(prefix: &str, parent: &str) -> Self {
+        let cleanup = fs::tempdir(prefix);
+        let path = cleanup.join(parent).join("repo");
+        std::fs::create_dir_all(&path).unwrap();
+        Self { path, cleanup }
     }
 }
 
@@ -31,13 +45,13 @@ impl Deref for FixtureRoot {
     type Target = Path;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.path
     }
 }
 
 impl Drop for FixtureRoot {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.cleanup);
     }
 }
 
@@ -183,7 +197,7 @@ fn relative_and_absolute_outside_scopes_are_rejected() {
     let relative_output = run_mutate(&root, Some(&relative), false);
     assert!(!relative_output.status.success());
     assert!(
-        diagnostic(&relative_output).contains("escapes repository root"),
+        diagnostic(&relative_output).contains("outside repository root"),
         "{}",
         diagnostic(&relative_output)
     );
@@ -191,7 +205,7 @@ fn relative_and_absolute_outside_scopes_are_rejected() {
     let absolute_output = run_mutate(&root, Some(&outside.join("outside.ts")), false);
     assert!(!absolute_output.status.success());
     assert!(
-        diagnostic(&absolute_output).contains("escapes repository root"),
+        diagnostic(&absolute_output).contains("outside repository root"),
         "{}",
         diagnostic(&absolute_output)
     );
@@ -220,6 +234,48 @@ fn symlink_scope_resolving_outside_is_rejected() {
         "{}",
         diagnostic(&output)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_symlink_alias_outside_root_can_resolve_to_an_in_root_target() {
+    use std::os::unix::fs::symlink;
+
+    let root = FixtureRoot::new("mutation-target-alias-root");
+    let outside = FixtureRoot::new("mutation-target-alias-outside");
+    write(&root, "hardgate.toml", MUTATION_CONFIG);
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn accepts(value: bool) -> bool { value == true }\n",
+    );
+    let alias = outside.join("alias.ts");
+    symlink(root.join("src/lib.rs"), &alias).unwrap();
+
+    let output = run_mutate(&root, Some(&alias), false);
+    assert!(output.status.success(), "{}", diagnostic(&output));
+}
+
+#[test]
+fn ancestor_directory_names_do_not_poison_relative_role_classification() {
+    for (index, parent) in ["target", "tests", "config", "generated"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = FixtureRoot::nested(&format!("mutation-target-ancestor-{index}"), parent);
+        write(&root, "hardgate.toml", MUTATION_CONFIG);
+        write(
+            &root,
+            "src/lib.rs",
+            "pub fn accepts(value: bool) -> bool { value == true }\n",
+        );
+
+        let full = run_mutate(&root, None, false);
+        assert!(full.status.success(), "{parent}: {}", diagnostic(&full));
+
+        let scoped = run_mutate(&root, Some(Path::new("src")), false);
+        assert!(scoped.status.success(), "{parent}: {}", diagnostic(&scoped));
+    }
 }
 
 #[test]

@@ -70,19 +70,20 @@ fn scoped_file_target(
     canonical_root: &Path,
     config: &HardgateConfig,
 ) -> Result<Vec<PathBuf>> {
-    let classified = ClassifiedFile::new_with_config(canonical_scope, &config.classification)?;
-    ensure_scoped_file_target(scope, canonical_scope, &classified, config)?;
-    Ok(vec![repository_relative(canonical_scope, canonical_root)?])
+    let relative_scope = repository_relative(canonical_scope, canonical_root)?;
+    let classified = ClassifiedFile::new_with_config(&relative_scope, &config.classification)?;
+    ensure_scoped_file_target(scope, &relative_scope, &classified, config)?;
+    Ok(vec![relative_scope])
 }
 
 fn ensure_scoped_file_target(
     scope: &Path,
-    canonical_scope: &Path,
+    relative_scope: &Path,
     classified: &ClassifiedFile,
     config: &HardgateConfig,
 ) -> Result<()> {
     if !is_effective_mutation_target(classified, config) {
-        let builtin_role = ClassifiedFile::new(canonical_scope).role;
+        let builtin_role = ClassifiedFile::new(relative_scope).role;
         bail!(
             "refusing to mutate `{}` because it is classified as {:?}, not production source (built-in role {:?})",
             scope.display(),
@@ -107,9 +108,10 @@ fn filter_production_sources(
     let mut targets = Vec::new();
     for path in files {
         let canonical = canonical_file(&path, canonical_root)?;
-        let classified = ClassifiedFile::new_with_config(&canonical, &config.classification)?;
+        let relative = repository_relative(&canonical, canonical_root)?;
+        let classified = ClassifiedFile::new_with_config(&relative, &config.classification)?;
         if is_effective_mutation_target(&classified, config) && classified.ast_supported {
-            targets.push(repository_relative(&canonical, canonical_root)?);
+            targets.push(relative);
         }
     }
     targets.sort();
@@ -139,7 +141,6 @@ fn canonical_scope(scope: &Path, canonical_root: &Path) -> Result<PathBuf> {
     } else {
         canonical_root.join(scope)
     };
-    ensure_lexically_contained(&candidate, canonical_root, scope)?;
     if !candidate.exists() {
         bail!("Path not found: `{}`", scope.display());
     }
@@ -190,36 +191,6 @@ fn ensure_contained(path: &Path, canonical_root: &Path, original: &Path) -> Resu
         original.display(),
         canonical_root.display()
     )
-}
-
-fn ensure_lexically_contained(path: &Path, canonical_root: &Path, original: &Path) -> Result<()> {
-    let normalized = normalize_absolute(path);
-    if normalized.starts_with(canonical_root) {
-        return Ok(());
-    }
-    bail!(
-        "refusing mutation path `{}` because it escapes repository root `{}`",
-        original.display(),
-        canonical_root.display()
-    )
-}
-
-fn normalize_absolute(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => pop_or_keep_parent(&mut normalized),
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn pop_or_keep_parent(path: &mut PathBuf) {
-    if !path.pop() {
-        path.push("..");
-    }
 }
 
 fn normalize_relative(path: &Path) -> PathBuf {
