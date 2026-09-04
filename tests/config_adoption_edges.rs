@@ -8,7 +8,7 @@ use hardgate::engines::{
     check_content_budgets, check_file_budgets,
 };
 use hardgate::git_evidence::{ChangeSet, ChangedLineMap};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 fn write_config(tag: &str, body: &str) -> (PathBuf, PathBuf) {
