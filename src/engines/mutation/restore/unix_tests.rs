@@ -2,10 +2,9 @@
 
 use super::super::test_support;
 use super::{
-    AtomicReplacement, ExpectedEntry, FileIdentity, LocationContext, SourceSnapshot,
-    TargetLocation, atomic_replace_at, cleanup_temp_entry, reject_existing_target,
-    restore_location, same_temp_identity, snapshot_location, temp, temp_file_identity,
-    verify_contents, verify_temp_entry,
+    AtomicReplacement, ExpectedEntry, LocationContext, SourceSnapshot, TargetLocation,
+    atomic_replace_at, cleanup_temp_entry, reject_existing_target, restore_location,
+    same_temp_identity, temp, temp_file_identity, verify_contents, verify_temp_entry,
 };
 use crate::engines::mutation::test_support::temp_root;
 use std::ffi::OsStr;

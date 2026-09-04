@@ -1,7 +1,7 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use super::test_support;
-use super::{restore_mutation_location, snapshot_protected_location, verify_unchanged};
+use super::{snapshot_protected_location, verify_unchanged};
 use std::fs;
 
 #[test]
@@ -23,7 +23,10 @@ fn snapshot_protected_location_reports_a_missing_target() {
         crate::engines::mutation::test_support::temp_root("hardgate-restore", "snapshot-missing");
     let target = root.join("fixture.rs");
 
-    let error = snapshot_protected_location(&target, &root).unwrap_err();
+    let error = match snapshot_protected_location(&target, &root) {
+        Ok(_) => panic!("missing protected target unexpectedly accepted"),
+        Err(error) => error,
+    };
 
     test_support::assert_error(&error, std::io::ErrorKind::NotFound, "does not exist");
     let _ = fs::remove_dir_all(root);

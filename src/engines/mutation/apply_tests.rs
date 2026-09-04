@@ -6,7 +6,7 @@ use crate::engines::mutation::{AstMutant, MutantOutcome, NativeMutationRunner};
 use std::fs;
 use std::path::PathBuf;
 
-use super::super::process::CommandExecution;
+use super::super::super::process::CommandExecution;
 use super::super::restore::test_support;
 use super::super::restore::{RestoreLocation, SourceSnapshot};
 
