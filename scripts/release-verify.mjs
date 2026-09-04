@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { classifyBinaryAbi } from "./release-abi.mjs";
 
 const targets = [
   ["x86_64-unknown-linux-gnu", "hardgate-linux-x64", /x86-64/, "gnu"],
@@ -40,18 +41,22 @@ function digest(file) {
 
 const MAX_BINARY_BYTES = 128 * 1024 * 1024;
 
-function verifyEmbeddedIdentity(binaryPath, version, commit, packageName) {
+function verifyEmbeddedIdentity(binaryPath, version, commit, target, packageName) {
   const { size } = fs.statSync(binaryPath);
   if (!Number.isSafeInteger(size) || size > MAX_BINARY_BYTES) {
     fail(`${packageName} binary is unreasonably large for bounded identity verification`);
   }
   const bytes = fs.readFileSync(binaryPath);
   const marker = Buffer.from(`${version} (${commit})`, "utf8");
+  const targetMarker = Buffer.from(`hardgate-target:${target}`, "utf8");
   if (!bytes.includes(Buffer.from(version, "utf8")) || !bytes.includes(Buffer.from(commit, "utf8"))) {
     fail(`${packageName} binary does not embed the expected version and source commit`);
   }
   if (!bytes.includes(marker)) {
     fail(`${packageName} binary does not embed the expected version/commit identity`);
+  }
+  if (!bytes.includes(targetMarker)) {
+    fail(`${packageName} binary does not embed the expected Cargo target marker ${target}`);
   }
 }
 
@@ -110,19 +115,21 @@ function verifyBinaryAbi(binaryPath, target, abi, packageName) {
   if (!abi) return;
   const report = run("file", ["-b", binaryPath]);
   const programHeaders = run("readelf", ["-l", binaryPath]);
-  if (abi === "musl") {
-    const staticBinary = /(?:static(?:-pie)?|statically linked)/i.test(report);
-    const muslInterpreter = /ld-musl(?:-[^\s\]]+)?\.so(?:\.[0-9]+)?/i.test(programHeaders);
-    if (!staticBinary && !muslInterpreter) {
-      fail(`${packageName} musl target ${target} has no static link or musl interpreter`);
-    }
-    if (/ld-linux|glibc/i.test(`${report}\n${programHeaders}`)) {
-      fail(`${packageName} musl target ${target} requires glibc: ${programHeaders.trim()}`);
-    }
-    return;
-  }
-  if (abi === "gnu" && !/ld-linux|glibc/i.test(`${report}\n${programHeaders}`)) {
-    fail(`${packageName} GNU target ${target} does not identify a glibc ABI: ${programHeaders.trim()}`);
+  const symbols = run("readelf", ["-sW", binaryPath]);
+  const notes = run("readelf", ["-n", binaryPath]);
+  const evidence = classifyBinaryAbi({
+    report,
+    programHeaders,
+    symbols,
+    notes,
+    abi,
+    // verifyEmbeddedIdentity already rejected a missing exact marker. This
+    // flag lets the classifier preserve stripped static musl binaries while
+    // still requiring positive target evidence rather than absence of glibc.
+    targetMarkerValid: abi === "musl" && target.endsWith("-musl"),
+  });
+  if (!evidence.ok) {
+    fail(`${packageName} ${abi} target ${target} ABI evidence failed: ${evidence.reason}`);
   }
 }
 
@@ -145,7 +152,7 @@ function verifyArchive(dist, target, pkg, archPattern, abi, version, commit, dir
   // before the host smoke test and keep the extracted file bounded for the
   // embedded identity check below.
   fs.chmodSync(binaryPath, 0o755);
-  verifyEmbeddedIdentity(binaryPath, version, commit, pkg);
+  verifyEmbeddedIdentity(binaryPath, version, commit, target, pkg);
   const report = run("file", ["-b", binaryPath]);
   if (!archPattern.test(report)) fail(`${pkg} architecture does not match ${target}: ${report.trim()}`);
   verifyBinaryAbi(binaryPath, target, abi, pkg);

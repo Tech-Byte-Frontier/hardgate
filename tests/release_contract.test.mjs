@@ -16,6 +16,7 @@ const installer = read("scripts/install.sh");
 const packageScript = read("scripts/release-package.mjs");
 const checksumScript = read("scripts/release-checksums.mjs");
 const verifier = read("scripts/release-verify.mjs");
+const releaseAbi = read("scripts/release-abi.mjs");
 const npmPublication = read("scripts/verify-npm-publication.mjs");
 const npmPackRetry = read("scripts/npm-pack-retry.mjs");
 const launcher = read("npm/hardgate/bin/hardgate.js");
@@ -91,6 +92,7 @@ includesAll(ci, [
   "node tests/npm-wrapper-regression.test.mjs",
   "node tests/release_contract.install.test.mjs",
   "node tests/release_contract.package.test.mjs",
+  "node tests/release_contract.abi.test.mjs",
   "node scripts/check-consumer-matrix.mjs",
   "HARDGATE_BINARY: target/release/hardgate",
 ], "CI");
@@ -118,6 +120,8 @@ includesAll(release, [
   "node tests/npm-wrapper.test.mjs",
   "node tests/npm-wrapper-regression.test.mjs",
   "node tests/release_contract.install.test.mjs",
+  "node tests/release_contract.package.test.mjs",
+  "node tests/release_contract.abi.test.mjs",
   "node scripts/check-consumer-matrix.mjs",
   "HARDGATE_BINARY: target/release/hardgate",
   "git cat-file -t \"$RELEASE_TAG\"",
@@ -206,9 +210,12 @@ assert.match(release, /permissions:\s*\n\s+contents: read/, "release workflow de
 assert.match(release, /package:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only packaging may attest artifacts");
 assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
 assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
-const cratePublishStep = release.slice(release.indexOf("- name: Publish crate when exact version is missing"), release.indexOf("- name: Verify published crate identity without publish credentials"));
+const crateStateStep = release.slice(release.indexOf("id: crate-state"), release.indexOf("name: Publish crate when exact version is missing"));
+const cratePublishStep = release.slice(release.indexOf("name: Publish crate when exact version is missing"), release.indexOf("- name: Verify published crate identity without publish credentials"));
 const crateVerifyStep = release.slice(release.indexOf("- name: Verify published crate identity without publish credentials"), release.indexOf("  publish-npm:"));
+assert.doesNotMatch(crateStateStep, /CARGO_REGISTRY_TOKEN/, "crate probes must not receive publication credentials");
 assert.match(cratePublishStep, /CARGO_REGISTRY_TOKEN:[\s\S]*?cargo publish --locked/, "crate token must scope only publication");
+assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?CARGO_REGISTRY_TOKEN="\$publish_token" cargo publish --locked/, "crate token must be process-scoped");
 assert.doesNotMatch(crateVerifyStep, /CARGO_REGISTRY_TOKEN/, "crate verification must not inherit publish credentials");
 for (const job of ["version-check", "package", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
   assert.match(release, new RegExp(`${job}:[\\s\\S]*?runs-on: ubuntu-24\\.04`), `${job} should use the current x64 Linux runner`);
@@ -218,7 +225,8 @@ assert.equal((release.match(/actions\/checkout@/g) ?? []).length, (release.match
 includesAll(packageScript, ["--sort=name", "--mtime=@0", "gzip", "-n", "SHA256SUMS", "chmodSync(packageRoot, 0o755)", "chmodSync(destination, 0o755)", "metadataPath", "chmodSync(metadataPath, 0o644)", "full hexadecimal source identity"], "archive helper");
 includesAll(checksumScript, ["SHA256SUMS", "hardgate-${version}.sbom.cdx.json", "lines.length", "sha256"], "payload checksum helper");
 includesAll(syncScript, ["syncJson(path.join(root, \"package.json\")", "--check", "Cargo.toml"], "version synchronization");
-includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "ld-musl", "ld-linux", "static(?:-pie)?", "muslInterpreter"], "archive verifier");
+includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "hardgate-target:", "expected Cargo target marker", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "-l", "-sW", "-n", "classifyBinaryAbi"], "archive verifier");
+includesAll(releaseAbi, ["classifyBinaryAbi", "ld-musl", "__init_libc", "GLIBC_", "gnu_get_libc_version", "_dl_relocate_static_pie", "NT_GNU_ABI_TAG", "staticBinary", "exact Cargo target marker", "targetMarkerValid"], "ABI evidence classifier");
 includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS", "isRetryableNpmPackError", "failed without retry"], "npm publication verifier");
 includesAll(npmPackRetry, ["isRetryableNpmPackError", "E404", "EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED"], "npm pack retry classifier");
 for (const error of [
@@ -310,11 +318,13 @@ includesAll(installerRuntime, ["regular-file replacement", "existing destination
 includesAll(installerRuntime, ["BusyBox", "sha256sum", "HARDGATE_FIXTURE", "ldd", "EXTRA.txt", "hardgate-linux-x64-musl", "release_contract.install.test"], "installer runtime contract");
 includesAll(build, [
   "HARDGATE_BUILD_GIT_SHA",
+  "HARDGATE_BUILD_TARGET",
+  'env::var("TARGET")',
   ".cargo_vcs_info.json",
   "git",
   "rev-parse",
   '"unknown"',
 ], "build identity");
-includesAll(buildInfo, ["CARGO_PKG_VERSION", "HARDGATE_BUILD_GIT_SHA", "VERSION_DISPLAY"], "version display");
+includesAll(buildInfo, ["CARGO_PKG_VERSION", "HARDGATE_BUILD_GIT_SHA", "HARDGATE_BUILD_TARGET", "BUILD_TARGET_MARKER", "VERSION_DISPLAY"], "version display");
 
 console.log("release_contract.test: OK");

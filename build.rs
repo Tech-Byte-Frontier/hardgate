@@ -34,6 +34,7 @@ fn git_sha(manifest_dir: &Path) -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=HARDGATE_BUILD_GIT_SHA");
+    println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-changed=.cargo_vcs_info.json");
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
@@ -46,4 +47,6 @@ fn main() {
         .or_else(|| git_sha(manifest_dir))
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=HARDGATE_BUILD_GIT_SHA={sha}");
+    let target = env::var("TARGET").expect("Cargo must provide TARGET to build.rs");
+    println!("cargo:rustc-env=HARDGATE_BUILD_TARGET={target}");
 }

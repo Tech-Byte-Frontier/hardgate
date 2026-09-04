@@ -145,6 +145,8 @@ enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let _ = build_info::identity();
+    let _ = std::hint::black_box(build_info::TARGET);
+    let _ = std::hint::black_box(build_info::BUILD_TARGET_MARKER);
     let cli = Cli::parse();
     execute_command(cli.command)
 }
