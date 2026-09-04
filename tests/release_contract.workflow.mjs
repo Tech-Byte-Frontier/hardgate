@@ -31,6 +31,7 @@ actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
 actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
 dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
 pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b
 oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 cargo fmt --all --check
@@ -40,7 +41,10 @@ scripts/dependency-audit.sh
 cargo publish --dry-run --locked
 scripts/self-gate.sh
 CARGO_AUDIT_VERSION: 0.22.2
+cargo-audit@\${{ env.CARGO_AUDIT_VERSION }}
+fallback: none
 CARGO_LLVM_COV_VERSION: 0.9.0
+HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS: "1"
 RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
 NODE_VERSION: 26.8.1
 NPM_VERSION: 12.0.2
@@ -173,6 +177,7 @@ const ciNpmWrapper = ci.slice(ci.indexOf("  npm-wrapper:"), ci.indexOf("  hardga
 const ciRust = ci.slice(ci.indexOf("  rust:"), ci.indexOf("  npm-wrapper:"));
 assert.match(ciNpmWrapper, /node tests\/release_contract\.sbom\.test\.mjs/, "SBOM runtime contract must reuse the CI job with pinned Node and Cargo");
 assert.match(ciRust, /cargo build --locked --release/, "CI must build the shared native release binary once");
+assert.match(ciRust, /Install pinned prebuilt cargo-audit[\s\S]*?fallback: none[\s\S]*?scripts\/dependency-audit\.sh/, "CI must use the checksum-verified cargo-audit binary without a source-build fallback");
 assert.equal((ci.match(/cargo build --locked --release/g) ?? []).length, 1, "CI must not duplicate the native release build across jobs");
 assert.equal((release.match(/cargo build --locked --release/g) ?? []).length, 1, "release must contain only the five-target matrix build command");
 assert.match(ciRust, /native_artifact_id:[\s\S]*?steps\.upload_native\.outputs\.artifact-id/, "CI must expose the exact shared binary artifact ID");
@@ -189,6 +194,7 @@ for (const [label, section] of [["CI npm-wrapper", ciNpmWrapper], ["CI hardgate-
   assert.match(section, /chmod 755 target\/release\/hardgate/, `${label} must restore the executable mode`);
   assert.doesNotMatch(section, /cargo build --locked --release/, `${label} must not rebuild the shared native binary`);
 }
+assert.match(ciSelfGate, /Install pinned prebuilt cargo-llvm-cov[\s\S]*?cargo-llvm-cov@\$\{\{ env\.CARGO_LLVM_COV_VERSION \}\}[\s\S]*?fallback: none[\s\S]*?scripts\/self-gate\.sh/, "CI must use the checksum-verified coverage tool without a source-build fallback");
 for (const [label, section] of [["CI hardgate-self", ciSelfGate]]) {
   const coverageToolchain = section.indexOf("toolchain: ${{ env.RUST_COVERAGE_TOOLCHAIN }}");
   const stableToolchain = section.indexOf("toolchain: ${{ env.RUST_TOOLCHAIN }}");

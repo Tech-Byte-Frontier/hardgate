@@ -9,6 +9,10 @@ if command -v cargo-llvm-cov >/dev/null 2>&1 && output=$(cargo "+$COV_TOOLCHAIN"
   installed_version=$(printf '%s\n' "$output" | awk 'NR == 1 { print $2 }')
 fi
 if [ "$installed_version" != "$COV_VERSION" ]; then
+  if [ "${HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS:-0}" = 1 ]; then
+    echo "hardgate: expected preinstalled cargo-llvm-cov $COV_VERSION, found ${installed_version:-none}" >&2
+    exit 1
+  fi
   cargo install cargo-llvm-cov --version "=$COV_VERSION" --locked --force
 fi
 mkdir -p coverage

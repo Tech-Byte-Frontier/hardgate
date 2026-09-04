@@ -505,10 +505,72 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A recovery dispatch runs this workflow from the exact successful
+          # main commit, where publication safety helpers are reviewed by CI.
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
+      - name: Prevent latest-channel rollback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+        run: |
+          set -euo pipefail
+          latest_metadata=$(mktemp)
+          latest_error=$(mktemp)
+          cleanup_latest_metadata() {
+            rm -f "$latest_metadata" "$latest_error"
+          }
+          trap cleanup_latest_metadata EXIT
+          if gh api -X GET "repos/${GITHUB_REPOSITORY}/releases/latest" > "$latest_metadata" 2> "$latest_error"; then
+            latest_tag=$(jq -er '.tag_name | select(type == "string" and length > 0)' "$latest_metadata") || {
+              echo "GitHub latest release has no valid tag name; refusing registry publication" >&2
+              exit 1
+            }
+            node scripts/release-order.mjs --target-tag "$RELEASE_TAG" --latest-tag "$latest_tag"
+          else
+            status=$?
+            if [ "$status" -eq 1 ] && grep -Eiq 'HTTP[[:space:]]+404|404[[:space:]]+Not Found' "$latest_error"; then
+              echo "no existing published GitHub release; $RELEASE_TAG establishes the latest channel"
+            else
+              cat "$latest_error" >&2
+              echo "unable to determine the current GitHub latest release; refusing registry publication" >&2
+              exit 1
+            fi
+          fi
+          for package_name in \
+            hardgate-linux-x64 \
+            hardgate-linux-x64-musl \
+            hardgate-linux-arm64 \
+            hardgate-linux-arm64-musl \
+            hardgate-darwin-x64 \
+            hardgate-darwin-arm64 \
+            @tech-byte-frontier/hardgate
+          do
+            encoded_name=$(printf '%s' "$package_name" | sed 's|/|%2f|g')
+            npm_status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$latest_metadata" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/latest") || {
+              echo "unable to query npm latest for $package_name; refusing registry publication" >&2
+              exit 1
+            }
+            case "$npm_status" in
+              200)
+                latest_version=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$latest_metadata") || {
+                  echo "npm latest for $package_name has no valid version; refusing registry publication" >&2
+                  exit 1
+                }
+                node scripts/release-order.mjs --target-tag "v$RELEASE_VERSION" --latest-tag "v$latest_version"
+                ;;
+              404) echo "$package_name has no npm latest tag; $RELEASE_VERSION establishes it" ;;
+              *) echo "npm latest probe for $package_name returned HTTP $npm_status; refusing registry publication" >&2; exit 1 ;;
+            esac
+          done
       - run: npm install --global "npm@${NPM_VERSION}"
       # Cargo has no non-mutating remote credential check. Main CI's dry run
       # validates the package; the single publish job performs authentication.

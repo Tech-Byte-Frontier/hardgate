@@ -61,6 +61,7 @@ entry_points = [
   "scripts/consumer-process-launcher.mjs",
   "scripts/release-checksums.mjs",
   "scripts/release-package.mjs",
+  "scripts/release-order.mjs",
   "scripts/release-sbom-verify.mjs",
   "scripts/release-sbom.mjs",
   "scripts/release-verify.mjs",

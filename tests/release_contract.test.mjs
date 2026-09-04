@@ -5,5 +5,6 @@
 import "./release_contract.workflow.mjs";
 import "./release_contract.authorization.mjs";
 import "./release_contract.artifacts.mjs";
+import "./release_order.test.mjs";
 
 console.log("release_contract.test: OK");

@@ -15,6 +15,7 @@ env:
   RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_LLVM_COV_VERSION: 0.9.0
+  HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS: "1"
   NODE_VERSION: 26.8.1
   NPM_VERSION: 12.0.2
   PNPM_VERSION: 11.25.0
@@ -36,6 +37,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, llvm-tools-preview
+      - name: Install pinned prebuilt cargo-audit
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        with:
+          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
+          fallback: none
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --all-features --locked
@@ -130,6 +136,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: llvm-tools-preview
+      - name: Install pinned prebuilt cargo-llvm-cov
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+          fallback: none
       - name: Download the shared native release binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

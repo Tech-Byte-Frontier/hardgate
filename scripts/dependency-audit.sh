@@ -8,6 +8,10 @@ if command -v cargo-audit >/dev/null 2>&1 && output=$(cargo audit --version 2>/d
   installed_version=$(printf '%s\n' "$output" | awk 'NR == 1 { print $2 }')
 fi
 if [ "$installed_version" != "$AUDIT_VERSION" ]; then
+  if [ "${HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS:-0}" = 1 ]; then
+    echo "hardgate: expected preinstalled cargo-audit $AUDIT_VERSION, found ${installed_version:-none}" >&2
+    exit 1
+  fi
   cargo install cargo-audit --version "=$AUDIT_VERSION" --locked --force
 fi
 cargo audit
