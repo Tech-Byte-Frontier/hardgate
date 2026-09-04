@@ -166,9 +166,10 @@ fn human_readable_branch(kind: &str) -> &'static str {
             &["catch_clause", "except_clause", "exception_handler"],
             "exception handler (`catch`)",
         ),
+        (&["ternary_expression"], "ternary operator (`? :`)"),
         (
-            &["ternary_expression", "conditional_expression"],
-            "ternary operator (`? :`)",
+            &["conditional_expression"],
+            "conditional expression (`value if condition else fallback`)",
         ),
     ];
     for (kinds, desc) in TABLE {

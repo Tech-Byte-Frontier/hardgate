@@ -43,6 +43,14 @@ function outer(value) {
     assert!(names.contains(&"anonymous"));
     assert!(names.contains(&"outer"));
     assert!(names.contains(&"inner"));
+    let compute = metrics
+        .iter()
+        .find(|metric| metric.name == "compute")
+        .expect("the named arrow should be analyzed");
+    assert!(compute.cyclomatic_breakdown.iter().any(|contribution| {
+        contribution.kind == "ternary_expression"
+            && contribution.description == "ternary operator (`? :`)"
+    }));
 }
 
 #[test]
@@ -51,7 +59,7 @@ fn complexity_walker_counts_python_boolean_branches() {
 def gate(first, second, fallback):
     if first and second or fallback:
         return 1
-    return 0
+    return first if second else fallback
 "#;
     let mut analyzer = ComplexityAnalyzer::new();
     let metrics = analyzer
@@ -66,6 +74,11 @@ def gate(first, second, fallback):
             .iter()
             .any(|contribution| contribution.description.contains("boolean operator"))
     );
+    assert!(function.cyclomatic_breakdown.iter().any(|contribution| {
+        contribution.kind == "conditional_expression"
+            && contribution.description
+                == "conditional expression (`value if condition else fallback`)"
+    }));
 }
 
 #[test]
