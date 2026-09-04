@@ -145,3 +145,59 @@ fn test_invariants_normalize_and_expand_rust_imports() {
         ]
     );
 }
+
+#[test]
+fn test_invariants_handle_import_and_rule_edges() {
+    let rules = vec![
+        InvariantRule {
+            name: None,
+            from: "[invalid".to_string(),
+            exclude: None,
+            disallow_imports: None,
+            disallow_calls: None,
+            disallow_tokens: None,
+            message: None,
+        },
+        InvariantRule {
+            name: None,
+            from: "src/**".to_string(),
+            exclude: Some(vec!["[invalid".to_string()]),
+            disallow_imports: Some(vec!["db/**".to_string(), "[invalid".to_string()]),
+            disallow_calls: None,
+            disallow_tokens: None,
+            message: None,
+        },
+    ];
+    let checker = InvariantsChecker::new(&rules);
+    let violations = checker.check_file(
+        Path::new("src/ui/data.rs"),
+        concat!(
+            "/* ignored block comment */\n",
+            "use    ;\n",
+            "use ,;\n",
+            "import safe_module\n",
+            "use crate::db::{' pool', \"models\", ''};\n",
+            "use crate::db::pool, , crate::db::query;\n",
+        ),
+        Path::new("."),
+    );
+
+    assert_eq!(violations.len(), 2);
+    assert_eq!(
+        violations
+            .iter()
+            .map(|violation| violation.line_number)
+            .collect::<Vec<_>>(),
+        vec![5, 6]
+    );
+    assert!(
+        violations
+            .iter()
+            .all(|violation| violation.rule_name == "Rule from src/**")
+    );
+    assert!(
+        violations
+            .iter()
+            .all(|violation| violation.message == "Architectural invariant violation")
+    );
+}
