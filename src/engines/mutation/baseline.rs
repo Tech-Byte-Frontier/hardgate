@@ -21,6 +21,29 @@ pub(crate) struct BaselineSources {
     entries: Vec<ProtectedSource>,
 }
 
+pub(crate) struct BaselineRunContext<'a> {
+    pub(crate) file: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) protected: &'a BaselineSources,
+    pub(crate) plan: super::ResolvedTestPlan,
+}
+
+impl<'a> BaselineRunContext<'a> {
+    pub(crate) fn new(
+        file: &'a Path,
+        root: &'a Path,
+        protected: &'a BaselineSources,
+        plan: super::ResolvedTestPlan,
+    ) -> Self {
+        Self {
+            file,
+            root,
+            protected,
+            plan,
+        }
+    }
+}
+
 struct ProtectedSource {
     path: PathBuf,
     location: RestoreLocation,
@@ -76,15 +99,9 @@ pub(crate) fn snapshot_baseline_sources(
 impl NativeMutationRunner {
     /// Run the resolved test command against the unmodified source tree.
     pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
-        let started = Instant::now();
-        self.try_run_baseline(file, root)
-            .unwrap_or_else(|error| BaselineExecutionResult {
-                file: file.to_path_buf(),
-                outcome: BaselineOutcome::RunnerError,
-                duration_ms: started.elapsed().as_millis(),
-                command: self.test_cmd.clone().unwrap_or_default(),
-                diagnostic: error.to_string(),
-            })
+        run_baseline_with_error(file, self.test_cmd.as_deref().unwrap_or_default(), || {
+            self.try_run_baseline(file, root)
+        })
     }
 
     pub(crate) fn try_run_baseline(
@@ -110,7 +127,11 @@ impl NativeMutationRunner {
                 });
             }
         };
-        Ok(self.run_resolved_baseline_with_sources(file, root, &protected, plan))
+        Ok(
+            self.run_resolved_baseline_with_sources(BaselineRunContext::new(
+                file, root, &protected, plan,
+            )),
+        )
     }
 
     pub(crate) fn snapshot_baseline_sources(
@@ -127,15 +148,9 @@ impl NativeMutationRunner {
         root: &Path,
         protected: &BaselineSources,
     ) -> BaselineExecutionResult {
-        let started = Instant::now();
-        self.try_run_baseline_with_sources(file, root, protected)
-            .unwrap_or_else(|error| BaselineExecutionResult {
-                file: file.to_path_buf(),
-                outcome: BaselineOutcome::RunnerError,
-                duration_ms: started.elapsed().as_millis(),
-                command: self.test_cmd.clone().unwrap_or_default(),
-                diagnostic: error.to_string(),
-            })
+        run_baseline_with_error(file, self.test_cmd.as_deref().unwrap_or_default(), || {
+            self.try_run_baseline_with_sources(file, root, protected)
+        })
     }
 
     pub(crate) fn resolve_baseline_plan(
@@ -162,16 +177,23 @@ impl NativeMutationRunner {
         protected: &BaselineSources,
     ) -> MutationRunnerResult<BaselineExecutionResult> {
         let plan = self.resolve_baseline_plan(file, root, protected)?;
-        Ok(self.run_resolved_baseline_with_sources(file, root, protected, plan))
+        Ok(
+            self.run_resolved_baseline_with_sources(BaselineRunContext::new(
+                file, root, protected, plan,
+            )),
+        )
     }
 
     pub(crate) fn run_resolved_baseline_with_sources(
         &self,
-        file: &Path,
-        root: &Path,
-        protected: &BaselineSources,
-        plan: super::ResolvedTestPlan,
+        context: BaselineRunContext<'_>,
     ) -> BaselineExecutionResult {
+        let BaselineRunContext {
+            file,
+            root,
+            protected,
+            plan,
+        } = context;
         let start = Instant::now();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
@@ -289,4 +311,19 @@ pub(crate) fn baseline_diagnostic(mut diagnostic: String, selection: &TestSelect
 
 fn append_diagnostic(existing: &mut String, extra: String) {
     *existing = append_output(std::mem::take(existing), extra);
+}
+
+fn run_baseline_with_error(
+    file: &Path,
+    command: &str,
+    run: impl FnOnce() -> MutationRunnerResult<BaselineExecutionResult>,
+) -> BaselineExecutionResult {
+    let started = Instant::now();
+    run().unwrap_or_else(|error| BaselineExecutionResult {
+        file: file.to_path_buf(),
+        outcome: BaselineOutcome::RunnerError,
+        duration_ms: started.elapsed().as_millis(),
+        command: command.to_string(),
+        diagnostic: error.to_string(),
+    })
 }
