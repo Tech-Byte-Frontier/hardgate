@@ -1,5 +1,6 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+use super::super::super::test_support;
 use super::{
     TargetLocation, ancestor_error, append_component, contained_relative_path, directory_identity,
     normalize_absolute, verify_descriptor_identity, verify_live_location,
@@ -33,11 +34,10 @@ fn contained_relative_path_rejects_a_target_that_is_the_repository_root() {
 
     let error = contained_relative_path(&root, &root).unwrap_err();
 
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        error
-            .to_string()
-            .contains("resolves to the repository root")
+    test_support::assert_error(
+        &error,
+        std::io::ErrorKind::InvalidInput,
+        "resolves to the repository root",
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -83,8 +83,11 @@ fn directory_identity_rejects_a_regular_file_descriptor() {
 
     let error = directory_identity(&file).unwrap_err();
 
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(error.to_string().contains("no longer a directory"));
+    test_support::assert_error(
+        &error,
+        std::io::ErrorKind::InvalidInput,
+        "no longer a directory",
+    );
     let _ = fs::remove_dir_all(root);
 }
 

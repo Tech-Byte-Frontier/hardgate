@@ -307,3 +307,7 @@ fn unsupported_platform_error() -> io::Error {
 #[cfg(test)]
 #[path = "restore_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "restore/test_support_tests.rs"]
+pub(crate) mod test_support;

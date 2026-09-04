@@ -1,5 +1,6 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+use super::super::test_support;
 use super::{
     AtomicReplacement, ExpectedEntry, FileIdentity, LocationContext, SourceSnapshot,
     TargetLocation, atomic_replace_at, cleanup_temp_entry, reject_existing_target,
@@ -24,22 +25,33 @@ fn fixture(label: &str) -> (PathBuf, PathBuf, TargetLocation, SourceSnapshot) {
     (root, target, location, original)
 }
 
+fn restore_present(context: LocationContext<'_>, original: &SourceSnapshot) -> std::io::Result<()> {
+    restore_location(context, original, ExpectedEntry::Present(original))
+}
+
+fn restore_armed(
+    context: LocationContext<'_>,
+    original: &SourceSnapshot,
+    armed: &SourceSnapshot,
+) -> std::io::Result<()> {
+    restore_location(context, original, ExpectedEntry::Present(armed))
+}
+
+fn assert_restored(target: &Path, bytes: &[u8]) {
+    assert_eq!(fs::read(target).unwrap(), bytes);
+    assert_eq!(
+        fs::metadata(target).unwrap().permissions().mode() & 0o7777,
+        0o640
+    );
+}
+
 #[test]
 fn restore_present_original_is_a_noop() {
     let (root, target, location, original) = fixture("restore-noop");
 
-    restore_location(
-        LocationContext::new(&location, &target, &root),
-        &original,
-        ExpectedEntry::Present(&original),
-    )
-    .unwrap();
+    restore_present(LocationContext::new(&location, &target, &root), &original).unwrap();
 
-    assert_eq!(fs::read(&target).unwrap(), b"original\n");
-    assert_eq!(
-        fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
-        0o640
-    );
+    assert_restored(&target, b"original\n");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -48,18 +60,13 @@ fn restore_present_missing_target_reports_missing_without_recreating_it() {
     let (root, target, location, original) = fixture("restore-present-missing");
     fs::remove_file(&target).unwrap();
 
-    let error = restore_location(
-        LocationContext::new(&location, &target, &root),
-        &original,
-        ExpectedEntry::Present(&original),
-    )
-    .unwrap_err();
+    let error =
+        restore_present(LocationContext::new(&location, &target, &root), &original).unwrap_err();
 
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-    assert!(
-        error
-            .to_string()
-            .contains("disappeared before descriptor-relative replacement")
+    test_support::assert_error(
+        &error,
+        std::io::ErrorKind::NotFound,
+        "disappeared before descriptor-relative replacement",
     );
     assert!(!target.exists());
     let _ = fs::remove_dir_all(root);
@@ -89,17 +96,13 @@ fn atomic_replace_restores_exact_bytes_and_permissions() {
         0o640
     );
 
-    restore_location(
+    restore_armed(
         LocationContext::new(&location, &target, &root),
         &original,
-        ExpectedEntry::Present(armed_snapshot),
+        armed_snapshot,
     )
     .unwrap();
-    assert_eq!(fs::read(&target).unwrap(), b"original\n");
-    assert_eq!(
-        fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
-        0o640
-    );
+    assert_restored(&target, b"original\n");
     let _ = fs::remove_dir_all(root);
 }
 
