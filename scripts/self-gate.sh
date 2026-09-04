@@ -37,11 +37,13 @@ awk '
   section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
   { print }
 ' "$CONFIG_BACKUP" > hardgate.toml
+# The bound includes a clean stable test-harness build on a fresh CI runner,
+# not only test execution after a warm local cache.
 "$BINARY" mutate \
   --scoped src/engines/budgets.rs \
   --test-cmd "cargo test --all-targets --all-features --locked" \
   --max-mutants 1 \
-  --timeout 30 \
+  --timeout 180 \
   --format agent
 
 cp "$CONFIG_BACKUP" hardgate.toml
