@@ -106,6 +106,13 @@ fn clone_enablement_overrides_global_policy_only_when_explicit() {
 fn invalid_role_config_fails_during_load() {
     let cases = [
         ("[roles.source]\nmax_lines = 0", "max_lines"),
+        ("[roles.source]\nmax_parameters = 0", "max_parameters"),
+        (
+            "[roles.source]\nmax_function_lines = 0",
+            "max_function_lines",
+        ),
+        ("[roles.source]\nmax_statements = 0", "max_statements"),
+        ("[roles.source]\nmax_nesting_depth = 0", "max_nesting_depth"),
         ("[roles.test]\nmutation_target = true", "mutation_target"),
         ("[generated]\nenabled = true", "freshness_command"),
         ("[orchestration]\ntimeout_secs = 0", "timeout_secs"),
