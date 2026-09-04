@@ -83,8 +83,8 @@ function fallbackPackages(primary) {
   return [];
 }
 
-// Guard against wrapper scripts: only accept real machine binaries
-// (ELF / Mach-O / PE). The PATH fallback must never resolve to another
+// Guard against wrapper scripts: only accept real Unix machine binaries
+// (ELF / Mach-O). The PATH fallback must never resolve to another
 // `hardgate` launcher shim (e.g. an npm/pnpm `.bin` entry): exec'ing it
 // would re-enter this launcher with the same argv and recurse until the
 // kernel refuses with E2BIG. Seen in the wild via `pnpm dlx` sandboxes
@@ -96,7 +96,6 @@ function magicMatches(buf) {
   const isElf =
     buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46;
   if (isElf) return true;
-  if (buf[0] === 0x4d && buf[1] === 0x5a) return true; // MZ (windows PE)
   return MACHO_U32.has(buf.readUInt32LE(0)) || MACHO_U32.has(buf.readUInt32BE(0));
 }
 
@@ -199,10 +198,9 @@ function tryResolve(pkg) {
 }
 
 function resolveDevBinary() {
-  const suffix = process.platform === "win32" ? ".exe" : "";
   const rels = [
-    ["..", "..", "..", "target", "release", `hardgate${suffix}`],
-    ["..", "..", "..", "target", "debug", `hardgate${suffix}`],
+    ["..", "..", "..", "target", "release", "hardgate"],
+    ["..", "..", "..", "target", "debug", "hardgate"],
   ];
   for (const rel of rels) {
     const candidate = path.join(__dirname, ...rel);
@@ -212,11 +210,10 @@ function resolveDevBinary() {
 }
 
 function resolvePathBinary() {
-  const suffix = process.platform === "win32" ? ".exe" : "";
   const dirs = (process.env.PATH || "").split(path.delimiter);
   for (const dir of dirs) {
     if (!dir) continue;
-    const candidate = path.join(dir, `hardgate${suffix}`);
+    const candidate = path.join(dir, "hardgate");
     if (acceptCandidate(candidate)) return candidate;
   }
   return null;
@@ -226,16 +223,15 @@ function findBinary() {
   if (process.env.HARDGATE_BINARY) return process.env.HARDGATE_BINARY;
 
   const primary = platformPackage();
-  const candidates = primary
-    ? [primary, ...fallbackPackages(primary)]
-    : [];
+  if (!primary) return null;
+  const candidates = [primary, ...fallbackPackages(primary)];
   for (const pkg of candidates) {
     const found = tryResolve(pkg);
     if (found) return found;
   }
 
   // 3. Rust workspace dev fallback (running from the hardgate repo itself).
-  // 4. System PATH (cargo install / curl installer / brew).
+  // 4. System PATH (cargo install or the release installer).
   return resolveDevBinary() ?? resolvePathBinary();
 }
 
@@ -261,35 +257,63 @@ function spawnOptions() {
   };
 }
 
+function reportFailure(...messages) {
+  for (const message of messages) {
+    fs.writeSync(2, `${message}\n`);
+  }
+  process.exitCode = 1;
+}
+
+function exitFromSpawn(result) {
+  if (!result.signal) {
+    process.exit(result.status ?? 1);
+    return;
+  }
+  if (process.platform !== "win32") {
+    try {
+      process.kill(process.pid, result.signal);
+      return;
+    } catch {
+      /* fall through to a deterministic nonzero exit */
+    }
+  }
+  process.exit(1);
+}
+
 function main() {
   if (launcherDepth() > 5) {
-    console.error(
+    reportFailure(
       "[hardgate] Refusing to recurse: resolved binary re-entered the npm launcher. " +
         "Set HARDGATE_BINARY to the real binary or reinstall the platform package.",
     );
-    process.exit(1);
+    return;
+  }
+  const primary = platformPackage();
+  if (!process.env.HARDGATE_BINARY && !primary) {
+    reportFailure(
+      `[hardgate] Unsupported platform ${process.platform}/${process.arch}; this package ships Unix binaries for Linux and macOS only.`,
+    );
+    return;
   }
   const bin = findBinary();
   if (!bin) {
-    const primary = platformPackage() || "<unknown-platform>";
-    console.error(
-      `[hardgate] No prebuilt binary found for ${process.platform}/${process.arch} (expected optional dep '${primary}').`,
-    );
-    console.error(
+    const expected = primary || "<unknown-platform>";
+    reportFailure(
+      `[hardgate] No prebuilt binary found for ${process.platform}/${process.arch} (expected optional dep '${expected}').`,
       "[hardgate] Fix: reinstall without --no-optional/--omit=optional, or install the Rust toolchain fallback with `cargo install hardgate`, or download a tarball from https://github.com/Tech-Byte-Frontier/hardgate/releases",
     );
-    process.exit(1);
+    return;
   }
   const args = process.argv.slice(2);
   const res = spawnSync(bin, args, spawnOptions());
   if (res.error) {
     if (res.error.code === "ENOENT") {
-      console.error(`[hardgate] Binary not executable: ${bin}`);
-      process.exit(1);
+      reportFailure(`[hardgate] Binary not executable: ${bin}`);
+      return;
     }
     throw res.error;
   }
-  process.exit(res.status ?? 0);
+  exitFromSpawn(res);
 }
 
 if (require.main === module) main();
@@ -303,4 +327,5 @@ module.exports = {
   isSelf,
   launcherDepth,
   spawnOptions,
+  exitFromSpawn,
 };
