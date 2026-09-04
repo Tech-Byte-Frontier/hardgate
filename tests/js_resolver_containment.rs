@@ -1,12 +1,24 @@
-use super::{NativeMutationRunner, Path};
+#[path = "support/fs.rs"]
+mod fs;
+
+use hardgate::engines::NativeMutationRunner;
+use std::path::Path;
+
+fn write(root: &Path, path: &str, content: &str) {
+    let target = root.join(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(target, content).unwrap();
+}
 
 #[test]
 fn resolver_rejects_absolute_and_symlink_source_escape() {
-    let root = super::fs::tempdir("js-source-containment-root");
-    super::write(&root, "package.json", r#"{"packageManager":"npm@10"}"#);
-    let outside = super::fs::tempdir("js-source-containment-outside");
-    super::write(&outside, "package.json", "{\n");
-    super::write(&outside, "src/value.ts", "export const value = true;\n");
+    let root = fs::tempdir("js-source-containment-root");
+    write(&root, "package.json", r#"{"packageManager":"npm@10"}"#);
+    let outside = fs::tempdir("js-source-containment-outside");
+    write(&outside, "package.json", "{\n");
+    write(&outside, "src/value.ts", "export const value = true;\n");
     let runner = NativeMutationRunner::new(5, None);
     let check = |source: &Path| {
         let error = runner

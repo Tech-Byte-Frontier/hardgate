@@ -1,4 +1,5 @@
 use super::run_mutant_batch;
+use crate::engines::mutation::runner::MutationRunnerError;
 use crate::engines::{AstMutant, NativeMutationRunner};
 use std::path::{Path, PathBuf};
 
@@ -32,7 +33,7 @@ fn baselines_protect_every_production_target_before_mutants() {
     );
     let files = [PathBuf::from("first.rs"), PathBuf::from("second.rs")];
 
-    let result = super::run_unmutated_baselines(&runner, &files, &files, Path::new(&root));
+    let result = super::run_unmutated_baselines(&runner, &files, &files, Path::new(&root), false);
 
     assert!(result.is_err());
     assert_eq!(std::fs::read(&first).unwrap(), b"true\n");
@@ -89,6 +90,35 @@ fn baseline_preflight_restores_external_change_before_running_command() {
     assert_eq!(result.outcome, crate::engines::BaselineOutcome::RunnerError);
     assert!(!marker.exists());
     assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn baseline_resolution_failure_preserves_a_concurrent_source_edit() {
+    let root = std::env::temp_dir().join(format!(
+        "hardgate-baseline-resolution-integrity-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let target = root.join("target.ts");
+    std::fs::write(&target, b"export const value = true;\n").unwrap();
+    std::fs::write(root.join("package.json"), b"{\n").unwrap();
+    let runner = NativeMutationRunner::new(2, None);
+    let protected = NativeMutationRunner::snapshot_baseline_sources(
+        &[PathBuf::from("target.ts")],
+        Path::new(&root),
+    )
+    .unwrap();
+    std::fs::write(&target, b"external\n").unwrap();
+
+    let error = runner
+        .resolve_baseline_plan(Path::new("target.ts"), Path::new(&root), &protected)
+        .unwrap_err();
+
+    assert!(matches!(error, MutationRunnerError::Integrity(_)));
+    assert_eq!(std::fs::read(&target).unwrap(), b"external\n");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -153,7 +183,7 @@ fn batch_aborts_after_restore_failure_before_starting_later_mutants() {
     let runner = NativeMutationRunner::new(2, Some(command));
     let mutants = [mutant(1), mutant(2)];
 
-    let result = run_mutant_batch(&mutants, &runner, Path::new(&root));
+    let result = run_mutant_batch(&mutants, &runner, Path::new(&root), false);
 
     assert!(result.is_err());
     assert!(!second_marker.exists());

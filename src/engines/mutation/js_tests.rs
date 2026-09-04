@@ -60,16 +60,18 @@ fn test_names(stem: &str, source_extension: Option<&str>) -> Vec<String> {
 }
 fn ordered_extensions(source_extension: Option<&str>) -> Vec<&str> {
     let extensions = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"];
-    let source_extension = source_extension.map(str::to_ascii_lowercase);
+    let source_extension = source_extension.and_then(|source| {
+        extensions
+            .iter()
+            .copied()
+            .find(|extension| source.eq_ignore_ascii_case(extension))
+    });
     let mut ordered = extensions
         .iter()
-        .filter(|extension| Some(**extension) != source_extension.as_deref())
+        .filter(|extension| Some(**extension) != source_extension)
         .copied()
         .collect::<Vec<_>>();
-    if let Some(source) = source_extension
-        .as_deref()
-        .filter(|source| extensions.contains(source))
-    {
+    if let Some(source) = source_extension {
         ordered.insert(0, source);
     }
     ordered

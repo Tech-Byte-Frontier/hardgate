@@ -159,9 +159,11 @@ fn workspace_patterns_must_match_child_package() {
             "export const value = true;\n",
         );
         let value = resolve_js_test_plan(&root.join(child).join("src/value.ts"), &root).unwrap();
-        let expected_root = matched
-            .then_some(root.clone())
-            .unwrap_or_else(|| root.join(child));
+        let expected_root = if matched {
+            root.clone()
+        } else {
+            root.join(child)
+        };
         assert_eq!(value.workspace_root, expected_root, "{label}");
         assert_eq!(value.working_dir, expected_root, "{label}");
         let _ = std::fs::remove_dir_all(root);

@@ -280,7 +280,7 @@ fn symlinked_repository_root_spelling_stays_contained() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn atomic_replacement_leaves_outside_hardlink_peer_unchanged() {
+fn preexisting_outside_hardlink_is_rejected_without_touching_peer() {
     let root = source_root("mutation-runner-hardlink-outside", b"true\n");
     let outside = fs::tempdir("mutation-runner-hardlink-outside-peer");
     let target = root.join("fixture.rs");
@@ -295,7 +295,7 @@ fn atomic_replacement_leaves_outside_hardlink_peer_unchanged() {
     let result = runner.run_mutant(&mutant("fixture.rs"), Path::new(&root));
 
     assert_eq!(result.outcome, MutantOutcome::RunnerError);
-    assert!(!result.source_restored);
+    assert!(result.source_restored);
     assert!(!marker.exists());
     assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
     assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");

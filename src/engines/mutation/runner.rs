@@ -10,6 +10,7 @@ mod baseline;
 mod plan;
 #[path = "restore.rs"]
 mod restore;
+use anyhow::Result;
 use apply::{MutationInput, apply_and_execute};
 use plan::{custom_plan, plain_plan, rust_plan};
 use restore::{
@@ -24,6 +25,38 @@ use std::time::Instant;
 /// mapping and the complete test suite must run.
 pub const FULL_SUITE_TIMEOUT_SECS: u64 = 60;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug)]
+pub(crate) enum MutationRunnerError {
+    Resolution(String),
+    Integrity(String),
+}
+
+impl MutationRunnerError {
+    pub(crate) fn resolution(error: impl std::fmt::Display) -> Self {
+        Self::Resolution(error.to_string())
+    }
+
+    pub(crate) fn integrity(message: impl Into<String>) -> Self {
+        Self::Integrity(message.into())
+    }
+
+    fn source_intact(&self) -> bool {
+        matches!(self, Self::Resolution(_))
+    }
+}
+
+impl std::fmt::Display for MutationRunnerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resolution(message) | Self::Integrity(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for MutationRunnerError {}
+
+pub(crate) type MutationRunnerResult<T> = std::result::Result<T, MutationRunnerError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MutantOutcome {
@@ -139,37 +172,54 @@ impl NativeMutationRunner {
 
     /// Resolve command, package manager, framework, workspace root, and test
     /// selection. The metadata makes a full-suite fallback explicit to callers.
-    pub fn resolve_test_plan(&self, file: &Path, root: &Path) -> ResolvedTestPlan {
+    pub fn resolve_test_plan(&self, file: &Path, root: &Path) -> Result<ResolvedTestPlan> {
         if let Some(command) = self.test_cmd.as_deref() {
-            return custom_plan(command, file, root);
+            return Ok(custom_plan(command, file, root));
         }
         if is_javascript_path(file) {
-            return resolve_js_test_plan(file, root);
+            return resolve_js_test_plan(file, root).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to resolve JavaScript mutation test plan for `{}`: {error:#}",
+                    file.display()
+                )
+            });
         }
         if file.extension().and_then(|value| value.to_str()) == Some("rs") {
-            rust_plan(file, root)
+            Ok(rust_plan(file, root))
         } else {
-            plain_plan("cargo test".to_string(), root, TestSelection::Custom)
+            Ok(plain_plan(
+                "cargo test".to_string(),
+                root,
+                TestSelection::Custom,
+            ))
         }
     }
 
-    pub fn resolve_test_command(&self, file: &Path, root: &Path) -> String {
-        self.resolve_test_plan(file, root).command
+    pub fn resolve_test_command(&self, file: &Path, root: &Path) -> Result<String> {
+        Ok(self.resolve_test_plan(file, root)?.command)
     }
 
     /// Pick a safe default timeout when an automatically resolved JS command
     /// has to execute an entire suite. Explicit user/configured values win.
-    pub fn default_timeout_secs(files: &[PathBuf], root: &Path, test_cmd: Option<&str>) -> u64 {
-        if test_cmd.is_none()
-            && files.iter().any(|file| {
-                is_javascript_path(file)
-                    && resolve_js_test_plan(file, root).selection.is_full_suite()
-            })
-        {
-            FULL_SUITE_TIMEOUT_SECS
-        } else {
-            DEFAULT_TIMEOUT_SECS
+    pub fn default_timeout_secs(
+        files: &[PathBuf],
+        root: &Path,
+        test_cmd: Option<&str>,
+    ) -> Result<u64> {
+        if test_cmd.is_none() {
+            let runner = Self::new(DEFAULT_TIMEOUT_SECS, None);
+            for file in files {
+                if is_javascript_path(file)
+                    && runner
+                        .resolve_test_plan(file, root)?
+                        .selection
+                        .is_full_suite()
+                {
+                    return Ok(FULL_SUITE_TIMEOUT_SECS);
+                }
+            }
         }
+        Ok(DEFAULT_TIMEOUT_SECS)
     }
 
     fn full_suite_timeout_error(&self, plan: &ResolvedTestPlan) -> Option<String> {
@@ -185,24 +235,46 @@ impl NativeMutationRunner {
     /// Run one mutant and restore the source before returning.
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
+        match self.try_run_mutant(mutant, root) {
+            Ok(result) => result,
+            Err(error) => {
+                let source_restored = error.source_intact();
+                let mut result = mutant_error(
+                    mutant,
+                    self.test_cmd.as_deref().unwrap_or_default(),
+                    start,
+                    error.to_string(),
+                );
+                result.source_restored = source_restored;
+                result
+            }
+        }
+    }
+
+    pub(crate) fn try_run_mutant(
+        &self,
+        mutant: &AstMutant,
+        root: &Path,
+    ) -> MutationRunnerResult<MutantExecutionResult> {
+        let start = Instant::now();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            return mutant_error(
+            return Ok(mutant_error(
                 mutant,
                 self.test_cmd.as_deref().unwrap_or_default(),
                 start,
                 unsupported_platform_diagnostic(),
-            );
+            ));
         }
         let prepared = match prepare_target(mutant, root) {
             Ok(prepared) => prepared,
             Err(error) => {
-                return mutant_error(
+                return Ok(mutant_error(
                     mutant,
                     self.test_cmd.as_deref().unwrap_or_default(),
                     start,
                     error,
-                );
+                ));
             }
         };
         let PreparedTarget {
@@ -211,7 +283,7 @@ impl NativeMutationRunner {
             original,
         } = prepared;
         if has_multiple_links(&original) {
-            return mutant_error(
+            let mut result = mutant_error(
                 mutant,
                 self.test_cmd.as_deref().unwrap_or_default(),
                 start,
@@ -220,12 +292,18 @@ impl NativeMutationRunner {
                     target_path.display()
                 ),
             );
+            verify_no_write(&mut result, &location, &original, &target_path);
+            return Ok(result);
         }
-        let plan = self.resolve_test_plan(&mutant.file, root);
+        let plan = self
+            .resolve_test_plan(&mutant.file, root)
+            .map_err(|error| {
+                resolution_failure_after_prepare(error, &location, &original, &target_path)
+            })?;
         if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
             let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
             verify_no_write(&mut result, &location, &original, &target_path);
-            return result;
+            return Ok(result);
         }
         let (execution, source_restored) = execute_and_restore(MutationContext {
             runner: self,
@@ -235,14 +313,29 @@ impl NativeMutationRunner {
             original: &original,
             plan: &plan,
         });
-        MutantExecutionResult {
+        Ok(MutantExecutionResult {
             mutant: mutant.clone(),
             outcome: execution.outcome,
             duration_ms: start.elapsed().as_millis(),
             command: plan.command,
             diagnostic: execution.diagnostic,
             source_restored,
-        }
+        })
+    }
+}
+
+fn resolution_failure_after_prepare(
+    error: anyhow::Error,
+    location: &RestoreLocation,
+    original: &SourceSnapshot,
+    target_path: &Path,
+) -> MutationRunnerError {
+    match verify_unchanged(location, original) {
+        Ok(()) => MutationRunnerError::resolution(error),
+        Err(integrity_error) => MutationRunnerError::integrity(format!(
+            "{error:#}; failed to verify unchanged source `{}` after test resolution failed: {integrity_error}",
+            target_path.display()
+        )),
     }
 }
 

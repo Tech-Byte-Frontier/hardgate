@@ -188,7 +188,7 @@ fn mutate_json_success_keeps_stats_and_results_schema() {
     );
     let output = run_scoped_mutation(
         fixture.as_ref(),
-        "sh -c 'grep -q \"== true\" src/lib.rs'",
+        "sh -c 'grep -q \"== true\" src/lib.rs || { printf \"test result: FAILED\\n\" >&2; exit 1; }'",
         "--format=json",
     );
     assert!(
@@ -251,6 +251,46 @@ fn mutate_json_missing_command_is_a_runner_error_document() {
         "--json",
     );
     assert_baseline_failure(&output, "runner-error", "Failed to execute");
+}
+
+#[test]
+fn mutate_json_resolution_failure_is_typed_silent_and_non_mutating() {
+    let fixture = Fixture::new(
+        "mutate-resolution-failure",
+        &mutation_config(0.0),
+        Some((
+            "src/value.ts",
+            "export const accepts = (value: boolean) => value === true;\n",
+        )),
+    );
+    write(fixture.as_ref(), "package.json", "{\n");
+    let source = fixture.as_ref().join("src/value.ts");
+    let before = std::fs::read(&source).unwrap();
+
+    let output = run(
+        fixture.as_ref(),
+        &[
+            "mutate",
+            "--scoped",
+            "src/value.ts",
+            "--max-mutants",
+            "1",
+            "--json",
+        ],
+    );
+
+    assert!(!output.status.success());
+    let failure = parse_stdout(&output);
+    assert_eq!(failure["passed"], false);
+    assert_eq!(failure["stage"], "resolution");
+    assert_eq!(failure["kind"], "resolution-error");
+    assert!(
+        failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("malformed JavaScript package manifest")
+    );
+    assert_eq!(std::fs::read(source).unwrap(), before);
 }
 
 #[test]

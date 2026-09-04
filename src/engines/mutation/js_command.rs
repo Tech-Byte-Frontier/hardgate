@@ -264,6 +264,11 @@ mod tests {
         assert_eq!(plan.selection, TestSelection::FullSuite, "{label}");
         assert!(!plan.command.contains("value.test.ts"), "{label}");
     }
+    fn assert_jest_full_suite(plan: &ResolvedTestPlan, label: &str) {
+        assert_eq!(plan.framework, Some(TestFramework::Jest), "{label}");
+        assert_eq!(plan.selection, TestSelection::FullSuite, "{label}");
+        assert!(!plan.command.contains("value.test.ts"), "{label}");
+    }
     fn workspace_plan(root: &Path, manager: &str, script: Option<&str>) -> ResolvedTestPlan {
         let package = script.map_or_else(
             || format!(r#"{{"packageManager":"{manager}","workspaces":["packages/*"]}}"#),
@@ -287,8 +292,8 @@ mod tests {
     fn bun_script_commands_preserve_script_body_and_builtin_selector() {
         assert_eq!(
             command(CommandCase {
-                manager: Bun,
-                framework: Some(Vitest),
+                manager: PackageManager::Bun,
+                framework: Some(TestFramework::Vitest),
                 script: Some("test"),
                 selector_capable: true,
                 bun_test_script: false,
@@ -297,7 +302,7 @@ mod tests {
         );
         assert_eq!(
             command(CommandCase {
-                manager: Bun,
+                manager: PackageManager::Bun,
                 framework: None,
                 script: Some("test"),
                 selector_capable: false,
@@ -307,7 +312,7 @@ mod tests {
         );
         assert_eq!(
             command(CommandCase {
-                manager: Bun,
+                manager: PackageManager::Bun,
                 framework: None,
                 script: Some("test"),
                 selector_capable: true,
@@ -317,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             command(CommandCase {
-                manager: Bun,
+                manager: PackageManager::Bun,
                 framework: None,
                 script: Some("test:unit"),
                 selector_capable: false,
@@ -422,7 +427,7 @@ mod tests {
         write(&root, "tests/package.json", r#"{"name":"nested-tests"}"#);
         write(&root, "tests/value.test.ts", "test('value', () => {});\n");
         let value = plan(&root, "src/value.ts");
-        assert_full_suite(&value, "nested package");
+        assert_jest_full_suite(&value, "nested package");
         let _ = std::fs::remove_dir_all(&root);
         #[cfg(unix)]
         {
@@ -439,7 +444,7 @@ mod tests {
             std::fs::create_dir_all(root.join("tests")).unwrap();
             symlink(&outside, root.join("tests/outside")).unwrap();
             let value = plan(&root, "src/value.ts");
-            assert_full_suite(&value, "symlink outside package");
+            assert_jest_full_suite(&value, "symlink outside package");
             let _ = std::fs::remove_dir_all(root);
             let _ = std::fs::remove_dir_all(outside);
         }

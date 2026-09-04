@@ -78,8 +78,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .into());
     }
     let selected_files = selected_mutant_files(&mutants);
-    let timeout = resolve_timeout(&opts, &config, &selected_files, root)
-        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
+    let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
     run_unmutated_baselines(&runner, &selected_files, &target_files, root, json)?;
     if !json {
@@ -126,37 +125,55 @@ fn resolve_timeout(
     let configured_timeout = opts.timeout_secs.or(config.mutation.timeout_secs);
     if let Some(timeout) = configured_timeout {
         if timeout == 0 {
-            bail!("mutation timeout_secs must be greater than zero");
+            return Err(MutationFailure::new(
+                "setup",
+                "setup-error",
+                "mutation timeout_secs must be greater than zero",
+            )
+            .into());
         }
-        if let Some(recommended) = automatic_full_suite_timeout(files, root, test_cmd)
+        if let Some(recommended) = automatic_full_suite_timeout(files, root, test_cmd)?
             && timeout < recommended
         {
-            bail!(
-                "automatic JavaScript full-suite selection requires timeout_secs >= {recommended}s (configured {timeout}s); pass --timeout {recommended} or set [mutation].timeout_secs = {recommended} before baseline"
-            );
+            return Err(MutationFailure::new(
+                "setup",
+                "setup-error",
+                format!(
+                    "automatic JavaScript full-suite selection requires timeout_secs >= {recommended}s (configured {timeout}s); pass --timeout {recommended} or set [mutation].timeout_secs = {recommended} before baseline"
+                ),
+            )
+            .into());
         }
         return Ok(timeout);
     }
-    Ok(NativeMutationRunner::default_timeout_secs(
-        files, root, test_cmd,
-    ))
+    NativeMutationRunner::default_timeout_secs(files, root, test_cmd).map_err(|error| {
+        MutationFailure::new("resolution", "resolution-error", format!("{error:#}")).into()
+    })
 }
 
 fn automatic_full_suite_timeout(
     files: &[PathBuf],
     root: &Path,
     test_cmd: Option<&str>,
-) -> Option<u64> {
+) -> Result<Option<u64>> {
     if test_cmd.is_some() {
-        return None;
+        return Ok(None);
     }
     let runner = NativeMutationRunner::new(FULL_SUITE_TIMEOUT_SECS, None);
-    files
-        .iter()
-        .map(|file| runner.resolve_test_plan(file, root))
-        .filter(|plan| plan.full_suite_timeout_required())
-        .map(|plan| plan.recommended_timeout_secs)
-        .max()
+    let mut recommended = None;
+    for file in files {
+        let plan = runner.resolve_test_plan(file, root).map_err(|error| {
+            MutationFailure::new("resolution", "resolution-error", format!("{error:#}"))
+        })?;
+        if plan.full_suite_timeout_required() {
+            recommended = Some(
+                recommended.map_or(plan.recommended_timeout_secs, |current: u64| {
+                    current.max(plan.recommended_timeout_secs)
+                }),
+            );
+        }
+    }
+    Ok(recommended)
 }
 fn print_mutant_notice(count: usize, timeout: u64) {
     println!(
@@ -201,13 +218,21 @@ fn run_unmutated_baselines(
     json: bool,
 ) -> Result<()> {
     let protected = NativeMutationRunner::snapshot_baseline_sources(protected_files, root)
-        .with_context(|| "failed to snapshot protected production sources before baseline")?;
+        .map_err(|error| {
+            MutationFailure::new(
+                "baseline",
+                "source-integrity-error",
+                format!("failed to snapshot protected production sources before baseline: {error}"),
+            )
+        })?;
     let mut commands = BTreeMap::new();
     for file in command_files {
-        let plan = runner.resolve_test_plan(file, root);
+        let plan = runner
+            .resolve_baseline_plan(file, root, &protected)
+            .map_err(MutationFailure::from_runner_error)?;
         commands
-            .entry((plan.working_dir, plan.command))
-            .or_insert_with(|| file.clone());
+            .entry((plan.working_dir.clone(), plan.command.clone()))
+            .or_insert_with(|| (file.clone(), plan));
     }
 
     if !json {
@@ -217,8 +242,7 @@ fn run_unmutated_baselines(
             commands.len().to_string().cyan()
         );
     }
-    for ((working_dir, command), file) in commands {
-        let plan = runner.resolve_test_plan(&file, root);
+    for ((working_dir, command), (file, plan)) in commands {
         if !json {
             println!(
                 "   {} ({}) in {}",
@@ -227,7 +251,7 @@ fn run_unmutated_baselines(
                 working_dir.display()
             );
         }
-        let result = runner.run_baseline_with_sources(&file, root, &protected);
+        let result = runner.run_resolved_baseline_with_sources(&file, root, &protected, plan);
         if result.outcome == BaselineOutcome::Passed {
             if !json {
                 println!("      ... {}", "passed".green().bold());
@@ -388,19 +412,26 @@ fn run_mutant_batch(
             std::io::Write::flush(&mut std::io::stdout())?;
         }
 
-        let res = runner.run_mutant(mutant, root);
+        let res = runner
+            .try_run_mutant(mutant, root)
+            .map_err(MutationFailure::from_runner_error)?;
         let source_restored = res.source_restored;
         let diagnostic = res.diagnostic.clone();
         if !source_restored {
-            return Err(anyhow::anyhow!(
-                "mutation source restoration failed for `{}`; aborting before later mutants:\n{}",
-                mutant.file.display(),
-                if diagnostic.trim().is_empty() {
-                    "no diagnostic output"
-                } else {
-                    diagnostic.trim()
-                }
-            ));
+            return Err(MutationFailure::new(
+                "execution",
+                "execution-error",
+                format!(
+                    "mutation source restoration failed for `{}`; aborting before later mutants:\n{}",
+                    mutant.file.display(),
+                    if diagnostic.trim().is_empty() {
+                        "no diagnostic output"
+                    } else {
+                        diagnostic.trim()
+                    }
+                ),
+            )
+            .into());
         }
         if json {
             if let Some(error) = runtime_failure(&res) {

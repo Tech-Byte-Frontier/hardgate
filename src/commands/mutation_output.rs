@@ -1,3 +1,4 @@
+use crate::engines::mutation::runner::MutationRunnerError;
 use crate::engines::mutation::{BaselineExecutionResult, BaselineOutcome};
 use crate::engines::{MutantExecutionResult, MutantOutcome, MutationStats};
 use colored::*;
@@ -28,6 +29,17 @@ impl MutationFailure {
             stage,
             kind,
             message: message.into(),
+        }
+    }
+
+    pub(crate) fn from_runner_error(error: MutationRunnerError) -> Self {
+        match error {
+            MutationRunnerError::Resolution(message) => {
+                Self::new("resolution", "resolution-error", message)
+            }
+            MutationRunnerError::Integrity(message) => {
+                Self::new("execution", "execution-error", message)
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ use super::js_command::{
 };
 use super::js_manifest::{
     PackageMetadata, detect_manager, existing_metadata, find_workspace_root, load_packages,
-    manager_for_package, workspace_test_script,
+    manager_for_package, test_script, workspace_test_script,
 };
 use super::js_tests::find_relevant_test;
 use anyhow::{Context, Result, bail};
@@ -105,6 +105,11 @@ struct FrameworkConfigSearch {
     selected: Option<FrameworkConfig>,
     ambiguous: bool,
 }
+struct ScriptPlan<'a> {
+    package: Option<&'a PackageMetadata>,
+    script: Option<(String, String)>,
+    workspace_fallback: bool,
+}
 pub(crate) fn resolve_js_test_plan(file: &Path, root: &Path) -> Result<ResolvedTestPlan> {
     let canonical_root = fs::canonicalize(root).with_context(|| {
         format!(
@@ -134,12 +139,14 @@ pub(crate) fn resolve_js_test_plan(file: &Path, root: &Path) -> Result<ResolvedT
     let package = packages.first();
     let workspace_root = find_workspace_root(&dirs, &packages, &canonical_root)?;
     let config = find_framework_config(&dirs)?;
-    let (script_package, script, workspace_fallback) =
-        resolve_script_plan(package, &packages, &workspace_root, &config)?;
-    let manager = workspace_fallback
-        .then(|| script_package.and_then(manager_for_package))
+    let script_plan = resolve_script_plan(package, &packages, &workspace_root, &config)?;
+    let manager = script_plan
+        .workspace_fallback
+        .then(|| script_plan.package.and_then(manager_for_package))
         .flatten()
         .unwrap_or_else(|| detect_manager(&dirs, &packages));
+    let script_package = script_plan.package;
+    let script = script_plan.script;
     let framework = script_framework(script.as_ref(), package, &config);
     let execution_root = select_execution_root(
         script_package,
@@ -185,19 +192,35 @@ fn resolve_script_plan<'a>(
     packages: &'a [PackageMetadata],
     workspace_root: &Path,
     config: &FrameworkConfigSearch,
-) -> Result<(Option<&'a PackageMetadata>, Option<(String, String)>, bool)> {
+) -> Result<ScriptPlan<'a>> {
     let local_script = package.map(test_script).transpose()?.flatten();
     if local_script.is_some() {
-        return Ok((package, local_script, false));
+        return Ok(ScriptPlan {
+            package,
+            script: local_script,
+            workspace_fallback: false,
+        });
     }
     if local_framework_signal(package, config) || config.ambiguous {
-        return Ok((package, None, false));
+        return Ok(ScriptPlan {
+            package,
+            script: None,
+            workspace_fallback: false,
+        });
     }
     let Some((workspace, script)) = workspace_test_script(package, packages, workspace_root)?
     else {
-        return Ok((package, None, false));
+        return Ok(ScriptPlan {
+            package,
+            script: None,
+            workspace_fallback: false,
+        });
     };
-    Ok((Some(workspace), Some(script), true))
+    Ok(ScriptPlan {
+        package: Some(workspace),
+        script: Some(script),
+        workspace_fallback: true,
+    })
 }
 fn local_framework_signal(
     package: Option<&PackageMetadata>,

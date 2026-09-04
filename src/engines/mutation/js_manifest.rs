@@ -19,7 +19,7 @@ pub(crate) struct PackageMetadata {
 
 #[derive(Deserialize)]
 struct PnpmWorkspaceDocument {
-    packages: Option<Vec<String>>,
+    packages: Option<Vec<serde_yaml_ng::Value>>,
 }
 
 pub(crate) fn load_packages(dirs: &[PathBuf]) -> Result<Vec<PackageMetadata>> {
@@ -214,10 +214,7 @@ fn validate_workspace_patterns(patterns: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn valid_pnpm_workspace_file(path: &Path) -> Result<bool> {
-    Ok(read_pnpm_workspace_patterns(path)?.is_some())
-}
-
+#[cfg(test)]
 pub(crate) fn valid_pnpm_workspace_content(content: &str) -> bool {
     parse_pnpm_workspace_content(content).is_ok()
 }
@@ -232,10 +229,10 @@ pub(crate) fn find_workspace_root(
         let Some(patterns) = workspace_patterns_at(dir, packages)? else {
             continue;
         };
-        if let Some(package) = package {
-            if workspace_contains_package(dir, package, &patterns)? {
-                return Ok(dir.clone());
-            }
+        if let Some(package) = package
+            && workspace_contains_package(dir, package, &patterns)?
+        {
+            return Ok(dir.clone());
         }
     }
     Ok(packages
@@ -283,7 +280,7 @@ fn workspace_contains_package(
     Ok(matched)
 }
 
-fn workspace_test_script<'a>(
+pub(crate) fn workspace_test_script<'a>(
     package: Option<&PackageMetadata>,
     packages: &'a [PackageMetadata],
     workspace_root: &Path,
@@ -340,7 +337,7 @@ fn package_manager_hint_in(dir: &Path) -> Option<PackageManager> {
     .find_map(|(name, manager)| dir.join(name).is_file().then_some(*manager))
 }
 
-fn test_script(package: &PackageMetadata) -> Result<Option<(String, String)>> {
+pub(crate) fn test_script(package: &PackageMetadata) -> Result<Option<(String, String)>> {
     if let Some(command) = package.scripts.get("test") {
         return Ok(Some(("test".to_string(), command.clone())));
     }
@@ -400,13 +397,21 @@ fn parse_pnpm_workspace_content(content: &str) -> Result<Vec<String>> {
     let patterns = document
         .packages
         .ok_or_else(|| anyhow::anyhow!("pnpm workspace YAML requires a packages list"))?;
-    if patterns.is_empty() || patterns.iter().any(|pattern| pattern.trim().is_empty()) {
+    if patterns.is_empty() {
         bail!("pnpm workspace YAML requires non-empty package patterns");
     }
     let patterns = patterns
         .into_iter()
-        .map(|pattern| pattern.trim().to_string())
-        .collect::<Vec<_>>();
+        .map(|pattern| match pattern {
+            serde_yaml_ng::Value::String(pattern) if !pattern.trim().is_empty() => {
+                Ok(pattern.trim().to_string())
+            }
+            serde_yaml_ng::Value::String(_) => {
+                bail!("pnpm workspace YAML requires non-empty package patterns")
+            }
+            _ => bail!("pnpm workspace YAML package patterns must be strings"),
+        })
+        .collect::<Result<Vec<_>>>()?;
     let borrowed = patterns.iter().map(String::as_str).collect::<Vec<_>>();
     validate_workspace_patterns(&borrowed)?;
     Ok(patterns)

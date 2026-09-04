@@ -451,7 +451,7 @@ fn restoration_recreates_deleted_target_with_original_bytes() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn atomic_mutation_replacement_detaches_hardlink_without_touching_peer() {
+fn preexisting_hardlink_is_rejected_without_touching_peer() {
     let root = source_root("mutation-runner-hardlink", b"true\n");
     let target = root.join("fixture.rs");
     let peer = root.join("peer.rs");
@@ -462,7 +462,7 @@ fn atomic_mutation_replacement_detaches_hardlink_without_touching_peer() {
         format!("sh -c 'printf executed > {}'", marker.display()),
     );
     assert_eq!(result.outcome, MutantOutcome::RunnerError);
-    assert!(!result.source_restored);
+    assert!(result.source_restored);
     assert!(!marker.exists());
     assert_eq!(std::fs::read(&target).unwrap(), b"true\n");
     assert_eq!(std::fs::read(&peer).unwrap(), b"true\n");

@@ -148,6 +148,41 @@ fn no_write_timeout_guard_rejects_external_edit() {
 }
 
 #[test]
+fn resolver_failure_after_target_snapshot_verifies_no_write() {
+    let (root, target, _mutant, prepared) =
+        prepared_fixture("resolver-no-write", "fixture.ts", "resolver failure");
+
+    let error = resolution_failure_after_prepare(
+        anyhow::anyhow!("malformed package metadata"),
+        &prepared.location,
+        &prepared.original,
+        &prepared.target_path,
+    );
+
+    assert!(matches!(error, MutationRunnerError::Resolution(_)));
+    assert_eq!(fs::read(&target).unwrap(), b"true\n");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn resolver_failure_never_overwrites_a_concurrent_source_edit() {
+    let (root, target, _mutant, prepared) =
+        prepared_fixture("resolver-integrity", "fixture.ts", "resolver failure");
+    fs::write(&target, b"external\n").unwrap();
+
+    let error = resolution_failure_after_prepare(
+        anyhow::anyhow!("malformed package metadata"),
+        &prepared.location,
+        &prepared.original,
+        &prepared.target_path,
+    );
+
+    assert!(matches!(error, MutationRunnerError::Integrity(_)));
+    assert_eq!(fs::read(&target).unwrap(), b"external\n");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn expected_present_mismatch_preserves_concurrent_replacement() {
     assert_expected_mismatch("expected-present", MismatchKind::Present);
 }

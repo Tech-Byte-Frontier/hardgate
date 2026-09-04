@@ -244,10 +244,14 @@ fn falls_back_to_full_suite_with_nonzero_timeout() {
     let (source, plan) = resolve_bun_plan(&root, "src/other.ts", 0);
     assert_bun_plan(&plan);
     assert_eq!(plan.selection, TestSelection::FullSuite);
-    assert_eq!(plan.command, "bun test");
+    assert_eq!(plan.command, "bun run test");
     assert!(plan.full_suite_timeout_required());
     assert_eq!(plan.recommended_timeout_secs, FULL_SUITE_TIMEOUT_SECS);
-    assert!(NativeMutationRunner::default_timeout_secs(&[source], &root, None) > 0);
+    assert!(
+        NativeMutationRunner::default_timeout_secs(&[source], &root, None)
+            .expect("valid JavaScript fixture should resolve a timeout")
+            > 0
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -483,6 +487,3 @@ fn directory_max_mutants_keeps_selected_full_suite_guard() {
     assert_full_suite_rejected(&root, "src");
     let _ = std::fs::remove_dir_all(root);
 }
-
-#[path = "js_resolver_containment.rs"]
-mod js_resolver_containment;

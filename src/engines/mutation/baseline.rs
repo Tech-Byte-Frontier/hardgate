@@ -3,8 +3,12 @@ use super::super::process::{CommandExecution, baseline_outcome, execute_with_tim
 use super::plan::process_roots;
 use super::restore::{
     RestoreLocation, SourceSnapshot, snapshot_protected_location, verify_and_restore,
+    verify_unchanged as verify_source_unchanged,
 };
-use super::{BaselineExecutionResult, BaselineOutcome, NativeMutationRunner};
+use super::{
+    BaselineExecutionResult, BaselineOutcome, MutationRunnerError, MutationRunnerResult,
+    NativeMutationRunner,
+};
 use crate::engines::process::append_output;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,6 +25,23 @@ struct ProtectedSource {
     path: PathBuf,
     location: RestoreLocation,
     snapshot: SourceSnapshot,
+}
+
+impl BaselineSources {
+    fn verify_unchanged(&self) -> io::Result<()> {
+        for source in &self.entries {
+            verify_source_unchanged(&source.location, &source.snapshot).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "protected source `{}` changed while resolving its test plan: {error}",
+                        source.path.display()
+                    ),
+                )
+            })?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn snapshot_baseline_sources(
@@ -55,22 +76,41 @@ pub(crate) fn snapshot_baseline_sources(
 impl NativeMutationRunner {
     /// Run the resolved test command against the unmodified source tree.
     pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
+        let started = Instant::now();
+        self.try_run_baseline(file, root)
+            .unwrap_or_else(|error| BaselineExecutionResult {
+                file: file.to_path_buf(),
+                outcome: BaselineOutcome::RunnerError,
+                duration_ms: started.elapsed().as_millis(),
+                command: self.test_cmd.clone().unwrap_or_default(),
+                diagnostic: error.to_string(),
+            })
+    }
+
+    pub(crate) fn try_run_baseline(
+        &self,
+        file: &Path,
+        root: &Path,
+    ) -> MutationRunnerResult<BaselineExecutionResult> {
+        let plan = self
+            .resolve_test_plan(file, root)
+            .map_err(MutationRunnerError::resolution)?;
         let files = vec![file.to_path_buf()];
         let protected = match snapshot_baseline_sources(&files, root) {
             Ok(protected) => protected,
             Err(error) => {
-                return BaselineExecutionResult {
+                return Ok(BaselineExecutionResult {
                     file: file.to_path_buf(),
                     outcome: BaselineOutcome::RunnerError,
                     duration_ms: 0,
-                    command: self.resolve_test_plan(file, root).command,
+                    command: plan.command,
                     diagnostic: format!(
                         "Failed to snapshot protected baseline sources before execution: {error}"
                     ),
-                };
+                });
             }
         };
-        self.run_baseline_with_sources(file, root, &protected)
+        Ok(self.run_resolved_baseline_with_sources(file, root, &protected, plan))
     }
 
     pub(crate) fn snapshot_baseline_sources(
@@ -80,11 +120,57 @@ impl NativeMutationRunner {
         snapshot_baseline_sources(files, root)
     }
 
+    #[cfg(test)]
     pub(crate) fn run_baseline_with_sources(
         &self,
         file: &Path,
         root: &Path,
         protected: &BaselineSources,
+    ) -> BaselineExecutionResult {
+        let started = Instant::now();
+        self.try_run_baseline_with_sources(file, root, protected)
+            .unwrap_or_else(|error| BaselineExecutionResult {
+                file: file.to_path_buf(),
+                outcome: BaselineOutcome::RunnerError,
+                duration_ms: started.elapsed().as_millis(),
+                command: self.test_cmd.clone().unwrap_or_default(),
+                diagnostic: error.to_string(),
+            })
+    }
+
+    pub(crate) fn resolve_baseline_plan(
+        &self,
+        file: &Path,
+        root: &Path,
+        protected: &BaselineSources,
+    ) -> MutationRunnerResult<super::ResolvedTestPlan> {
+        self.resolve_test_plan(file, root).map_err(|error| {
+            if let Err(integrity_error) = protected.verify_unchanged() {
+                return MutationRunnerError::integrity(format!(
+                    "{error:#}; failed to verify protected sources after test resolution failed: {integrity_error}"
+                ));
+            }
+            MutationRunnerError::resolution(error)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn try_run_baseline_with_sources(
+        &self,
+        file: &Path,
+        root: &Path,
+        protected: &BaselineSources,
+    ) -> MutationRunnerResult<BaselineExecutionResult> {
+        let plan = self.resolve_baseline_plan(file, root, protected)?;
+        Ok(self.run_resolved_baseline_with_sources(file, root, protected, plan))
+    }
+
+    pub(crate) fn run_resolved_baseline_with_sources(
+        &self,
+        file: &Path,
+        root: &Path,
+        protected: &BaselineSources,
+        plan: super::ResolvedTestPlan,
     ) -> BaselineExecutionResult {
         let start = Instant::now();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -97,7 +183,6 @@ impl NativeMutationRunner {
                 diagnostic: super::unsupported_platform_diagnostic(),
             };
         }
-        let plan = self.resolve_test_plan(file, root);
         if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
             return BaselineExecutionResult {
                 file: file.to_path_buf(),
