@@ -127,6 +127,10 @@ fn resolve_bun_plan(
     (source, plan)
 }
 
+fn plan_for(root: &Path, source_path: &str) -> ResolvedTestPlan {
+    NativeMutationRunner::new(60, None).resolve_test_plan(&root.join(source_path), root)
+}
+
 fn write_app_fixtures(root: &Path) {
     write_source_pair(
         root,
@@ -258,6 +262,83 @@ fn resolves_bun_test_script_to_relevant_file() {
     );
     assert_eq!(plan.command, "bun test tests/scale.test.ts");
     assert_eq!(plan.recommended_timeout_secs, 10);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn sibling_package_same_stem_is_never_selected() {
+    let root = fs::tempdir("js-sibling-same-stem");
+    write_files(
+        &root,
+        &[
+            (
+                "package.json",
+                r#"{"packageManager":"pnpm@9.0.0","workspaces":["packages/*"]}"#,
+            ),
+            (
+                "packages/app/package.json",
+                r#"{"name":"app","scripts":{"test":"jest"}}"#,
+            ),
+            (
+                "packages/other/package.json",
+                r#"{"name":"other","scripts":{"test":"jest"}}"#,
+            ),
+            (
+                "packages/app/src/shared.ts",
+                "export const shared = true;\n",
+            ),
+            (
+                "packages/other/tests/shared.test.ts",
+                "test('shared', () => {});\n",
+            ),
+        ],
+    );
+    let plan = plan_for(&root, "packages/app/src/shared.ts");
+    assert_eq!(plan.package_root, root.join("packages/app"));
+    assert_eq!(plan.selection, TestSelection::FullSuite);
+    assert_eq!(plan.recommended_timeout_secs, FULL_SUITE_TIMEOUT_SECS);
+    assert!(!plan.command.contains("shared.test.ts"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn malformed_nearest_package_manifest_errors_before_baseline_invocation() {
+    let root = fs::tempdir("js-malformed-nearest-package");
+    write_mutation_config(&root, 60, 1);
+    write(
+        &root,
+        "package.json",
+        r#"{"packageManager":"bun@1.1.0","scripts":{"test":"node scripts/test.mjs"}}"#,
+    );
+    write(
+        &root,
+        "scripts/test.mjs",
+        "import { writeFileSync } from 'node:fs'; writeFileSync('baseline.marker', 'ran');\n",
+    );
+    write(&root, "packages/app/package.json", "{\"name\":\"app\",\n");
+    write(
+        &root,
+        "packages/app/src/value.ts",
+        "export const value = true;\n",
+    );
+    write(
+        &root,
+        "packages/app/tests/value.test.ts",
+        "test('value', () => {});\n",
+    );
+
+    let output = run_mutation(&root, "packages/app/src", 1);
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        diagnostic.contains("malformed JavaScript package manifest"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("packages/app/package.json"),
+        "{diagnostic}"
+    );
+    assert!(!root.join("baseline.marker").exists());
     let _ = std::fs::remove_dir_all(root);
 }
 
