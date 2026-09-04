@@ -1,28 +1,15 @@
+#[path = "common/cli.rs"]
+mod cli;
 #[path = "support/fs.rs"]
 mod fs;
 #[path = "common/fs_git.rs"]
 mod fs_git;
 
+use cli::{json, run};
 use fs::tempdir;
 use fs_git::{commit_baseline, init_repo, write};
 use serde_json::Value;
 use std::path::Path;
-use std::process::{Command, Output};
-
-fn run(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_hardgate"))
-        .current_dir(root)
-        .args(args)
-        .output()
-        .expect("hardgate binary should run")
-}
-
-fn json(output: &Output) -> Value {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("invalid JSON: {error}: {stdout}; stderr: {stderr}"))
-}
 
 fn successful_report(root: &Path, command: &str) -> Value {
     let output = run(root, &[command, "--format", "json"]);

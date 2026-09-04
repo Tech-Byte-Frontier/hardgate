@@ -17,6 +17,7 @@ use crate::engines::{
 };
 use anyhow::Result;
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,13 +83,13 @@ pub fn run_static_gate_scoped(
         diff_only: diff,
         exclusions: &config.budgets.files.exclusions.paths,
     })?;
-    let files = filter_files_by_paths(discovery.files, paths, root)?;
+    let (files, excluded_files) = select_files(config, diff, paths, discovery)?;
     if files.is_empty() {
         return Ok(None);
     }
 
     let mut report = GateReport::new(config.gate.name.clone());
-    record_budget_exclusion_advisory(&discovery.excluded_files, &mut report);
+    record_budget_exclusion_advisory(&excluded_files, &mut report);
     let classified = classify_files(&files, config)?;
     record_classification_gaps(&classified, config, root, &mut report);
     let (read_results, all_functions) = run_file_analysis(&classified, config, root, &mut report);
@@ -103,6 +104,81 @@ pub fn run_static_gate_scoped(
         &mut report,
     )?;
     Ok(Some((report, files, read_results, all_functions)))
+}
+
+fn select_files(
+    config: &HardgateConfig,
+    diff: bool,
+    paths: &[PathBuf],
+    discovery: crate::discovery::DiscoveryResult,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let root = Path::new(".");
+    let scope_paths = normalize_scope_paths(paths, root)?;
+    let crate::discovery::DiscoveryResult {
+        files: discovered_files,
+        excluded_files: discovered_excluded,
+        ..
+    } = discovery;
+
+    let (mut files, mut excluded_files) = if diff && !paths.is_empty() {
+        // A diff discovery contains only Git-changed paths. Run the ordinary
+        // full-tree inventory as well so explicit directories can contribute
+        // unchanged files to the static and clone selections.
+        let full_discovery = discover_files_with_exclusions(DiscoverOptions {
+            root,
+            diff_only: false,
+            exclusions: &config.budgets.files.exclusions.paths,
+        })?;
+        let explicit_files = filter_files_by_paths(full_discovery.files, &scope_paths, root)?;
+        let mut files = discovered_files;
+        files.extend(explicit_files);
+        let mut excluded_files = discovered_excluded;
+        excluded_files.extend(full_discovery.excluded_files);
+        (files, excluded_files)
+    } else {
+        (
+            filter_files_by_paths(discovered_files, &scope_paths, root)?,
+            discovered_excluded,
+        )
+    };
+
+    files.sort();
+    files.dedup();
+    excluded_files.sort();
+    excluded_files.dedup();
+
+    // Discovery intentionally keeps budget-excluded files in `files`; only
+    // report an advisory for excluded files that survived the selected scope.
+    // This also removes duplicates when diff and full discoveries overlap.
+    let selected: HashSet<String> = files.iter().map(|path| path_key(path)).collect();
+    excluded_files.retain(|path| selected.contains(&path_key(path)));
+
+    Ok((files, excluded_files))
+}
+
+fn normalize_scope_paths(paths: &[PathBuf], root: &Path) -> Result<Vec<PathBuf>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let absolute_root = fs::canonicalize(root)?;
+    paths
+        .iter()
+        .map(|path| {
+            if !path.is_absolute() {
+                return Ok(path.clone());
+            }
+            let absolute_path = fs::canonicalize(path)?;
+            Ok(absolute_path
+                .strip_prefix(&absolute_root)
+                .map(PathBuf::from)
+                .unwrap_or(absolute_path))
+        })
+        .collect()
+}
+
+fn path_key(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    value.strip_prefix("./").unwrap_or(&value).to_string()
 }
 
 fn record_budget_exclusion_advisory(excluded_files: &[PathBuf], report: &mut GateReport) {
