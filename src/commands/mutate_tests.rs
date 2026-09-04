@@ -60,12 +60,14 @@ fn baseline(outcome: BaselineOutcome, diagnostic: &str) -> BaselineExecutionResu
 }
 
 fn stats(
-    killed: usize,
-    survived: usize,
-    timeout: usize,
-    compile_error: usize,
-    runner_error: usize,
-    unviable: usize,
+    [
+        killed,
+        survived,
+        timeout,
+        compile_error,
+        runner_error,
+        unviable,
+    ]: [usize; 6],
 ) -> MutationStats {
     MutationStats {
         killed,
@@ -102,7 +104,7 @@ fn baseline_snapshot_failure_is_typed_before_commands() {
 }
 
 #[test]
-fn mutation_helpers_cover_outcomes_and_failure_mappings() {
+fn mutation_outcome_helpers_cover_all_variants() {
     for outcome in [
         MutantOutcome::Killed,
         MutantOutcome::Survived,
@@ -129,17 +131,6 @@ fn mutation_helpers_cover_outcomes_and_failure_mappings() {
     assert_eq!(counted.killed, 1);
     assert_eq!(counted.unviable, 1);
 
-    let integrity = MutationFailure::from_runner_error(MutationRunnerError::Integrity(
-        "source changed".to_string(),
-    ));
-    assert_eq!(integrity.stage, "execution");
-    assert_eq!(integrity.kind, "execution-error");
-    let resolution = MutationFailure::from_runner_error(MutationRunnerError::Resolution(
-        "test plan unavailable".to_string(),
-    ));
-    assert_eq!(resolution.stage, "resolution");
-    assert_eq!(resolution.kind, "resolution-error");
-
     let mut styled = MutationStats::default();
     for outcome in [
         MutantOutcome::Killed,
@@ -154,6 +145,20 @@ fn mutation_helpers_cover_outcomes_and_failure_mappings() {
     }
     assert_eq!(styled.killed, 1);
     assert_eq!(styled.unviable, 1);
+}
+
+#[test]
+fn mutation_failure_mappings_preserve_stages_and_diagnostics() {
+    let integrity = MutationFailure::from_runner_error(MutationRunnerError::Integrity(
+        "source changed".to_string(),
+    ));
+    assert_eq!(integrity.stage, "execution");
+    assert_eq!(integrity.kind, "execution-error");
+    let resolution = MutationFailure::from_runner_error(MutationRunnerError::Resolution(
+        "test plan unavailable".to_string(),
+    ));
+    assert_eq!(resolution.stage, "resolution");
+    assert_eq!(resolution.kind, "resolution-error");
 
     let empty_diagnostic = baseline(BaselineOutcome::Failed, "");
     assert!(
@@ -191,7 +196,7 @@ fn mutation_helpers_cover_outcomes_and_failure_mappings() {
 #[test]
 fn mutation_output_modes_and_noops_are_rendered() {
     let result = execution(MutantOutcome::Survived, "");
-    let stats = stats(0, 1, 0, 0, 0, 0);
+    let stats = stats([0, 1, 0, 0, 0, 0]);
     let context = MutationSummaryContext {
         stats: &stats,
         results: std::slice::from_ref(&result),
@@ -236,13 +241,13 @@ fn mutation_selection_and_verdict_guards_cover_empty_and_failure_paths() {
     )]);
     assert!(round_robin_mutants(exhausted_group, 1).is_empty());
 
-    assert!(!mutation_run_passed(&stats(0, 0, 0, 0, 0, 0), 0.0, 0.0));
-    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 0, 0), 0.0, 1.0));
-    assert!(!mutation_run_passed(&stats(1, 0, 1, 0, 0, 0), 100.0, 0.0));
-    assert!(!mutation_run_passed(&stats(1, 0, 0, 1, 0, 0), 100.0, 0.0));
-    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 1, 0), 100.0, 0.0));
-    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 0, 1), 100.0, 0.0));
-    assert!(mutation_run_passed(&stats(1, 0, 0, 0, 0, 0), 100.0, 85.0));
+    assert!(!mutation_run_passed(&stats([0, 0, 0, 0, 0, 0]), 0.0, 0.0));
+    assert!(!mutation_run_passed(&stats([1, 0, 0, 0, 0, 0]), 0.0, 1.0));
+    assert!(!mutation_run_passed(&stats([1, 0, 1, 0, 0, 0]), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats([1, 0, 0, 1, 0, 0]), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats([1, 0, 0, 0, 1, 0]), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats([1, 0, 0, 0, 0, 1]), 100.0, 0.0));
+    assert!(mutation_run_passed(&stats([1, 0, 0, 0, 0, 0]), 100.0, 85.0));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
