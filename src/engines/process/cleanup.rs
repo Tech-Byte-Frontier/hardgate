@@ -18,6 +18,16 @@ pub(crate) fn timeout_scope() -> &'static str {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn timeout_cleanup_evidence() -> &'static str {
+    "process group terminated and absence was verified."
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn timeout_cleanup_evidence() -> &'static str {
+    "direct child terminated and was reaped; descendant cleanup is unavailable."
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn terminate_process_tree(child: &mut Child) -> Result<(), String> {
     terminate_unix_process_group(child)
 }

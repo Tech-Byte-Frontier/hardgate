@@ -1,4 +1,6 @@
-use super::{FileIdentity, SourceSnapshot, same_permissions, same_snapshot_identity};
+use super::{
+    AtomicReplacement, FileIdentity, SourceSnapshot, same_permissions, same_snapshot_identity,
+};
 #[path = "unix/temp.rs"]
 mod temp;
 
@@ -48,23 +50,44 @@ pub(super) fn restore_location(
     let location = context.location;
     verify_descriptor_identity(location)?;
     verify_live_location(location, context.path, context.root)?;
+    if expected_mutation.is_some()
+        && let Some(current) = snapshot_location(location)?
+        && snapshots_match(&current, original)
+    {
+        return Ok(());
+    }
     reject_existing_target(location)?;
     verify_expected(location, expected_mutation)?;
     atomic_replace_at(
         context,
-        &original.bytes,
-        &original.permissions,
-        expected_mutation,
+        AtomicReplacement {
+            bytes: &original.bytes,
+            permissions: &original.permissions,
+            expected: expected_mutation,
+            armed: None,
+        },
     )
 }
 
 pub(super) fn atomic_replace_location(
     context: LocationContext<'_>,
-    bytes: &[u8],
-    permissions: &Permissions,
-    expected: Option<&SourceSnapshot>,
+    replacement: AtomicReplacement<'_>,
 ) -> io::Result<()> {
-    atomic_replace_at(context, bytes, permissions, expected)
+    let AtomicReplacement {
+        bytes,
+        permissions,
+        expected,
+        armed,
+    } = replacement;
+    atomic_replace_at(
+        context,
+        AtomicReplacement {
+            bytes,
+            permissions,
+            expected,
+            armed,
+        },
+    )
 }
 
 fn reject_existing_target(location: &TargetLocation) -> io::Result<()> {
@@ -148,10 +171,14 @@ fn read_location(location: &TargetLocation) -> io::Result<CurrentFile> {
 
 fn atomic_replace_at(
     context: LocationContext<'_>,
-    bytes: &[u8],
-    permissions: &Permissions,
-    expected: Option<&SourceSnapshot>,
+    replacement: AtomicReplacement<'_>,
 ) -> io::Result<()> {
+    let AtomicReplacement {
+        bytes,
+        permissions,
+        expected,
+        armed,
+    } = replacement;
     let location = context.location;
     let (temp_name, mut temp) = temp::create_temp_file(&location.parent, &location.name)?;
     let result = (|| {
@@ -163,6 +190,9 @@ fn atomic_replace_at(
         temp.sync_all()?;
         verify_expected(location, expected)?;
         verify_live_location(location, context.path, context.root)?;
+        if let Some(slot) = armed {
+            *slot = Some(snapshot_temp_file(&temp, bytes, permissions)?);
+        }
         drop(temp);
         rustix::fs::renameat(
             &location.parent,
@@ -191,6 +221,29 @@ fn atomic_replace_at(
         }
     }
     result
+}
+
+fn snapshot_temp_file(
+    temp: &File,
+    bytes: &[u8],
+    permissions: &Permissions,
+) -> io::Result<SourceSnapshot> {
+    let stat = rustix::fs::fstat(temp).map_err(io::Error::from)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile {
+        return Err(io::Error::other(
+            "temporary mutation replacement is not a regular file",
+        ));
+    }
+    Ok(SourceSnapshot {
+        bytes: bytes.to_vec(),
+        permissions: permissions.clone(),
+        identity: FileIdentity {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+            links: stat.st_nlink as u64,
+            mode: stat.st_mode as u32,
+        },
+    })
 }
 
 fn snapshots_match(current: &SourceSnapshot, expected: &SourceSnapshot) -> bool {

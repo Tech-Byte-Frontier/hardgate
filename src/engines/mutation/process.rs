@@ -1,6 +1,6 @@
 use super::runner::{BaselineOutcome, MutantOutcome};
 use crate::engines::process::{
-    CommandRoots, ProcessOutcome, append_output, run_command_with_roots, timeout_scope,
+    CommandRoots, ProcessOutcome, append_output, run_command_with_roots, timeout_cleanup_evidence,
 };
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -59,10 +59,7 @@ fn finish_outcome(outcome: ProcessOutcome) -> CommandExecution {
             outcome: MutantOutcome::Timeout,
             diagnostic: append_output(
                 output,
-                format!(
-                    "Command timed out; {scope} terminated and absence was verified.",
-                    scope = timeout_scope()
-                ),
+                format!("Command timed out; {}", timeout_cleanup_evidence()),
             ),
             status: None,
         },

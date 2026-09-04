@@ -3,7 +3,7 @@ use super::super::js::ResolvedTestPlan;
 use super::super::process::{CommandExecution, execute_with_timeout};
 use super::plan::process_roots;
 use super::restore::{
-    RestoreLocation, SourceSnapshot, atomic_replace_location, same_permissions,
+    AtomicReplacement, RestoreLocation, SourceSnapshot, atomic_replace_location, same_permissions,
     same_snapshot_identity, snapshot_location,
 };
 use super::{MutantOutcome, NativeMutationRunner};
@@ -20,7 +20,12 @@ pub(super) fn apply_and_execute(
     input: MutationInput<'_>,
     expected_mutation: &mut Option<SourceSnapshot>,
 ) -> CommandExecution {
-    match apply_mutant_bytes(input.location, input.mutant, input.original) {
+    match apply_mutant_bytes(
+        input.location,
+        input.mutant,
+        input.original,
+        expected_mutation,
+    ) {
         Ok(ApplyResult::Equivalent) => equivalent_execution(),
         Ok(ApplyResult::Applied) => execute_applied(runner, input, expected_mutation),
         Err(error) => apply_error(input.mutant, error),
@@ -43,7 +48,21 @@ fn execute_applied(
 ) -> CommandExecution {
     match snapshot_location(input.location) {
         Ok(Some(snapshot)) => {
-            *expected_mutation = Some(snapshot);
+            let Some(expected) = expected_mutation.as_ref() else {
+                return CommandExecution {
+                    outcome: MutantOutcome::RunnerError,
+                    diagnostic: "Mutation replacement was not armed before execution".to_string(),
+                    status: None,
+                };
+            };
+            if !replacement_matches(&snapshot, expected) {
+                return CommandExecution {
+                    outcome: MutantOutcome::RunnerError,
+                    diagnostic: "Mutation target changed immediately after atomic application"
+                        .to_string(),
+                    status: None,
+                };
+            }
             execute_with_timeout(
                 &input.plan.command,
                 process_roots(input.plan),
@@ -65,6 +84,12 @@ fn execute_applied(
     }
 }
 
+fn replacement_matches(current: &SourceSnapshot, expected: &SourceSnapshot) -> bool {
+    same_snapshot_identity(current, expected)
+        && current.bytes == expected.bytes
+        && same_permissions(&current.permissions, &expected.permissions)
+}
+
 fn apply_error(mutant: &AstMutant, error: std::io::Error) -> CommandExecution {
     let outcome = if error.kind() == std::io::ErrorKind::InvalidInput {
         MutantOutcome::Unviable
@@ -82,6 +107,7 @@ fn apply_mutant_bytes(
     location: &RestoreLocation,
     mutant: &AstMutant,
     original: &SourceSnapshot,
+    armed: &mut Option<SourceSnapshot>,
 ) -> std::io::Result<ApplyResult> {
     let original_bytes = &original.bytes;
     if mutant.start_byte > mutant.end_byte || mutant.end_byte > original_bytes.len() {
@@ -115,13 +141,20 @@ fn apply_mutant_bytes(
         || current.bytes != original.bytes
         || !same_permissions(&current.permissions, &original.permissions)
     {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "mutation target changed after its initial snapshot",
+        return Err(std::io::Error::other(
+            "mutation target changed after its initial snapshot; refusing to apply",
         ));
     }
-    atomic_replace_location(location, &mutated, &original.permissions, original)
-        .map(|()| ApplyResult::Applied)
+    atomic_replace_location(
+        location,
+        AtomicReplacement {
+            bytes: &mutated,
+            permissions: &original.permissions,
+            expected: Some(original),
+            armed: Some(armed),
+        },
+    )
+    .map(|()| ApplyResult::Applied)
 }
 
 #[derive(Clone, Copy)]

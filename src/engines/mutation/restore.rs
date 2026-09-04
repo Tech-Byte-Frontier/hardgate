@@ -20,6 +20,16 @@ pub(super) struct SourceSnapshot {
     pub(super) identity: FileIdentity,
 }
 
+/// Replacement bytes and ownership checks carried through an atomic rename.
+/// Keeping this as one value avoids widening the platform seam with a long
+/// list of independently ordered arguments.
+pub(super) struct AtomicReplacement<'a> {
+    pub(super) bytes: &'a [u8],
+    pub(super) permissions: &'a Permissions,
+    pub(super) expected: Option<&'a SourceSnapshot>,
+    pub(super) armed: Option<&'a mut Option<SourceSnapshot>>,
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct FileIdentity {
@@ -107,18 +117,44 @@ pub(super) fn restore_location(
 
 pub(super) fn atomic_replace_location(
     location: &RestoreLocation,
-    bytes: &[u8],
-    permissions: &Permissions,
-    expected: &SourceSnapshot,
+    replacement: AtomicReplacement<'_>,
 ) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let context = unix::LocationContext::new(&location.inner, &location.path, &location.root);
-        unix::atomic_replace_location(context, bytes, permissions, Some(expected))
+        unix::atomic_replace_location(context, replacement)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (location, bytes, permissions, expected);
+        let _ = (location, replacement);
+        Err(unsupported_platform_error())
+    }
+}
+
+/// Verify a source without writing it. This is used when mutation application
+/// never completed, so an external edit must be reported rather than hidden by
+/// a rollback write.
+pub(super) fn verify_unchanged(
+    location: &RestoreLocation,
+    original: &SourceSnapshot,
+) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        verify_live_path(location, &location.path, &location.root)?;
+        match snapshot_location(location)? {
+            Some(current) if same_snapshot(&current, original) => Ok(()),
+            Some(_) => Err(io::Error::other(
+                "source changed before mutation was applied; refusing to overwrite external edits",
+            )),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "source disappeared before mutation was applied; refusing to recreate it",
+            )),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (location, original);
         Err(unsupported_platform_error())
     }
 }

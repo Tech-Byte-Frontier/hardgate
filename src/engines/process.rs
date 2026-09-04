@@ -12,7 +12,7 @@ mod cleanup;
 
 use capture::{CaptureResult, CapturedOutput};
 use cleanup::terminate_process_tree;
-pub(crate) use cleanup::timeout_scope;
+pub(crate) use cleanup::{timeout_cleanup_evidence, timeout_scope};
 
 const MAX_STREAM_BYTES: usize = 32 * 1024;
 const MAX_OUTPUT_BYTES: usize = MAX_STREAM_BYTES * 2;
@@ -386,5 +386,15 @@ mod tests {
                 PathBuf::from("/bin")
             ]
         );
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn unsupported_group_timeout_evidence_is_direct_child_only() {
+        let evidence = super::timeout_cleanup_evidence();
+        assert!(evidence.contains("direct child"));
+        assert!(evidence.contains("reaped"));
+        assert!(!evidence.contains("absence was verified"));
+        assert!(!evidence.contains("process group"));
     }
 }

@@ -14,7 +14,7 @@ use apply::{MutationInput, apply_and_execute};
 use plan::{custom_plan, plain_plan, rust_plan};
 use restore::{
     RestoreLocation, SourceSnapshot, has_multiple_links, open_location, restore_location,
-    snapshot_location, verify_live_path,
+    snapshot_location, verify_live_path, verify_unchanged,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -99,7 +99,10 @@ impl<'a> RollbackGuard<'a> {
     }
 
     fn restore(&mut self) -> std::io::Result<()> {
-        let result = restore_location(self.location, self.original, self.expected_mutation);
+        let result = match self.expected_mutation {
+            Some(expected) => restore_location(self.location, self.original, Some(expected)),
+            None => verify_unchanged(self.location, self.original),
+        };
         if result.is_ok() {
             self.restored = true;
         }
@@ -360,3 +363,7 @@ fn resolve_target_path(file: &Path, root: &Path) -> PathBuf {
 fn append_diagnostic(existing: &mut String, extra: String) {
     *existing = append_output(std::mem::take(existing), extra);
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "runner_tests.rs"]
+mod tests;

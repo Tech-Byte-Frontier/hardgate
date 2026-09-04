@@ -235,6 +235,31 @@ fn direct_runner_rejects_absolute_mutant_outside_root() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn direct_runner_rejects_symlink_parent_component_before_normalization() {
+    use std::os::unix::fs::symlink;
+
+    let root = source_root("mutation-runner-symlink-parent-dotdot", b"true\n");
+    let outside_parent = fs::tempdir("mutation-runner-symlink-parent-dotdot-outside");
+    let outside_target = outside_parent.join("fixture.rs");
+    std::fs::write(&outside_target, b"outside\n").unwrap();
+    symlink(&outside_parent, root.join("link")).unwrap();
+    let marker = root.join("executed");
+    let runner = NativeMutationRunner::new(2, Some(format!("touch {}", marker.display())));
+    let escaped = mutant("link/../fixture.rs");
+
+    let result = runner.run_mutant(&escaped, Path::new(&root));
+
+    assert_eq!(result.outcome, MutantOutcome::RunnerError);
+    assert!(!result.source_restored);
+    assert!(result.diagnostic.contains("parent-directory components"));
+    assert!(!marker.exists());
+    assert_eq!(std::fs::read(&outside_target).unwrap(), b"outside\n");
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside_parent);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn symlinked_repository_root_spelling_stays_contained() {
     use std::os::unix::fs::symlink;
 

@@ -180,6 +180,7 @@ fn walk_directory(
 }
 
 fn contained_relative_path(path: &Path, root: &Path) -> io::Result<(PathBuf, PathBuf)> {
+    reject_parent_components(path)?;
     let canonical_root = fs::canonicalize(root)?;
     let normalized_path = normalize_absolute(path)?;
     let normalized_root = normalize_absolute(root)?;
@@ -207,6 +208,22 @@ fn contained_relative_path(path: &Path, root: &Path) -> io::Result<(PathBuf, Pat
         ));
     }
     Ok((canonical_root, relative))
+}
+
+fn reject_parent_components(path: &Path) -> io::Result<()> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing mutation target '{}'; parent-directory components are not allowed",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_absolute(path: &Path) -> io::Result<PathBuf> {
