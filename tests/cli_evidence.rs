@@ -311,6 +311,48 @@ min_line_percent = 90.0
 }
 
 #[test]
+fn coverage_report_is_not_auto_discovered_for_check_or_verify() {
+    let root = tempdir("cli-coverage-no-auto-discovery");
+    let config = base_config(
+        r#"[coverage]
+enabled = true
+min_line_percent = 90.0
+"#,
+    );
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+    write(
+        &root,
+        "coverage/lcov.info",
+        "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+    );
+
+    for args in [
+        vec!["check", "--format", "json"],
+        vec!["check", "--all", "--format", "json"],
+        vec!["verify", "--format", "json"],
+    ] {
+        let output = run(&root, &args);
+        assert!(
+            !output.status.success(),
+            "coverage should require an explicit CLI/config path for {args:?}"
+        );
+        let report = json(&output);
+        assert!(
+            report["orchestration_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|violation| {
+                    violation["step"] == "coverage-report"
+                        && violation["command"] == "<not-configured>"
+                }),
+            "missing configured report must block {args:?}: {report}"
+        );
+    }
+}
+
+#[test]
 fn required_coverage_report_cannot_be_skipped_when_no_source_exists() {
     let root = tempdir("cli-empty-required-report");
     write(

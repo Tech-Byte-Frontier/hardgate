@@ -155,7 +155,10 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
     if !request.config.coverage.enabled {
         return Ok(());
     }
-    let coverage_report = find_coverage_report(request.config, request.cli_report.clone());
+    let coverage_report = request
+        .cli_report
+        .clone()
+        .or_else(|| request.config.coverage.report.clone());
     let source_files = source_files_for_coverage(request.files, request.config, request.report);
     let scope = CoverageScope {
         source_files: &source_files,
@@ -231,26 +234,6 @@ fn load_changed_lines_for_coverage(
             Ok(Some(Default::default()))
         }
     }
-}
-
-fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> Option<String> {
-    if cli_report.is_some() {
-        return cli_report;
-    }
-    if config.coverage.report.is_some() {
-        return config.coverage.report.clone();
-    }
-    let candidates = [
-        "coverage/lcov.info",
-        "lcov.info",
-        "target/llvm-cov/lcov.info",
-    ];
-    for cand in &candidates {
-        if Path::new(cand).exists() {
-            return Some(cand.to_string());
-        }
-    }
-    None
 }
 
 fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String {

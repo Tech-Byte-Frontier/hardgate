@@ -99,7 +99,7 @@ The first matching rule wins. Invalid or duplicate globs fail configuration load
 severity = "error"
 max_lines = 499
 max_cyclomatic = 10
-clone_enabled = true
+clone_enabled = true # explicitly enable this role, even when [clones].enabled = false
 clone_min_lines = 5
 clone_min_tokens = 50
 mutation_target = true
@@ -127,6 +127,8 @@ mutation_target = false
 ```
 
 The five first-class sections (`source`, `test`, `generated`, `fixture`, `migration`) are independent. `severity` is `error`, `warning`, or `ignore`; omitted thresholds inherit global budgets. Role policy can override file bytes/lines, function ceilings, clone enablement/thresholds, and native mutation eligibility. A role cannot opt a non-source file into native mutation.
+
+`clone_enabled` is tri-state: `true` explicitly enables clone analysis for that role, `false` disables it, and an omitted key inherits `[clones].enabled`. Presets leave `source`, `test`, and `fixture` omitted so the global clone setting remains the master-like default; `generated` and `migration` are explicitly disabled.
 
 ## File and function budgets
 
@@ -210,11 +212,13 @@ Eligible source, test, and fixture files are analyzed in separate role groups us
 ```toml
 [generated]
 enabled = true
-freshness_command = "pnpm generate && git diff --exit-code -- generated/"
+freshness_command = "sh -c 'pnpm generate && git diff --exit-code -- generated/'"
 timeout_secs = 300
 ```
 
 When enabled, `freshness_command` is required and runs in `check` (including `--diff`) and `verify`. A missing command, timeout, non-zero exit, or runner failure is blocking current evidence. Freshness has its own timeout and is independent of `[budgets.files.exclusions]`; excluding generated files from a size check never disables freshness. Freshness is not part of the legacy static ratchet.
+
+Configured commands are quote-aware tokenized arguments launched directly; Hardgate does not invoke an implicit shell. Shell operators such as `&&`, pipes, and redirection are ordinary arguments unless the command explicitly invokes a shell, for example `sh -c 'command-a && command-b'`.
 
 ## Legacy reference and ratchet
 
@@ -250,7 +254,7 @@ max_crap_score = 25.0
 critical_paths = ["src/core.ts"]
 ```
 
-Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. A missing, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
+Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check`, `check --all`, and `verify` resolve the report the same way: an explicit CLI path takes precedence over `coverage.report`; neither command auto-discovers conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
 `verify` accepts optional path arguments for the current static/dead-code
 inventory and coverage source matching only. Mutation-report ingestion and
@@ -304,8 +308,8 @@ entry_points = ["src/main.rs", "src/lib.rs"]
 exclude = ["tests/**"]
 ```
 
-`check --all` runs configured format-check, lint, and test commands. `fmt --check` uses `format_check`; `fmt` uses `format`, falling back to `format_check`. Commands run from the repository root with local `node_modules/.bin` available on `PATH`. Dead-code analysis is enabled by policy or `check --dead-code`; it reports unreferenced files and simple JS/TS exports, not a compiler linker proof.
+`entry_points` globs are additive to the analyzer's built-in safe roots; an empty list does not clear those built-ins. `exclude` globs are additive to built-in test exclusions. `check --all` runs configured format-check, lint, and test commands. `fmt --check` uses `format_check`; `fmt` uses `format`, falling back to `format_check`. Commands run from the repository root with local `node_modules/.bin` available on `PATH`. Dead-code analysis is enabled by policy or `check --dead-code`; it reports unreferenced files and simple JS/TS exports, not a compiler linker proof.
 
 ## Validation and fail-closed rules
 
-Serde handles types and enum values; semantic validation rejects non-positive thresholds, invalid/duplicate globs, enabled freshness without a command, enabled legacy ratchet without a reference, and unsafe mutation settings. Empty required reports/outcomes, unreadable files, parser failures, Git failures, and configured command failures are never silently converted into a pass. The CLI retains an advisory when source discovery is empty and still evaluates enabled evidence; MCP `hardgate_check` rejects empty scopes/discovery explicitly.
+Serde handles types and enum values; semantic validation rejects non-positive thresholds, invalid/duplicate globs (including invariant import globs and dead-code entry-point globs), enabled freshness without a command, enabled legacy ratchet without a reference, and unsafe mutation settings. Empty required reports/outcomes, unreadable files, parser failures, Git failures, and configured command failures are never silently converted into a pass. The CLI retains an advisory when source discovery is empty and still evaluates enabled evidence; MCP `hardgate_check` rejects empty scopes/discovery explicitly.

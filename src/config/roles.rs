@@ -163,7 +163,6 @@ impl RolePoliciesConfig {
         Self {
             source: RolePolicy {
                 severity: Some(Severity::Error),
-                clone_enabled: Some(true),
                 clone_min_lines: Some(if strict { 5 } else { 8 }),
                 clone_min_tokens: Some(if strict { 50 } else { 80 }),
                 mutation_target: Some(true),
@@ -171,7 +170,6 @@ impl RolePoliciesConfig {
             },
             test: RolePolicy {
                 severity: Some(Severity::Error),
-                clone_enabled: Some(true),
                 clone_min_lines: Some(test_lines),
                 clone_min_tokens: Some(test_tokens),
                 mutation_target: Some(false),
@@ -185,7 +183,6 @@ impl RolePoliciesConfig {
             },
             fixture: RolePolicy {
                 severity: Some(Severity::Warning),
-                clone_enabled: Some(true),
                 clone_min_lines: Some(fixture_lines),
                 clone_min_tokens: Some(fixture_tokens),
                 mutation_target: Some(false),

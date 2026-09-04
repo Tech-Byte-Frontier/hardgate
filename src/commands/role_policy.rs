@@ -109,16 +109,17 @@ pub(crate) fn clone_config_for_role(
     config: &HardgateConfig,
     role: FileRole,
 ) -> Option<CloneConfig> {
-    if !config.clones.enabled {
+    let policy = config.roles.for_role(role);
+    let enabled = policy
+        .and_then(|policy| policy.clone_enabled)
+        .unwrap_or(config.clones.enabled);
+    if !enabled {
         return None;
     }
     let mut clone = config.clones.clone();
-    let Some(policy) = config.roles.for_role(role) else {
+    let Some(policy) = policy else {
         return Some(clone);
     };
-    if policy.clone_enabled == Some(false) {
-        return None;
-    }
     if let Some(value) = policy.clone_min_lines {
         clone.min_lines = value;
     }
@@ -355,9 +356,6 @@ pub(crate) struct CloneRun<'a> {
     pub diff: bool,
 }
 pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -> Result<()> {
-    if !input.config.clones.enabled {
-        return Ok(());
-    }
     let inputs = if input.diff {
         full_clone_inputs(input.config, input.root, report)?
     } else {
@@ -429,7 +427,7 @@ fn clone_eligible_inputs(
         .map(|files| {
             files
                 .into_iter()
-                .filter(|(file, _)| file.role.receives_clone_analysis())
+                .filter(|(file, _)| clone_input_is_eligible(file, config))
                 .collect()
         })
 }
@@ -446,10 +444,20 @@ fn full_clone_inputs(
         })?;
     let files = classify_files(&discovery.files, config)?
         .into_iter()
-        .filter(|file| file.role.receives_clone_analysis())
+        .filter(|file| clone_input_is_eligible(file, config))
         .collect::<Vec<_>>();
     Ok(read_clone_files(&files, config, report))
 }
+
+fn clone_input_is_eligible(file: &ClassifiedFile, config: &HardgateConfig) -> bool {
+    file.role.receives_clone_analysis()
+        || config
+            .roles
+            .for_role(file.role)
+            .and_then(|policy| policy.clone_enabled)
+            == Some(true)
+}
+
 fn read_clone_files(
     files: &[ClassifiedFile],
     config: &HardgateConfig,

@@ -25,6 +25,10 @@ pub(super) fn validate(config: &HardgateConfig) -> Result<()> {
         &config.analysis.dead_code.exclude,
         "analysis.dead_code.exclude",
     )?;
+    validate_exclusion_globs(
+        &config.analysis.dead_code.entry_points,
+        "analysis.dead_code.entry_points",
+    )?;
     validate_invariants(&config.invariants)?;
     config.roles.validate()?;
     config.classification.validate()?;
@@ -138,6 +142,12 @@ fn validate_invariants(invariants: &InvariantsConfig) -> Result<()> {
         validate_glob(&rule.from, &format!("invariants.rules[{index}].from"))?;
         if let Some(globs) = &rule.exclude {
             validate_exclusion_globs(globs, &format!("invariants.rules[{index}].exclude"))?;
+        }
+        if let Some(globs) = &rule.disallow_imports {
+            validate_exclusion_globs(
+                globs,
+                &format!("invariants.rules[{index}].disallow_imports"),
+            )?;
         }
     }
     Ok(())

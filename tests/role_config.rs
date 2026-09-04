@@ -186,7 +186,11 @@ fn role_policies_keep_engine_thresholds_independent() {
     assert_eq!(roles.migration.severity, Some(Severity::Error));
     assert_eq!(roles.source.mutation_target, Some(true));
     assert_eq!(roles.test.mutation_target, Some(false));
+    assert_eq!(roles.source.clone_enabled, None);
+    assert_eq!(roles.test.clone_enabled, None);
+    assert_eq!(roles.fixture.clone_enabled, None);
     assert_eq!(roles.generated.clone_enabled, Some(false));
+    assert_eq!(roles.migration.clone_enabled, Some(false));
     assert_ne!(roles.source.clone_min_lines, roles.test.clone_min_lines);
     assert_ne!(roles.test.clone_min_lines, roles.fixture.clone_min_lines);
     assert!(roles.validate().is_ok());
@@ -242,6 +246,33 @@ timeout_secs = 9
 }
 
 #[test]
+fn clone_enablement_overrides_global_policy_only_when_explicit() {
+    let root = fs::tempdir("role-clone-enable-merge");
+
+    let inherited_path = root.join("inherited.toml");
+    std::fs::write(
+        &inherited_path,
+        "[gate]\npreset = \"custom\"\n\n[clones]\nenabled = false\n",
+    )
+    .unwrap();
+    let inherited = HardgateConfig::load_or_default(Some(&inherited_path)).unwrap();
+    assert!(!inherited.clones.enabled);
+    assert_eq!(inherited.roles.source.clone_enabled, None);
+
+    let override_path = root.join("override.toml");
+    std::fs::write(
+        &override_path,
+        "[gate]\npreset = \"custom\"\n\n[clones]\nenabled = false\n\n[roles.source]\nclone_enabled = true\n",
+    )
+    .unwrap();
+    let overridden = HardgateConfig::load_or_default(Some(&override_path)).unwrap();
+    assert!(!overridden.clones.enabled);
+    assert_eq!(overridden.roles.source.clone_enabled, Some(true));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn invalid_role_config_fails_during_load() {
     let cases = [
         ("[roles.source]\nmax_lines = 0", "max_lines"),
@@ -251,6 +282,22 @@ fn invalid_role_config_fails_during_load() {
         (
             "[classification]\n[[classification.rules]]\nglob = \"[bad\"\nrole = \"source\"",
             "glob",
+        ),
+        (
+            "[invariants]\n[[invariants.rules]]\nfrom = \"src/**\"\ndisallow_imports = [\"\"]",
+            "disallow_imports",
+        ),
+        (
+            "[invariants]\n[[invariants.rules]]\nfrom = \"src/**\"\ndisallow_imports = [\"[bad\"]",
+            "disallow_imports",
+        ),
+        (
+            "[analysis.dead_code]\nentry_points = [\"\"]",
+            "entry_points",
+        ),
+        (
+            "[analysis.dead_code]\nentry_points = [\"[bad\"]",
+            "entry_points",
         ),
     ];
     for (content, message) in cases {

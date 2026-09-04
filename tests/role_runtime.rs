@@ -75,6 +75,85 @@ fn source_and_test_clone_thresholds_are_independent() {
 }
 
 #[test]
+fn global_clone_disable_is_inherited_when_source_override_is_omitted() {
+    let mut config = HardgateConfig::default();
+    config.clones.enabled = false;
+    config.roles.source.clone_enabled = None;
+    config.roles.source.clone_min_lines = Some(5);
+    config.roles.source.clone_min_tokens = Some(20);
+
+    let source_a = clone_body("source_a");
+    let source_b = clone_body("source_b");
+    let report = snapshot(
+        &config,
+        &[
+            ("src/source_a.rs", &source_a),
+            ("src/source_b.rs", &source_b),
+        ],
+    );
+
+    assert!(
+        report.clone_violations.is_empty(),
+        "an omitted role override must inherit the disabled global clone policy"
+    );
+}
+
+#[test]
+fn source_clone_override_reenables_analysis_when_global_is_disabled() {
+    let mut config = HardgateConfig::default();
+    config.clones.enabled = false;
+    config.roles.source.clone_enabled = Some(true);
+    config.roles.source.clone_min_lines = Some(5);
+    config.roles.source.clone_min_tokens = Some(20);
+
+    let source_a = clone_body("source_a");
+    let source_b = clone_body("source_b");
+    let report = snapshot(
+        &config,
+        &[
+            ("src/source_a.rs", &source_a),
+            ("src/source_b.rs", &source_b),
+        ],
+    );
+
+    assert!(
+        !report.clone_violations.is_empty(),
+        "an explicit source override must re-enable clone analysis"
+    );
+    assert!(report.clone_violations.iter().all(|finding| {
+        finding.file_a.starts_with("src/") && finding.file_b.starts_with("src/")
+    }));
+}
+
+#[test]
+fn generated_clone_override_enables_an_explicit_role_group() {
+    let mut config = HardgateConfig::default();
+    config.clones.enabled = false;
+    config.roles.generated.clone_enabled = Some(true);
+    config.roles.generated.severity = Some(Severity::Error);
+    config.roles.generated.clone_min_lines = Some(5);
+    config.roles.generated.clone_min_tokens = Some(20);
+
+    let generated_a = clone_body("generated_a");
+    let generated_b = clone_body("generated_b");
+    let report = snapshot(
+        &config,
+        &[
+            ("src/generated/a.rs", &generated_a),
+            ("src/generated/b.rs", &generated_b),
+        ],
+    );
+
+    assert!(
+        !report.clone_violations.is_empty(),
+        "an explicit generated-role override must enable its clone group"
+    );
+    assert!(report.clone_violations.iter().all(|finding| {
+        finding.file_a.starts_with("src/generated/") && finding.file_b.starts_with("src/generated/")
+    }));
+}
+
+#[test]
 fn fixture_warning_is_advisory_not_error() {
     let mut config = HardgateConfig::default();
     config.clones.enabled = false;
