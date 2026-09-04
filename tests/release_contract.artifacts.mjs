@@ -14,6 +14,7 @@ import {
   includesAll,
   installer,
   installerRuntime,
+  nodeVersion,
   npmPackRetry,
   npmPlatformDirectories,
   npmPublication,
@@ -21,6 +22,7 @@ import {
   platformPackages,
   release,
   releaseAbi,
+  rustToolchain,
   sbomScript,
   sbomVerifier,
   selfGate,
@@ -110,6 +112,14 @@ assert.doesNotMatch(release, /win32|windows|homebrew|brew/i, "release must not a
 assert.doesNotMatch(cargo, /homebrew|tap\s*=/i, "Cargo metadata must not advertise an unmaintained channel");
 assert.doesNotMatch(cargo, /\[package\.metadata\.dist\]/, "hand-authored release workflow is authoritative");
 assert.match(cargo, /rust-version\s*=\s*"1\.98\.1"/);
+includesAll(
+  rustToolchain,
+  ['channel = "1.98.1"', 'profile = "minimal"', 'components = ["clippy", "rustfmt", "llvm-tools-preview"]'],
+  "repository Rust toolchain pin",
+);
+assert.equal(nodeVersion, "26.8.1", "repository Node pin must match the release toolchain");
+assert.match(ci, new RegExp(`NODE_VERSION: ${nodeVersion.replaceAll(".", "\\.")}`));
+assert.match(release, new RegExp(`NODE_VERSION: ${nodeVersion.replaceAll(".", "\\.")}`));
 
 includesAll(installer, [
   "HARDGATE_VERSION",

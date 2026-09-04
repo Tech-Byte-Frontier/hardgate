@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Produce the LCOV evidence consumed by `hardgate verify`.
+# Produce the LCOV evidence consumed by Hardgate coverage checks.
 set -eu
 
 COV_VERSION="${CARGO_LLVM_COV_VERSION:-0.9.0}"
