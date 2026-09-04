@@ -138,6 +138,7 @@ includesAll(release, [
   "crate_probe()",
   "crate_version()",
   "npm_registry_probe()",
+  "wait_for_registry_version()",
   'publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"',
   'unset NODE_AUTH_TOKEN',
   'NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public',

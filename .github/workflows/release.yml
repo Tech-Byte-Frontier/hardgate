@@ -524,6 +524,19 @@ jobs:
             done
             return 2
           }
+          wait_for_registry_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(registry_version "$1" "$2"); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 2 ]; then return 2; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
           publish_platform() {
             pkg="$1"
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
@@ -538,7 +551,7 @@ jobs:
                 return "$status"
               fi
               NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public "./npm/$pkg"
-              current=$(registry_version "$pkg" "$wanted")
+              current=$(wait_for_registry_version "$pkg" "$wanted")
               test "$current" = "$wanted"
               echo "$pkg@$wanted published and exact-version verified"
             fi
@@ -597,6 +610,19 @@ jobs:
             done
             return 2
           }
+          wait_for_registry_version() {
+            for attempt in $(seq 1 20); do
+              if actual=$(registry_version "$1" "$2"); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                if [ "$status" -eq 2 ]; then return 2; fi
+                [ "$attempt" -lt 20 ] && sleep 10
+              fi
+            done
+            return 2
+          }
           if current=$(registry_version "@tech-byte-frontier/hardgate" "$wanted"); then
             test "$current" = "$wanted"
           else
@@ -607,7 +633,7 @@ jobs:
             fi
             NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
           fi
-          test "$(registry_version "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
+          test "$(wait_for_registry_version "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
           env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
           unset publish_token
           echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
