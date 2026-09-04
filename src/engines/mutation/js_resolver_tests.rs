@@ -38,14 +38,11 @@ fn resolver_error(root: &Path, expected: &str) -> String {
 
 #[test]
 fn source_escape_is_rejected_before_manifest_inspection() {
-    js_resolver_support::assert_source_escape_rejected(
-        |label| temp_root("js-resolver", label),
-        |source, root| {
-            resolve_js_test_plan(source, root)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        },
-    );
+    js_resolver_support::assert_source_escape_rejected(temp_root, |source, root| {
+        resolve_js_test_plan(source, root)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    });
 }
 
 #[test]
