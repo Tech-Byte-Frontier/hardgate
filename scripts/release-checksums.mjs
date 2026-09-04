@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { option } from "./release-support.mjs";
 
 const packages = [
   "hardgate-linux-x64",
@@ -15,12 +16,6 @@ const packages = [
   "hardgate-darwin-x64",
   "hardgate-darwin-arm64",
 ];
-
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
 
 function fail(message) {
   throw new Error(`release-checksums: ${message}`);

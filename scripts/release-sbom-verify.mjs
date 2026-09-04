@@ -5,12 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
+import { option } from "./release-support.mjs";
 
 function fail(message) {
   throw new Error(`release-sbom-verify: ${message}`);
@@ -36,23 +31,29 @@ if (expectedVersion && root.version !== expectedVersion) {
   fail(`metadata.component version ${root.version} does not match ${expectedVersion}`);
 }
 if (!Array.isArray(bom.components) || bom.components.length === 0) fail("components must be a non-empty array");
-function validateLicenses(component) {
-  for (const entry of component.licenses ?? []) {
-    const license = entry?.license;
-    if (!license || typeof license !== "object") fail(`${component.name} has malformed license entry`);
-    if (Object.hasOwn(license, "id")) {
-      if (typeof license.id !== "string" || !/^[A-Za-z0-9.-]+$/.test(license.id)) {
-        fail(`${component.name} license.id must be a single SPDX identifier`);
-      }
-      if (Object.hasOwn(license, "expression")) fail(`${component.name} license cannot contain id and expression`);
-    } else if (Object.hasOwn(license, "expression")) {
-      if (typeof license.expression !== "string" || !/^[A-Za-z0-9.+()\- ]+$/.test(license.expression) || !/\b(?:AND|OR|WITH)\b/.test(license.expression)) {
-        fail(`${component.name} license.expression is not a valid SPDX expression shape`);
-      }
-    } else {
-      fail(`${component.name} license must contain id or expression`);
-    }
+function validateLicenseId(component, license) {
+  if (typeof license.id !== "string" || !/^[A-Za-z0-9.-]+$/.test(license.id)) {
+    fail(`${component.name} license.id must be a single SPDX identifier`);
   }
+  if (Object.hasOwn(license, "expression")) fail(`${component.name} license cannot contain id and expression`);
+}
+
+function validateLicenseExpression(component, license) {
+  if (typeof license.expression !== "string" || !/^[A-Za-z0-9.+()\- ]+$/.test(license.expression) || !/\b(?:AND|OR|WITH)\b/.test(license.expression)) {
+    fail(`${component.name} license.expression is not a valid SPDX expression shape`);
+  }
+}
+
+function validateLicenseEntry(component, entry) {
+  const license = entry?.license;
+  if (!license || typeof license !== "object") fail(`${component.name} has malformed license entry`);
+  if (Object.hasOwn(license, "id")) return validateLicenseId(component, license);
+  if (Object.hasOwn(license, "expression")) return validateLicenseExpression(component, license);
+  fail(`${component.name} license must contain id or expression`);
+}
+
+function validateLicenses(component) {
+  for (const entry of component.licenses ?? []) validateLicenseEntry(component, entry);
 }
 validateLicenses(root);
 const refs = new Set([root["bom-ref"]]);

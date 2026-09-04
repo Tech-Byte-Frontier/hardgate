@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { classifyBinaryAbi } from "./release-abi.mjs";
+import { archiveMemberMode, isExecutableMode, option, runCommand } from "./release-support.mjs";
 
 const targets = [
   ["x86_64-unknown-linux-gnu", "hardgate-linux-x64", /x86-64/, "gnu"],
@@ -19,21 +20,11 @@ const targets = [
   ["aarch64-apple-darwin", "hardgate-darwin-arm64", /arm64/, null],
 ];
 
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
-
 function fail(message) {
   throw new Error(`release-verify: ${message}`);
 }
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", ...options });
-  if (result.status !== 0) fail(`${command} failed: ${result.error?.message ?? result.stderr}`);
-  return result.stdout;
-}
+const run = (command, args, options = {}) => runCommand("release-verify", command, args, options);
 
 function digest(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -41,7 +32,7 @@ function digest(file) {
 
 const MAX_BINARY_BYTES = 128 * 1024 * 1024;
 
-function verifyEmbeddedIdentity(binaryPath, version, commit, target, packageName) {
+function verifyEmbeddedIdentity({ binaryPath, version, commit, target, packageName }) {
   const { size } = fs.statSync(binaryPath);
   if (!Number.isSafeInteger(size) || size > MAX_BINARY_BYTES) {
     fail(`${packageName} binary is unreasonably large for bounded identity verification`);
@@ -101,12 +92,8 @@ function extract(archive, member, directory) {
 
 function verifyExecutableMember(archive, packageName) {
   const member = `${packageName}/hardgate`;
-  const listing = run("tar", ["-tvzf", archive]);
-  const line = listing
-    .split("\n")
-    .find((entry) => entry.trim().endsWith(` ${member}`));
-  const mode = line?.trim().split(/\s+/, 1)[0];
-  if (!mode || mode.length !== 10 || !mode.startsWith("-") || ![mode[3], mode[6], mode[9]].some((value) => /[xstST]/.test(value))) {
+  const mode = archiveMemberMode(run("tar", ["-tvzf", archive]), member);
+  if (!isExecutableMode(mode)) {
     fail(`${packageName} archive member hardgate must retain an executable mode before extraction`);
   }
 }
@@ -133,7 +120,7 @@ function verifyBinaryAbi(binaryPath, target, abi, packageName) {
   }
 }
 
-function verifyArchive(dist, target, pkg, archPattern, abi, version, commit, directory) {
+function verifyArchive({ dist, target, pkg, archPattern, abi, version, commit, directory }) {
   const archive = path.join(dist, `${pkg}.tar.gz`);
   if (!fs.existsSync(archive)) fail(`missing ${path.basename(archive)}`);
   verifyExecutableMember(archive, pkg);
@@ -152,7 +139,7 @@ function verifyArchive(dist, target, pkg, archPattern, abi, version, commit, dir
   // before the host smoke test and keep the extracted file bounded for the
   // embedded identity check below.
   fs.chmodSync(binaryPath, 0o755);
-  verifyEmbeddedIdentity(binaryPath, version, commit, target, pkg);
+  verifyEmbeddedIdentity({ binaryPath, version, commit, target, packageName: pkg });
   const report = run("file", ["-b", binaryPath]);
   if (!archPattern.test(report)) fail(`${pkg} architecture does not match ${target}: ${report.trim()}`);
   verifyBinaryAbi(binaryPath, target, abi, pkg);
@@ -184,7 +171,16 @@ const names = targets.map(([, pkg]) => `${pkg}.tar.gz`);
 verifyChecksums(dist, [...names, `hardgate-${version}.sbom.cdx.json`]);
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-verify-"));
 try {
-  const checked = targets.map(([target, pkg, pattern, abi]) => verifyArchive(dist, target, pkg, pattern, abi, version, commit, directory));
+  const checked = targets.map(([target, pkg, pattern, abi]) => verifyArchive({
+    dist,
+    target,
+    pkg,
+    archPattern: pattern,
+    abi,
+    version,
+    commit,
+    directory,
+  }));
   const host = hostTarget();
   const smoke = checked.find(({ archive }) => path.basename(archive, ".tar.gz") === host);
   if (smoke) {

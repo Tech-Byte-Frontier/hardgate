@@ -4,16 +4,13 @@
 "use strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { projectRoot as root, readCargoVersion } from "./release-support.mjs";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cargoToml = fs.readFileSync(path.join(root, "Cargo.toml"), "utf8");
-const m = cargoToml.match(/^version\s*=\s*"([^"]+)"/m);
-if (!m) {
+const cargoVersion = readCargoVersion(root);
+if (!cargoVersion) {
   console.error("sync-npm-version: could not parse version from Cargo.toml");
   process.exit(1);
 }
-const cargoVersion = m[1];
 const check = process.argv.includes("--check");
 const tagIndex = process.argv.indexOf("--tag");
 const tagArg = tagIndex >= 0

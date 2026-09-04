@@ -7,11 +7,9 @@
 "use strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { projectRoot as root, readCargoVersion } from "./release-support.mjs";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cargoToml = fs.readFileSync(path.join(root, "Cargo.toml"), "utf8");
-const version = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+const version = readCargoVersion(root);
 if (!version) {
   console.error("check-npm-quality: could not parse version from Cargo.toml");
   process.exit(1);

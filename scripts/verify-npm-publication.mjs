@@ -10,10 +10,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { isRetryableNpmPackError } from "./npm-pack-retry.mjs";
+import { archiveMemberMode, isExecutableMode, option, projectRoot as root, runCommand } from "./release-support.mjs";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packages = [
   ["hardgate-linux-x64", ["linux"], ["x64"], ["glibc"]],
   ["hardgate-linux-x64-musl", ["linux"], ["x64"], ["musl"]],
@@ -26,21 +25,11 @@ const packageNames = packages.map(([name]) => name).sort();
 const maxAttempts = Number.parseInt(process.env.NPM_VERIFY_ATTEMPTS ?? "20", 10);
 const retryDelay = Number.parseInt(process.env.NPM_VERIFY_DELAY_SECONDS ?? "10", 10);
 
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
-
 function fail(message) {
   throw new Error(`verify-npm-publication: ${message}`);
 }
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", ...options });
-  if (result.status !== 0) fail(`${command} failed: ${result.error?.message ?? result.stderr}`);
-  return result.stdout;
-}
+const run = (command, args, options = {}) => runCommand("verify-npm-publication", command, args, options);
 
 function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -61,12 +50,8 @@ function unpackTar(archive, directory) {
 
 function verifyExecutableMember(archive, packageDirectory, packageName) {
   const member = "package/bin/hardgate";
-  const listing = run("tar", ["-tvzf", archive]);
-  const line = listing
-    .split("\n")
-    .find((entry) => entry.trim().endsWith(` ${member}`));
-  const mode = line?.trim().split(/\s+/, 1)[0];
-  if (!mode || mode.length !== 10 || !mode.startsWith("-") || ![mode[3], mode[6], mode[9]].some((value) => /[xstST]/.test(value))) {
+  const mode = archiveMemberMode(run("tar", ["-tvzf", archive]), member);
+  if (!isExecutableMode(mode)) {
     fail(`${packageName} published package bin/hardgate must retain an executable mode`);
   }
   const extractedMode = fs.statSync(path.join(packageDirectory, "bin/hardgate")).mode;

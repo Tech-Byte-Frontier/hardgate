@@ -6,12 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
+import { option } from "./release-support.mjs";
 
 function cargoMetadata() {
   const result = spawnSync("cargo", ["metadata", "--locked", "--format-version", "1"], { encoding: "utf8" });

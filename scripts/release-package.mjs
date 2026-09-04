@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { option } from "./release-support.mjs";
 
 const targets = [
   ["x86_64-unknown-linux-gnu", "hardgate-linux-x64"],
@@ -17,12 +18,6 @@ const targets = [
   ["x86_64-apple-darwin", "hardgate-darwin-x64"],
   ["aarch64-apple-darwin", "hardgate-darwin-arm64"],
 ];
-
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index >= 0) return process.argv[index + 1];
-  return process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? fallback;
-}
 
 function fail(message) {
   throw new Error(`release-package: ${message}`);
@@ -44,8 +39,8 @@ function locate(incoming, target) {
   fail(`missing binary for ${target} under ${incoming}`);
 }
 
-function archiveBinary(binary, output, pkg, target, version, commit, staging) {
-  const packageRoot = path.join(staging, pkg);
+function archiveBinary({ binary, output, packageName, target, version, commit, staging }) {
+  const packageRoot = path.join(staging, packageName);
   fs.mkdirSync(packageRoot, { recursive: true });
   // Explicit modes make the tar stream independent of the caller's umask.
   // The package root and every archived member have a deliberate mode below.
@@ -57,15 +52,15 @@ function archiveBinary(binary, output, pkg, target, version, commit, staging) {
     name: "hardgate",
     version,
     target,
-    package: pkg,
+    package: packageName,
     commit,
   };
   const metadataPath = path.join(packageRoot, "BUILD-METADATA.json");
   fs.writeFileSync(metadataPath, `${JSON.stringify(metadata)}\n`);
   fs.chmodSync(metadataPath, 0o644);
 
-  const tarPath = path.join(output, `${pkg}.tar`);
-  const archivePath = path.join(output, `${pkg}.tar.gz`);
+  const tarPath = path.join(output, `${packageName}.tar`);
+  const archivePath = path.join(output, `${packageName}.tar.gz`);
   run("tar", [
     "--format=ustar",
     "--sort=name",
@@ -77,10 +72,10 @@ function archiveBinary(binary, output, pkg, target, version, commit, staging) {
     tarPath,
     "-C",
     staging,
-    pkg,
+    packageName,
   ]);
   const compressed = spawnSync("gzip", ["-n", "-c", tarPath], { encoding: null, maxBuffer: 64 * 1024 * 1024 });
-  if (compressed.status !== 0) fail(`gzip failed for ${pkg}: ${compressed.error?.message ?? compressed.stderr}`);
+  if (compressed.status !== 0) fail(`gzip failed for ${packageName}: ${compressed.error?.message ?? compressed.stderr}`);
   fs.writeFileSync(archivePath, compressed.stdout);
   fs.rmSync(tarPath, { force: true });
   return archivePath;
@@ -103,7 +98,15 @@ const staging = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-release-"));
 const archives = [];
 try {
   for (const [target, pkg] of targets) {
-    archives.push(archiveBinary(locate(incoming, target), output, pkg, target, version, commit, staging));
+    archives.push(archiveBinary({
+      binary: locate(incoming, target),
+      output,
+      packageName: pkg,
+      target,
+      version,
+      commit,
+      staging,
+    }));
   }
   const lines = archives.map((file) => `${checksum(file)}  ${path.basename(file)}`);
   fs.writeFileSync(path.join(output, "SHA256SUMS"), `${lines.join("\n")}\n`);
