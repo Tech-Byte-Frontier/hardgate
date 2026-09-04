@@ -17,6 +17,18 @@ fn entry(path: &str, code: &str) -> (PathBuf, String) {
     (PathBuf::from(path), code.to_string())
 }
 
+fn fixture_paths(paths: &[&str]) -> Vec<PathBuf> {
+    paths.iter().map(PathBuf::from).collect()
+}
+
+fn unreferenced_files(violations: &[hardgate::engines::DeadCodeViolation]) -> Vec<PathBuf> {
+    violations
+        .iter()
+        .filter(|violation| violation.violation_type == "Unreferenced File")
+        .map(|violation| violation.file.clone())
+        .collect()
+}
+
 #[test]
 fn test_dead_code_analyzer() {
     let files = vec![
@@ -112,11 +124,7 @@ fn cargo_build_scripts_and_path_modules_are_reachable() {
     ];
 
     let violations = find_dead_code(files, contents);
-    let unreferenced_files = violations
-        .iter()
-        .filter(|violation| violation.violation_type == "Unreferenced File")
-        .map(|violation| violation.file.clone())
-        .collect::<Vec<_>>();
+    let unreferenced_files = unreferenced_files(&violations);
 
     assert_eq!(unreferenced_files, vec![PathBuf::from("src/orphan.rs")]);
 }
@@ -149,18 +157,18 @@ fn custom_globs_preserve_generated_entries_and_vendor_exclusions() {
 
 #[test]
 fn import_and_rust_graph_edges_keep_reachable_exports() {
-    let files = vec![
-        PathBuf::from("src/main.ts"),
-        PathBuf::from("src/lib.rs"),
-        PathBuf::from("src/feature.ts"),
-        PathBuf::from("src/component.tsx"),
-        PathBuf::from("src/plugin.js"),
-        PathBuf::from("src/rust_mod.rs"),
-        PathBuf::from("src/helper.rs"),
-        PathBuf::from("src/shared.rs"),
-        PathBuf::from("src/nested.rs"),
-        PathBuf::from("src/orphan.rs"),
-    ];
+    let files = fixture_paths(&[
+        "src/main.ts",
+        "src/lib.rs",
+        "src/feature.ts",
+        "src/component.tsx",
+        "src/plugin.js",
+        "src/rust_mod.rs",
+        "src/helper.rs",
+        "src/shared.rs",
+        "src/nested.rs",
+        "src/orphan.rs",
+    ]);
     let contents = vec![
         entry(
             "src/main.ts",
@@ -187,11 +195,7 @@ fn import_and_rust_graph_edges_keep_reachable_exports() {
     ];
 
     let violations = find_dead_code(files, contents);
-    let unreferenced_files = violations
-        .iter()
-        .filter(|violation| violation.violation_type == "Unreferenced File")
-        .map(|violation| violation.file.clone())
-        .collect::<Vec<_>>();
+    let unreferenced_files = unreferenced_files(&violations);
     assert_eq!(unreferenced_files, vec![PathBuf::from("src/orphan.rs")]);
 
     let stale = violations
