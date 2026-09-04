@@ -79,6 +79,6 @@ pub use discovery::{
     discover_files_with_exclusions, filter_files_by_paths,
 };
 pub use git_evidence::{
-    ChangeSet, ChangedLineMap, ChangedLines, GitEvidence, ReferenceEvidence, RepositorySnapshot,
-    load_reference, touches,
+    ChangeSet, ChangedLineMap, GitEvidence, ReferenceEvidence, RepositorySnapshot, load_reference,
+    touches,
 };

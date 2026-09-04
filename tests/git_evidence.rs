@@ -115,6 +115,18 @@ fn includes_each_line_of_untracked_inventory_files() {
 }
 
 #[test]
+fn tracks_empty_added_inventory_file() {
+    let repo = committed_repo("git-evidence-empty-added", "src/lib.rs", "base\n");
+    let path = Path::new("src/empty.rs");
+    repo.write("src/empty.rs", "");
+    git(&repo, &["add", "src/empty.rs"]);
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert!(evidence.change_set.changed_files.contains(path));
+    assert!(!evidence.change_set.changed_lines.contains_key(path));
+}
+
+#[test]
 fn handles_renames_and_paths_with_spaces() {
     let repo = Repo::new("git-evidence-rename-space");
     repo.write("src/old name.rs", "first\nsecond\nthird\nfourth\n");

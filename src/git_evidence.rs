@@ -5,7 +5,6 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 pub type ChangedLineMap = BTreeMap<PathBuf, BTreeSet<usize>>;
-pub type ChangedLines = ChangedLineMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSet {
     pub merge_base: String,
@@ -13,20 +12,10 @@ pub struct ChangeSet {
     pub changed_files: BTreeSet<PathBuf>,
     pub rename_lineage: BTreeMap<PathBuf, PathBuf>,
 }
-impl ChangeSet {
-    pub fn touches(&self, path: &Path, start: usize, end: usize) -> bool {
-        touches(&self.changed_lines, path, start, end)
-    }
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySnapshot {
     pub commit: String,
     pub files: BTreeMap<PathBuf, String>,
-}
-impl RepositorySnapshot {
-    pub fn get(&self, path: &Path) -> Option<&str> {
-        self.files.get(path).map(String::as_str)
-    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceEvidence {
@@ -40,7 +29,7 @@ pub fn load_reference(root: &Path, reference: &str) -> Result<ReferenceEvidence>
         root,
         &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
     )?)?;
-    let rename_lineage = parse_diff_status(&run_git(
+    let diff_status = parse_diff_status(&run_git(
         root,
         &[
             "diff",
@@ -73,6 +62,7 @@ pub fn load_reference(root: &Path, reference: &str) -> Result<ReferenceEvidence>
         &mut changed_files,
     )?;
     validate_worktree_inventory(root, &status)?;
+    changed_files.extend(diff_status.paths);
     changed_files.extend(changed_lines.keys().cloned());
     let snapshot = load_snapshot(root, &merge_base)?;
     Ok(ReferenceEvidence {
@@ -80,7 +70,7 @@ pub fn load_reference(root: &Path, reference: &str) -> Result<ReferenceEvidence>
             merge_base,
             changed_lines,
             changed_files,
-            rename_lineage,
+            rename_lineage: diff_status.rename_lineage,
         },
         snapshot,
     })
@@ -154,55 +144,77 @@ fn parse_status(output: &[u8]) -> Result<StatusSummary> {
     }
     Ok(summary)
 }
-fn parse_diff_status(output: &[u8]) -> Result<BTreeMap<PathBuf, PathBuf>> {
+#[derive(Default)]
+struct DiffStatusSummary {
+    paths: BTreeSet<PathBuf>,
+    rename_lineage: BTreeMap<PathBuf, PathBuf>,
+}
+type DiffRec = (usize, BTreeSet<PathBuf>, Option<(PathBuf, PathBuf)>);
+fn parse_diff_status(output: &[u8]) -> Result<DiffStatusSummary> {
     let records = split_nul_records(output, "Git diff status")?;
-    let mut lineage = BTreeMap::new();
+    let mut summary = DiffStatusSummary::default();
     let mut index = 0;
     while index < records.len() {
         let status = records[index];
         if !valid_diff_status(status) {
             bail!("Git returned a malformed diff status record");
         }
-        let marker = *status
-            .first()
-            .context("Git returned an empty diff status record")?;
-        index += 1;
-        if marker == b'R' || marker == b'C' {
-            let old = records
-                .get(index)
-                .context("Git returned a malformed rename diff status")?;
-            let new = records
-                .get(index + 1)
-                .context("Git returned a malformed rename diff status")?;
-            let old = normalize_bytes(old, "Git rename baseline path")?;
-            let new = normalize_bytes(new, "Git rename current path")?;
-            if is_inventory_path(&old) && is_inventory_path(&new) {
-                lineage.insert(new, old);
-            }
-            index += 2;
-        } else {
-            let _path = records
-                .get(index)
-                .context("Git returned a malformed diff status")?;
-            index += 1;
+        let (next, paths, lineage) = status_record(status, &records, index + 1)?;
+        summary.paths.extend(paths);
+        if let Some((new, old)) = lineage {
+            summary.rename_lineage.insert(new, old);
         }
+        index = next;
     }
-    Ok(lineage)
+    Ok(summary)
+}
+fn status_record(status: &[u8], records: &[&[u8]], path_index: usize) -> Result<DiffRec> {
+    let marker = status[0];
+    if marker == b'R' || marker == b'C' {
+        let old = normalize_bytes(
+            records
+                .get(path_index)
+                .context("Git returned a malformed rename diff status")?,
+            "Git rename baseline path",
+        )?;
+        let new = normalize_bytes(
+            records
+                .get(path_index + 1)
+                .context("Git returned a malformed rename diff status")?,
+            "Git rename current path",
+        )?;
+        let paths = [&old, &new]
+            .into_iter()
+            .filter(|path| is_inventory_path(path))
+            .cloned()
+            .collect();
+        let lineage = (is_inventory_path(&old) && is_inventory_path(&new)).then_some((new, old));
+        return Ok((path_index + 2, paths, lineage));
+    }
+    let path = normalize_bytes(
+        records
+            .get(path_index)
+            .context("Git returned a malformed diff status")?,
+        "Git diff path",
+    )?;
+    let paths = if is_inventory_path(&path) {
+        std::iter::once(path.clone()).collect()
+    } else {
+        BTreeSet::new()
+    };
+    Ok((path_index + 1, paths, None))
 }
 fn valid_diff_status(status: &[u8]) -> bool {
-    let Some(marker) = status.first().copied() else {
+    let Some((&marker, rest)) = status.split_first() else {
         return false;
     };
-    if !matches!(
-        marker,
-        b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U' | b'X' | b'B'
-    ) {
+    if !b"ACDMRTUXB".contains(&marker) {
         return false;
     }
-    if marker == b'R' || marker == b'C' {
-        status.len() == 4 && status[1..].iter().all(u8::is_ascii_digit)
+    if matches!(marker, b'R' | b'C') {
+        rest.len() == 3 && rest.iter().all(u8::is_ascii_digit)
     } else {
-        status.len() == 1
+        rest.is_empty()
     }
 }
 fn split_nul_records<'a>(output: &'a [u8], label: &str) -> Result<Vec<&'a [u8]>> {
@@ -232,12 +244,10 @@ fn normalize_path(raw: &str) -> Result<PathBuf> {
     }
     let mut normalized = PathBuf::new();
     for component in path.components() {
-        match component {
-            Component::Normal(value) => normalized.push(value),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!("Git returned a non-relative path: {raw}");
-            }
+        if let Component::Normal(value) = component {
+            normalized.push(value);
+        } else if !matches!(component, Component::CurDir) {
+            bail!("Git returned a non-relative path: {raw}");
         }
     }
     if normalized.as_os_str().is_empty() {
@@ -444,21 +454,11 @@ fn decode_escape(bytes: &[u8], slash: usize, output: &mut Vec<u8>) -> Result<usi
     decode_octal_escape(bytes, slash, output)
 }
 fn simple_escape(byte: u8) -> Option<u8> {
-    const ESCAPES: &[(u8, u8)] = &[
-        (b'"', b'"'),
-        (b'\\', b'\\'),
-        (b'a', 7),
-        (b'b', 8),
-        (b't', 9),
-        (b'n', 10),
-        (b'v', 11),
-        (b'f', 12),
-        (b'r', 13),
-    ];
-    ESCAPES
-        .iter()
-        .find(|(escaped, _)| *escaped == byte)
-        .map(|(_, value)| *value)
+    const KEYS: &[u8] = b"\"\\abtnvfr";
+    const VALUES: &[u8] = b"\"\\\x07\x08\t\n\x0b\x0c\r";
+    KEYS.iter()
+        .position(|key| *key == byte)
+        .map(|index| VALUES[index])
 }
 fn decode_octal_escape(bytes: &[u8], slash: usize, output: &mut Vec<u8>) -> Result<usize> {
     let mut value = 0_u8;
