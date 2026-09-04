@@ -1,8 +1,8 @@
 # Configuration specification
 
-Hardgate reads `hardgate.toml` from the current directory. If the file is absent, the CLI uses the `strict-agent` default bundle. `hardgate init --preset …` writes an explicit template; that template leaves coverage, mutation, orchestration, and dead-code execution disabled until a project supplies the required inputs.
+Hardgate reads `hardgate.toml` from the current directory. If the file is absent, `HardgateConfig::load_or_default` uses the `strict-agent` preset object. `hardgate init --preset …` serializes that same preset object as a commented template.
 
-## Minimal configuration
+## Presets and presence-based merging
 
 ```toml
 [gate]
@@ -11,9 +11,18 @@ preset = "strict-agent"
 strict = true
 ```
 
-`preset` accepts `strict-agent`, `balanced`, `legacy-migration`, or `custom`. Presets provide base values and a present section/key in the file overrides those values. `custom` starts from the deserialized defaults.
+`preset` accepts `strict-agent`, `balanced`, `legacy-migration`, or `custom`.
 
-## Gate policy and evidence
+- `strict-agent` supplies tight structural budgets, strict static/classification fallback, and enabled coverage/mutation report policies with their configured floors. Coverage defaults to `coverage/lcov.info`; mutation is enabled but requires a report path in TOML (`verify --mutation-report <path>` can supply one for that command).
+- `balanced` scales structural budgets and disables coverage/mutation report policies.
+- `legacy-migration` scales structural budgets, disables coverage/mutation report policies, and enables a static reference/merge-base ratchet. It defaults to `reference_branch = "origin/main"` and `strict = false`.
+- `custom` uses values explicitly present in the file plus serde defaults.
+
+For every non-custom preset, merging is presence-based. Hardgate inspects the TOML table and overlays only keys that are actually present; omitted sections and keys retain the preset value. An explicit `false`, empty array, or other explicit value is not treated as omission. This lets a project change one field without copying the rest of the preset.
+
+The `strict` flag controls static/classification evidence fallback: unknown roles, parser/read failures, and similar static evidence can be blocking (`true`) or advisories (`false`) when no role-specific severity overrides them. Explicitly enabled coverage, mutation, generated-freshness, and legacy-reference evidence is required and blocking regardless of `strict`.
+
+## Gate identity
 
 ```toml
 [gate]
@@ -23,30 +32,78 @@ strict = true
 enforce_classified_sources = false
 ```
 
-- `strict = true` turns missing/unreadable required evidence, parser failures, Git failures, and unsupported classified source files into blocking findings. With `strict = false`, those evidence failures are visible advisories; ordinary engine violations still fail.
-- `enforce_classified_sources = true` fails unknown inventory files instead of allowing them through without a role. It does not add parsers for unsupported formats.
+- `name` labels reports.
+- `preset` selects the base bundle.
+- `strict` controls fallback severity for static evidence without a role policy.
+- `enforce_classified_sources = true` turns an unknown inventory file into a classification finding. It does not add an AST parser.
 
-The coverage and mutation switches are independent. A disabled switch does not read, parse, or score a configured stale report. An enabled switch requires a report path and, in strict mode, fails when the report is absent or malformed.
+## Discovery, classification, and role policies
 
-## Discovery roles and formats
+Each inventory file receives one role before engines choose inputs. Built-in pruning always skips `node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, and `__pycache__`. A user exclusion is not global pruning: the file remains available to classification and other engines, and the owning engine emits an advisory.
 
-Every discovered inventory file receives one role before engines select inputs:
+Built-in role behavior:
 
-| Role | Current policy |
+| Role | Default engines and targets |
 | --- | --- |
-| `source` | File/anti-gaming/invariant checks; AST complexity when a parser exists; native mutation target when supported |
-| `test` | File/anti-gaming/invariant checks; AST complexity; clone analysis; never a native mutation target |
-| `fixture` | Size/anti-gaming safety and clone analysis; no AST complexity by default |
-| `generated` | Inventory advisory only; no handwritten complexity or clone debt |
-| `migration` | Size/anti-gaming safety; unsupported formats fail in strict mode when classified as source-like |
-| `config` | Size/anti-gaming safety |
-| `documentation` | Inventory only |
-| `vendor` | Pruned with build/dependency directories |
-| `unknown` | Passes unless `enforce_classified_sources` is enabled |
+| `source` | File/anti-gaming/invariant checks, AST complexity when supported, clone analysis, native mutation target |
+| `test` | File/anti-gaming/invariant checks, AST complexity, clone analysis; never a native mutation target |
+| `generated` | Inventoried and reported as generated; no handwritten complexity or clone debt by default |
+| `fixture` | File/anti-gaming safety and clone analysis; no AST complexity by default |
+| `migration` | File/anti-gaming safety; no native mutation or clone analysis by default |
+| `config` | File/anti-gaming safety |
+| `documentation` | Inventory visibility only |
+| `vendor` | Pruned dependency/build output |
+| `unknown` | No role-specific engine input; fails when `enforce_classified_sources` is enabled |
 
-Built-in pruning covers `node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, and `__pycache__`. User exclusions are not pruning: they remain visible as advisories and only belong to the engine whose exclusion list contains them.
+Tree-sitter targets are `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, and `.go`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
 
-AST parsing is available for `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, and `.go`. Inventory-only formats include `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
+Ordered custom rules run before built-ins, except that vendor/build pruning remains authoritative:
+
+```toml
+[classification]
+
+[[classification.rules]]
+glob = "supabase/functions/**"
+role = "source"
+```
+
+The first matching rule wins. Invalid or duplicate globs fail configuration loading.
+
+### Independent role policies
+
+```toml
+[roles.source]
+severity = "error"
+max_lines = 499
+max_cyclomatic = 10
+clone_enabled = true
+clone_min_lines = 5
+clone_min_tokens = 50
+mutation_target = true
+
+[roles.test]
+severity = "warning"
+max_function_lines = 120
+clone_min_lines = 8
+clone_min_tokens = 80
+mutation_target = false
+
+[roles.generated]
+severity = "ignore"
+clone_enabled = false
+mutation_target = false
+
+[roles.fixture]
+severity = "warning"
+clone_enabled = true
+
+[roles.migration]
+severity = "error"
+clone_enabled = false
+mutation_target = false
+```
+
+The five first-class sections (`source`, `test`, `generated`, `fixture`, `migration`) are independent. `severity` is `error`, `warning`, or `ignore`; omitted thresholds inherit global budgets. Role policy can override file bytes/lines, function ceilings, clone enablement/thresholds, and native mutation eligibility. A role cannot opt a non-source file into native mutation.
 
 ## File and function budgets
 
@@ -78,9 +135,9 @@ max_statements = 30
 max_nesting_depth = 4
 ```
 
-File limits use raw bytes and physical lines. Function limits come from the Tree-sitter metrics for supported parser targets. A file-budget exclusion skips only byte/line checks and emits an advisory; it does not suppress anti-gaming, invariant, parsing, or clone checks.
+File limits use raw bytes and physical lines. Function limits come from Tree-sitter metrics for supported parser targets. `[budgets.files.exclusions].paths` skips only byte/line checks and emits an advisory; it does not suppress anti-gaming, invariants, parsing, clones, role classification, or generated freshness.
 
-## Anti-gaming scanner
+## Anti-gaming checks
 
 ```toml
 [anti_gaming]
@@ -88,9 +145,11 @@ disallow_suppressions = true
 custom_forbidden_tokens = ["NOLINT"]
 ```
 
-The scanner checks known suppression directives in comments/attributes and project-provided literal tokens. When `disallow_suppressions` is false, the scanner does not emit suppression findings. The current configuration has no per-file exception path.
+The scanner recognizes common compiler, linter, type-checker, and coverage suppression directives plus literal project tokens in safety-checked roles. `disallow_suppressions = false` disables those findings. There is no per-file approval channel.
 
 ## Architectural invariants
+
+`[invariants].enforce` defaults to `true`; an empty `rules` list is simply a no-op. Set it to `false` to disable invariant checks explicitly.
 
 ```toml
 [invariants]
@@ -109,7 +168,7 @@ exclude = ["src/lib/network.ts"]
 disallow_calls = ["fetch"]
 ```
 
-Rules are declarative line-level checks for import strings, call names, or tokens. They do not resolve modules or perform compiler type checking. `from` and `exclude` are glob patterns.
+Rules are declarative line-level checks for import strings, call names, or tokens. `from` and `exclude` are globs. The checker does not resolve modules or perform compiler/type analysis.
 
 ## Clone detection
 
@@ -121,13 +180,36 @@ min_tokens = 50
 excludes = ["tests/fixtures/**"]
 ```
 
-The detector tokenizes eligible source, test, and fixture text, normalizes literal values, and compares bounded rolling-hash windows. `excludes` belongs only to clone detection and produces an advisory when matching files are present. It is not a general discovery ignore.
+Eligible source, test, and fixture files are analyzed in separate role groups using normalized lexical token streams and bounded rolling-hash windows. `excludes` belongs only to clone detection and emits an advisory when matching files are present. In `check --diff`, Hardgate indexes the full repository and retains clone pairs touching changed files. Every current clone violation has a stable fingerprint over normalized token kinds; it excludes paths and physical line numbers, allowing rename lineage to preserve identity.
 
-## LCOV coverage and CRAP evidence
+## Generated-artifact freshness
+
+```toml
+[generated]
+enabled = true
+freshness_command = "pnpm generate && git diff --exit-code -- generated/"
+timeout_secs = 300
+```
+
+When enabled, `freshness_command` is required and runs in `check` (including `--diff`) and `verify`. A missing command, timeout, non-zero exit, or runner failure is blocking current evidence. Freshness has its own timeout and is independent of `[budgets.files.exclusions]`; excluding generated files from a size check never disables freshness. Freshness is not part of the legacy static ratchet.
+
+## Legacy reference and ratchet
+
+```toml
+[legacy]
+reference_branch = "origin/main"
+ratchet = true
+```
+
+`ratchet = true` requires a non-empty reference. Hardgate resolves the Git merge base, loads the baseline snapshot, and analyzes baseline static findings plus configured dead-code findings. Existing non-worsened static debt can be grandfathered as advisories; new or worsened budget, suppression, complexity, invariant, clone, or dead-code findings remain blocking. Pure rename lineage maps the current path back to the baseline path. Stable clone fingerprints remove line-number dependence. Retained findings are annotated with changed files or changed hunk ranges.
+
+The ratchet applies only to static and configured dead-code findings. Coverage, mutation, generated freshness, and orchestration are evaluated against the current tree and remain blocking; they are never grandfathered. If the reference, merge base, snapshot, or baseline analysis cannot be loaded, the ratchet reports a blocking evidence failure.
+
+## Coverage and CRAP evidence
 
 ```toml
 [coverage]
-enabled = false
+enabled = true
 report = "coverage/lcov.info"
 min_line_percent = 95.0
 min_function_percent = 95.0
@@ -136,26 +218,25 @@ max_crap_score = 25.0
 critical_paths = ["src/core.ts"]
 ```
 
-The current parser accepts LCOV records. When enabled, Hardgate evaluates global line/function/branch floors, per-function CRAP, and optional critical paths. A function without matching report lines is treated as uncovered for its CRAP calculation; a source file with analyzed functions absent from the report is a missing-evidence finding. No other coverage report format is read in this revision.
+Only LCOV is parsed. Full checks evaluate global line/function/branch floors, function CRAP scores, critical paths, and missing source records. `check --diff` filters Git changes to changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. A missing, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
-## Mutation policy and reports
+## Mutation report evidence
 
 ```toml
 [mutation]
-enabled = false
+enabled = true
 min_score = 85.0
-reject_timeouts = true
 timeout_secs = 10
 max_mutants = 30
 test_cmd = "pnpm test {file}"
 reports = ["reports/stryker-mutation.json"]
 ```
 
-`verify` and the evidence phase of `check` evaluate Stryker-shaped JSON (`files → mutants`), cargo-mutants-shaped JSON (`outcomes`), or generic outcome-count JSON. They do not run those tools. `reject_timeouts` controls timeout findings; compile, runner, and unviable outcomes are always integrity findings. Scores use killed divided by killed plus survived; a report with no viable mutants scores 0% and therefore fails the usual positive floor.
+`check` and `verify` evaluate Stryker-shaped (`files`), cargo-mutants-shaped (`outcomes`), or generic outcome-count JSON. Empty reports, empty outcome arrays, missing reports, parse errors, and reports with no viable outcomes are blocking when mutation is enabled. Scores use killed divided by killed plus survived. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings and remain blocking; mutation timeout handling is not a user-weakenable exception.
 
-`hardgate mutate` is separate. It mutates classified production sources with the built-in AST mutator, runs the configured or inferred test command, executes an unmutated baseline before mutants, rejects zero viable mutation points, and verifies byte-for-byte restoration. Use `--test-cmd` for a project runner that is not inferred by the file extension.
+`hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool.
 
-## Orchestration
+## Orchestration and dead code
 
 ```toml
 [orchestration]
@@ -163,28 +244,16 @@ format_check = "cargo fmt --check"
 format = "cargo fmt"
 lint = "cargo clippy -- -D warnings"
 test_cmd = "cargo test"
-```
+timeout_secs = 300
 
-`hardgate fmt --check` runs `format_check`; `hardgate fmt` runs `format` (or falls back to `format_check`). `hardgate check --all` runs each configured format-check, lint, and test command in addition to static engines. Commands are executed from the repository root; a local `node_modules/.bin` is prepended to `PATH`.
-
-## Dead-code analysis
-
-```toml
 [analysis.dead_code]
 enabled = false
 entry_points = ["src/main.rs", "src/lib.rs"]
 exclude = ["tests/**"]
 ```
 
-Dead-code analysis is enabled by this section or explicitly with `check --dead-code`. It reports unreferenced files and simple unused JavaScript/TypeScript exports using configured entry/exclusion globs; it is not a compiler linker or whole-program proof.
+`check --all` runs configured format-check, lint, and test commands. `fmt --check` uses `format_check`; `fmt` uses `format`, falling back to `format_check`. Commands run from the repository root with local `node_modules/.bin` available on `PATH`. Dead-code analysis is enabled by policy or `check --dead-code`; it reports unreferenced files and simple JS/TS exports, not a compiler linker proof.
 
-## Presets
+## Validation and fail-closed rules
 
-| Preset | Current behavior |
-| --- | --- |
-| `strict-agent` | Tight budgets, suppression scanning, clone detection, and strict evidence handling. The no-config fallback enables coverage and mutation report checks; an initialized file explicitly disables them until configured. |
-| `balanced` | Scaled structural budgets and strict ordinary findings; coverage/mutation are disabled by the preset bundle. |
-| `legacy-migration` | Scaled structural budgets and non-strict evidence handling; no merge-base baseline or ratchet is implemented. |
-| `custom` | Uses values explicitly present in the file and deserialized defaults. |
-
-**Planned stabilization (not current behavior):** merge-base baselines and a `legacy-migration` ratchet may be enabled after their implementation and regression tests land. Until then, do not describe this preset as comparing or preventing regressions against a reference branch.
+Serde handles types and enum values; semantic validation rejects non-positive thresholds, invalid/duplicate globs, enabled freshness without a command, enabled legacy ratchet without a reference, and unsafe mutation settings. Empty required reports/outcomes, unreadable files, parser failures, Git failures, and configured command failures are never silently converted into a pass. The CLI retains an advisory when source discovery is empty and still evaluates enabled evidence; MCP `hardgate_check` rejects empty scopes/discovery explicitly.

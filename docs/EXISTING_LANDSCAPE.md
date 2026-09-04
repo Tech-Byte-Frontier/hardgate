@@ -1,49 +1,52 @@
 # Existing landscape and comparative analysis
 
-Hardgate sits at the boundary between source-level tools and a repository's acceptance policy. It can orchestrate a formatter, linter, or test command, but its own contract is narrower: deterministic structural budgets, anti-gaming checks, declarative boundaries, bounded token clones, and explicit local evidence.
+Hardgate sits between language tools and a repository's acceptance policy. It can invoke a formatter, linter, or test command, but its own contract is narrower: deterministic structural budgets, role-aware inputs, anti-gaming checks, declarative boundaries, bounded clone detection, and explicit evidence requirements.
 
 ## Tool positioning
 
-| Tool | Primary role | Relationship to Hardgate |
+| Tool | Owns | Relationship to Hardgate |
 | --- | --- | --- |
-| PMAT | Rust-based agent context and technical-debt workflows, including quality scoring and MCP integration | Complementary context and grading; Hardgate supplies hard budgets, role ownership, and strict evidence semantics |
-| Qlty | CLI/cloud quality workflow with maintainability metrics, coverage, duplication, and CI reporting | Complementary aggregation and trends; Hardgate remains the local policy/verdict layer |
-| jscpd | Copy/paste detection using token windows and configurable duplication thresholds | A dedicated, broad-format detector; Hardgate includes a bounded token detector whose exclusions belong only to clone analysis |
-| Stryker | Mutation testing for JavaScript/TypeScript and related ecosystems; executes a test runner and emits mutation reports | The mature external mutation path; Hardgate can evaluate a Stryker JSON report but does not invoke Stryker |
-| SonarQube / SonarCloud | Broad static analysis, code smells, security, coverage, duplication, and hosted quality gates | Strong centralized analysis and history; Hardgate is a local, repository-owned policy with no server dependency |
-| ESLint | Extensible JavaScript/TypeScript lint rules and plugins | Language-specific linting remains ESLint's job; Hardgate can run it through the orchestration lint command |
-| Biome | Integrated JavaScript/TypeScript formatter and linter | Hardgate can orchestrate Biome commands; it does not embed Biome's rules |
-| Oxlint | Fast JavaScript/TypeScript linting | Hardgate can orchestrate Oxlint; Oxlint remains the owner of language lint diagnostics |
-| Trunk / Lefthook / pre-commit | Hooks and command orchestration | Useful scheduling layers; Hardgate provides the policy and report that a hook invokes |
+| PMAT | Rust-oriented agent context and technical-debt workflows, including quality scoring and MCP integration | Complementary context and grading; Hardgate supplies repository-owned budgets, role policy, and fail-closed evidence |
+| [Qlty CLI / Qlty Cloud](https://docs.qlty.sh/what-is-qlty) | A local CLI for setup, linters/formatters, smells and metrics, plus coverage publishing to a hosted code-health platform with maintainability, duplication, lint, and coverage views | Complementary analysis and history; Hardgate is the local verdict layer with explicit evidence, role ownership, and legacy static ratchet. Qlty's AST duplication analysis and Hardgate's normalized-token clone fingerprints answer related but different questions |
+| jscpd | Dedicated copy/paste detection across broad formats | A specialized detector; Hardgate includes a bounded role-group token detector and keeps clone exclusions local to that engine |
+| Stryker | JavaScript/TypeScript mutation execution and report generation | A mature external mutation runner; Hardgate evaluates Stryker-shaped JSON but does not invoke Stryker |
+| SonarQube / SonarCloud | Broad static analysis, code smells, security, coverage, duplication, and hosted quality gates | Centralized analysis and history; Hardgate is local and repository-owned, and its verdict does not depend on a hosted service |
+| ESLint | Extensible JavaScript/TypeScript lint rules and plugins | Language-specific linting remains ESLint's job; Hardgate can run it through `[orchestration].lint` |
+| Biome | JavaScript/TypeScript formatting and linting | Hardgate can orchestrate Biome commands; it does not embed Biome rules |
+| Oxlint | JavaScript/TypeScript linting | Hardgate can orchestrate Oxlint; Oxlint owns language diagnostics |
+| Trunk / Lefthook / pre-commit | Hook scheduling and command orchestration | Useful invocation layers; Hardgate supplies the policy report they invoke |
 
-No row implies feature parity. Each tool should remain responsible for the semantics it understands best.
+Qlty should not be described as a drop-in Hardgate implementation. Qlty Cloud is a hosted code-health product, and the Qlty CLI can run local analysis and publish coverage. Hardgate does not upload data or provide a hosted dashboard; it decides a local gate from the repository's configured engines and evidence. Use both when a project wants local acceptance plus hosted trends.
 
 ## Comparison by concern
 
-| Concern | Hardgate's current contract | Typical complementary tool |
+| Concern | Hardgate contract | Complementary tool or provider |
 | --- | --- | --- |
-| Structural size and function budgets | Configurable bytes, physical lines, and Tree-sitter metrics for supported parser targets | BCA or language-specific analyzers for additional metrics |
-| Suppression policy | Known directives and project tokens can be blocking findings | ESLint, Oxlint, Biome, Clippy, or type checkers for the underlying diagnostics |
+| Structural size and function budgets | Configurable bytes, physical lines, and Tree-sitter metrics for supported parser targets | Language analyzers for additional metrics |
+| Suppression policy | Known directives and project tokens can be blocking findings | ESLint, Oxlint, Biome, Clippy, type checkers, and coverage tools for underlying diagnostics |
 | Architecture | Declarative path-scoped import/call/token rules evaluated line by line | Dependency-graph or compiler tooling for resolved relationships |
-| Duplication | Bounded rolling-hash token windows over source/test/fixture roles | jscpd or Qlty when broad formats, richer reports, or hosted history are needed |
-| Coverage and CRAP | Optional LCOV ingestion with global floors, CRAP, and critical paths | Vitest/Jest/cargo-llvm-cov or another provider that produces LCOV |
-| Mutation | Native AST loop for selected production files, plus Stryker/cargo-mutants/generic JSON report evaluation | Stryker or cargo-mutants for language-specific mutation operators and runners |
-| Commands and formatting | Optional configured formatter/linter/test commands; no implicit discovery | Biome, Oxlint, ESLint, Cargo, or a CI runner |
-| Agent transport | Stdio MCP tools and structured terminal/agent/JSON output | MCP clients, hooks, and hosted dashboards |
+| Duplication | Bounded normalized-token windows over independent source/test/fixture role groups; stable path/line-independent fingerprints | Qlty or jscpd for broader formats, different structural algorithms, or hosted history |
+| Coverage and CRAP | LCOV ingestion with global floors, CRAP, critical paths, and changed executable-line mode | Jest/Vitest/cargo-llvm-cov or another provider that emits LCOV; Qlty Cloud for publication/history |
+| Mutation | Native AST baseline + mutants, plus Stryker/cargo-mutants/generic JSON report evaluation | Stryker or cargo-mutants for language-specific operators and runners |
+| Generated artifacts | Independent freshness command; budget/clone exclusions cannot disable it | Project generator and CI command that establishes the freshness check |
+| Existing-code adoption | Git reference/merge-base static ratchet with rename lineage and changed-hunk attribution | Hosted quality baselines or migration tooling with different debt models |
+| Commands and formatting | Optional configured formatter/linter/test commands; no implicit discovery | Biome, Oxlint, ESLint, Cargo, or CI runner |
+| Agent transport | Stdio MCP tools and terminal/agent/JSON output | MCP clients, hooks, and hosted dashboards |
 
 ## Why a policy layer
 
-A project can use all of these tools and still have an ambiguous acceptance rule: tests may not have run, an excluded file may hide debt, or a report may be stale. Hardgate makes those states visible:
+A project can use all of these tools and still have an ambiguous acceptance rule: tests may not have run, an excluded file may hide debt, or a report may be stale. Hardgate makes those states explicit:
 
-- each discovered file has a role before an engine receives it;
-- each exclusion is owned by one engine and can produce an advisory;
-- enabled evidence must be present and parseable in strict mode;
+- every discovered file has a role before an engine receives it;
+- every exclusion is owned by one engine and can emit an advisory;
+- enabled evidence must be present, non-empty, and parseable;
 - disabled evidence is not read merely because an old report exists;
-- static checks and native mutation are separate commands with separate proof obligations;
-- a passing report means the configured violation collections are empty, not that every possible quality property was proven.
+- static, report evaluation, orchestration, and native mutation are separate commands;
+- legacy adoption ratchets static/dead-code debt only, while coverage, mutation, freshness, and orchestration remain current blocking evidence;
+- a passing report means its configured violation collections are empty, not that every possible quality property was proven.
 
 ## Current boundaries
 
-Hardgate currently parses six Tree-sitter targets (Rust, JavaScript, TypeScript, TSX, Python, and Go), inventories additional text/data formats, reads LCOV for coverage, and speaks MCP over stdio. It does not claim a broader parser matrix, global module resolution, another MCP transport, or a merge-base baseline/ratchet.
+Hardgate parses Rust, JavaScript, TypeScript/TSX, Python, and Go with Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates several mutation JSON shapes; and speaks MCP over stdio. It does not claim global module resolution, compiler/type analysis, a broader parser matrix, another MCP transport, or a hosted quality dashboard.
 
-**Planned stabilization (not active):** reference-branch baselines, changed-hunk coverage attribution, new-clone fingerprints, consumer fixtures, and release artifact/checksum verification require implementation and regression proof before they belong in this comparison.
+The npm wrapper and shell installer publish/select six Unix artifacts (Linux x64/arm64 glibc and musl, macOS x64/arm64). Release archives are checked with `SHA256SUMS`, build metadata, and exact version/commit identity. There is no Windows or Homebrew installer in this contract.

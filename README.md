@@ -6,22 +6,24 @@
 [![Documentation](https://docs.rs/hardgate/badge.svg)](https://docs.rs/hardgate)
 [![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
 
-Hardgate is a local Rust CLI. It turns repository policy into a deterministic report that an engineer or an agent can inspect before accepting a change. The gate is deliberately about evidence and boundaries, not a promise that a test command alone proves correctness.
+Hardgate is a local Rust CLI. It turns repository policy into a deterministic report that a maintainer, CI job, or coding agent can inspect before accepting a change. A passing report means that the enabled engines found no blocking findings; it is not a claim that every quality property has been proven.
 
 ## What is enforced
 
-- **Role-aware discovery.** Source, test, fixture, generated, migration, configuration, documentation, vendor, and unknown files are classified before engines choose their inputs. Dependency and build-output directories are pruned by default; user exclusions remain visible as advisories.
-- **Structural budgets.** Tree-sitter metrics cover Rust, JavaScript, TypeScript, TSX, Python, and Go. Configure physical bytes/lines and per-function cyclomatic, cognitive, Halstead, ABC, parameter, statement, body-line, and nesting ceilings.
-- **Anti-gaming policy.** When enabled, known suppression directives and project-forbidden tokens fail safety-checked files. There is no inline exception mechanism in the current configuration.
-- **Architectural boundaries.** Declarative rules inspect source lines for disallowed imports, calls, and tokens. This is a local rule scanner, not global module analysis.
-- **Clone debt.** A bounded rolling hash over normalized lexical token streams finds repeated spans across eligible source, test, and fixture files. Thresholds and per-engine exclusions are configurable.
-- **Optional evidence.** Enabled coverage policies read LCOV and can enforce global line/function/branch floors, CRAP ceilings, and critical-path line coverage. Enabled mutation policies evaluate Stryker, cargo-mutants, or generic JSON outcome reports. Missing or malformed required evidence is a finding in strict mode; disabled engines ignore stale reports.
-- **Native mutation.** `hardgate mutate` is a separate AST mutation run over classified production sources. It runs an unmutated baseline first, rejects a run with no viable mutants, reports killed/survived/timeout/compile/runner/equivalent/unviable outcomes, and verifies source restoration after every mutant.
-- **Local integration.** `check --all` can run configured formatter, linter, and test commands. `fmt` can run the configured formatter. `--format agent`, JSON, compact, and summary output make results consumable by tools without hiding the terminal report.
+- **Role-aware discovery.** Inventory files are classified as source, test, generated, fixture, migration, configuration, documentation, vendor, or unknown before engines choose their inputs. Dependency and build-output directories are pruned by default. A user exclusion belongs only to the engine that owns it and remains visible as an advisory.
+- **Structural budgets.** Tree-sitter metrics cover Rust, JavaScript, TypeScript, TSX, Python, and Go. File bytes/lines and per-function cyclomatic, cognitive, Halstead, ABC, parameter, statement, body-line, and nesting ceilings are configurable.
+- **Anti-gaming policy.** Known suppression directives and project-forbidden tokens can be blocking findings on safety-checked roles. The current configuration has no inline approval or suppression exception channel.
+- **Architectural boundaries.** Declarative path-scoped rules inspect import strings, call names, and tokens. This is a local rule scanner, not module resolution or type checking.
+- **Clone debt.** Bounded token windows compare eligible files using verified normalized token sequences. Current clone findings carry a stable content fingerprint that does not include path or line numbers, so rename lineage can be matched during legacy adoption.
+- **Evidence.** Enabled LCOV coverage and JSON mutation reports are required inputs. Empty, missing, unreadable, or malformed required evidence is a blocking finding. Disabled engines do not consume stale report files. Generated-artifact freshness is a separate required check when enabled.
+- **Native mutation.** `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. It is separate from report ingestion.
+- **Orchestration.** `check --all` runs only formatter, linter, and test commands configured by the repository. Hardgate never invents a command or treats an unconfigured test suite as evidence.
 
-### Supported source and inventory extensions
+Invariant checking is enabled by default; with no configured rules it has nothing to report. Set `[invariants].enforce = false` to disable it explicitly.
 
-Tree-sitter parsing currently covers these six parser targets:
+### Inventory and parser support
+
+Tree-sitter parsing covers:
 
 | Family | Extensions |
 | --- | --- |
@@ -32,27 +34,29 @@ Tree-sitter parsing currently covers these six parser targets:
 | Python | `.py` |
 | Go | `.go` |
 
-The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats do not receive a Tree-sitter complexity pass in this revision. Markdown documentation (`.md`) is not part of the built-in inventory.
+The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats remain visible to classification and applicable safety rules but do not receive function metrics. Markdown (`.md`) is not a built-in inventory extension.
 
-## Quickstart
+## Install
 
-### Install
+### npm and package-manager wrappers
+
+The main npm package launches a prebuilt binary and does not require a Rust toolchain for ordinary use:
 
 ```sh
-# npm wrapper (prebuilt binary; no Rust toolchain required)
 npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 
-# Cargo
-cargo install hardgate
+pnpm add -D @tech-byte-frontier/hardgate
+pnpm exec hardgate check --diff
 
-# Source checkout
-git clone https://github.com/Tech-Byte-Frontier/hardgate.git
-cd hardgate
-cargo install --path . --locked
+yarn add -D @tech-byte-frontier/hardgate
+yarn exec hardgate verify
+
+bun add -d @tech-byte-frontier/hardgate
+bunx --no-install hardgate scan src/index.ts
 ```
 
-The npm wrapper publishes six Unix optional packages and selects one by OS, architecture, and (on Linux) libc:
+The wrapper publishes exactly six Unix optional packages and selects one by operating system, architecture, and (on Linux) libc:
 
 | Target | Package |
 | --- | --- |
@@ -63,9 +67,32 @@ The npm wrapper publishes six Unix optional packages and selects one by OS, arch
 | macOS x64 | `hardgate-darwin-x64` |
 | macOS arm64 | `hardgate-darwin-arm64` |
 
-The shell installer currently downloads a release tarball. The stabilization target is to make it use this same six-package matrix, verify the release `SHA256SUMS` before extraction, and accept `HARDGATE_VERSION` (`latest` or a release tag) plus `HARDGATE_INSTALL_DIR`. The release script still needs that checksum/platform alignment before this target can be described as shipped.
+If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it checks the platform package selected by the matrix. On Linux it can fall back between the glibc and musl package when the first candidate is not usable, then to a development binary or `hardgate` on `PATH`. It never downloads a binary at runtime. Unsupported platforms fail closed.
 
-### Initialize policy
+### Cargo and source
+
+```sh
+cargo install hardgate --locked
+
+git clone https://github.com/Tech-Byte-Frontier/hardgate.git
+cd hardgate
+cargo install --path . --locked
+```
+
+### Shell installer
+
+The release installer supports the same six Unix targets. It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | HARDGATE_VERSION=vX.Y.Z sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | \
+  HARDGATE_VERSION=X.Y.Z HARDGATE_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+There is no Windows or Homebrew installer in this contract.
+
+## Initialize a policy
 
 ```sh
 hardgate init --preset strict-agent
@@ -73,44 +100,70 @@ hardgate init --preset balanced
 hardgate init --preset legacy-migration
 ```
 
-`strict-agent` uses the tightest structural budgets. `balanced` scales those budgets. `legacy-migration` currently uses scaled budgets and non-strict evidence handling; it does **not** compare against a merge-base baseline or ratchet debt in this revision. A merge-base baseline/ratchet is a stabilization target, not an enabled feature.
+With no `hardgate.toml`, Hardgate loads the `strict-agent` default bundle. That object is the same bundle rendered by `hardgate init --preset strict-agent`; in particular, coverage and mutation report policies are enabled with their configured floors (coverage also has its default `coverage/lcov.info` path), and the configured orchestration commands are present. A generated strict template therefore requires the project to provide a valid coverage report and mutation report path in TOML before `check` can pass; `verify --mutation-report <path>` can supply the mutation path for that command. If a project wants a structural-only starting point, it must explicitly set those sections to `enabled = false` (or choose `balanced`).
 
-### Common commands
+Preset behavior is deliberate:
+
+- `strict-agent` uses the tight budgets and enables configured coverage/mutation evidence.
+- `balanced` scales structural budgets and disables coverage/mutation report engines.
+- `legacy-migration` scales structural budgets, disables coverage/mutation report engines, and enables the static legacy reference/merge-base ratchet. Its non-strict setting affects ordinary role-evidence fallback; explicitly enabled report, freshness, and reference failures remain blocking.
+- `custom` uses values explicitly present in the file and deserialized defaults.
+
+For a non-custom preset, TOML merging is presence-based. Only keys that are actually present in the file override the preset value; omitted keys retain the preset value. Explicit `false`, empty arrays, and other explicit values are not mistaken for omission.
+
+## Commands and evidence boundaries
 
 ```sh
-# Static engines over discovered files. Enabled report policies are evaluated too.
+# Static engines plus enabled report and generated-freshness evidence.
 hardgate check
 
-# Static engines over git-modified/staged files. Clone matching uses a full
-# repository index and reports only matches touching changed files.
+# Changed/staged static scope. Clone matching uses a full repository index;
+# enabled LCOV is attributed to changed executable source lines.
 hardgate check --diff
 
-# Add configured formatter/linter/test commands to the static run.
+# Add configured formatter, linter, and test commands.
 hardgate check --all
 
-# Explicitly request dead-code analysis (or enable it in hardgate.toml).
+# Opt in to configured dead-code analysis.
 hardgate check --dead-code
 
-# Evaluate static engines plus enabled LCOV and mutation-report evidence.
+# Full static verification plus enabled reports, freshness, and legacy ratchet.
 hardgate verify
 
-# Execute native AST mutation testing; this does not invoke Stryker.
+# Native baseline + AST-mutant execution (not report ingestion).
 hardgate mutate --scoped src/lib.rs --test-cmd 'cargo test'
 
-# Inspect one file, format through [orchestration], or emit agent-friendly data.
 hardgate scan src/lib.rs
 hardgate fmt --check
 hardgate check --format agent
 hardgate check --format json
 ```
 
-`check` and `verify` do not run a test suite or native mutation pass by themselves. `check --all` runs only commands configured under `[orchestration]`; it does not invent a test command. `verify` ingests report files when the corresponding policy is enabled. `mutate` is the command that executes baselines and mutants. A strict run cannot pass while required configured evidence is missing or unreadable.
+The command contract is:
 
-## Agent integration
+| Command | Runs | Does not run |
+| --- | --- | --- |
+| `check` | Static engines, enabled coverage/mutation reports, enabled generated freshness; optional configured dead code | Formatter/linter/test orchestration unless `--all`; native mutation |
+| `check --diff` | Changed/staged static files, full clone index filtered to changed matches, changed executable LCOV, and (when enabled) full-tree legacy static ratchet | Native mutation; orchestration unless `--all` |
+| `check --all` | Everything in `check` plus configured orchestration steps | Native mutation |
+| `verify` | Full-tree static engines, enabled reports/freshness, and legacy static/dead-code ratchet | Orchestration and native mutation |
+| `mutate` | Native unmutated baseline and bounded mutants | Coverage/mutation report ingestion |
 
-Use `--format agent` for compact, actionable Markdown diagnostics. JSON, compact, and summary modes are available on `check`, `scan`, and `verify`; `mutate` supports terminal, agent, and JSON output.
+Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or empty Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path. Disabled evidence engines do not inspect old report files. See [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
 
-`hardgate mcp` is an MCP server over standard input/output. Register the command with an MCP client:
+## Roles, legacy adoption, and clones
+
+The first-class role policies (`roles.source`, `roles.test`, `roles.generated`, `roles.fixture`, and `roles.migration`) are independent. Each can set severity (`error`, `warning`, or `ignore`), file/function ceilings, clone thresholds, and mutation-target eligibility. Built-ins classify generated files and fixtures before ordinary source conventions; ordered `[classification.rules]` may override built-ins except for vendor/build pruning.
+
+Generated freshness is intentionally separate from file-budget exclusions. Excluding a generated path from byte/line checks does not disable its configured freshness command. Freshness failures remain current blocking evidence and are not grandfathered by legacy adoption.
+
+When `[legacy].ratchet = true`, Hardgate resolves the configured reference and merge base, analyzes the baseline static snapshot (plus configured dead code), and compares it with the current static report. Existing non-worsened static debt can be grandfathered as advisories; new or worsened debt remains blocking. Git rename lineage and line-independent clone fingerprints preserve identity across safe renames. Retained findings include changed-file or changed-hunk context. Coverage, mutation, generated freshness, and configured orchestration findings remain current blocking evidence whenever their checks run and are never ratcheted.
+
+## MCP and agent integration
+
+`hardgate mcp` serves MCP over standard input/output. The static-only `hardgate_check(paths?, diff?)` tool routes through the same static gate as the CLI. It accepts optional path strings and a boolean `diff`; it does not run reports, freshness, orchestration, native mutation, or dead code. Invalid configuration, missing paths, empty scopes, unreadable files, parser failures, Git failures, and empty discovery return an explicit failed response instead of a successful empty report.
+
+The other tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. Register the server with an MCP client:
 
 ```json
 {
@@ -123,79 +176,14 @@ Use `--format agent` for compact, actionable Markdown diagnostics. JSON, compact
 }
 ```
 
-The server exposes these static-analysis tools:
-
-- `hardgate_check` — check the repository or supplied paths;
-- `hardgate_scan_file` — inspect one file;
-- `hardgate_get_metrics` — return metrics for a named function.
-
-The MCP surface does not run orchestration, coverage, mutation, or dead-code commands.
-
-## Configuration
-
-`hardgate.toml` is optional. Without a file, Hardgate loads the strict-agent defaults. `hardgate init` writes an explicit template with coverage, mutation, orchestration, and dead-code commands disabled until a project supplies those inputs.
-
-```toml
-[gate]
-name = "project"
-preset = "strict-agent"
-strict = true
-enforce_classified_sources = false
-
-[budgets.files]
-max_bytes = 32768
-
-[budgets.files.max_lines]
-rs = 499
-ts = 400
-tsx = 400
-js = 400
-default = 350
-
-[budgets.functions]
-max_cyclomatic = 10
-max_cognitive = 15
-max_halstead_difficulty = 80.0
-max_parameters = 4
-max_lines = 80
-max_nesting_depth = 4
-
-[anti_gaming]
-disallow_suppressions = true
-
-[clones]
-enabled = true
-min_lines = 5
-min_tokens = 50
-
-[coverage]
-enabled = false
-report = "coverage/lcov.info"
-min_line_percent = 95.0
-max_crap_score = 25.0
-
-[mutation]
-enabled = false
-min_score = 85.0
-timeout_secs = 10
-max_mutants = 30
-```
-
-See the [configuration specification](docs/CONFIGURATION_SPEC.md) for every field and the [CLI reference](docs/CLI_AND_INTEGRATION.md) for command semantics.
-
-## Design notes
-
-Hardgate's value is a deterministic local policy: structural budgets that are hard to game, explicit anti-suppression checks, architecture rules close to the code, bounded clone detection, and evidence that is either present and evaluated or explicitly disabled. It is complementary to language linters, coverage providers, mutation runners, and hosted quality dashboards; it is not a replacement for those tools' language-specific semantics.
-
-Planned stabilization work is intentionally not represented as current behavior: merge-base baseline/ratchet evaluation, diff coverage and new-clone fingerprints, broader consumer fixtures, and release-script checksum/publication checks require their respective implementations to land first.
-
 ## Documentation
 
-- [Vision & Paradigm](docs/VISION_AND_PARADIGM.md)
-- [Configuration Specification](docs/CONFIGURATION_SPEC.md)
-- [CLI Reference & Agent Integration](docs/CLI_AND_INTEGRATION.md)
-- [Existing Landscape](docs/EXISTING_LANDSCAPE.md)
-- [System Architecture](docs/ARCHITECTURE.md)
+- [Vision and paradigm](docs/VISION_AND_PARADIGM.md)
+- [Configuration specification](docs/CONFIGURATION_SPEC.md)
+- [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md)
+- [System architecture](docs/ARCHITECTURE.md)
+- [Existing landscape](docs/EXISTING_LANDSCAPE.md)
+- [X article](docs/X_ARTICLE.md)
 - [API reference](https://docs.rs/hardgate)
 
 ## License

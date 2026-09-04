@@ -1,68 +1,85 @@
 //! # Hardgate
 //!
-//! **Deterministic, policy-driven quality checks for structural budgets, anti-gaming rules, and
-//! local verification evidence.**
+//! **Deterministic, policy-driven quality checks for structural budgets,
+//! anti-gaming rules, and local verification evidence.**
 //!
-//! A run discovers inventory files, classifies repository roles, and applies the engines enabled by
-//! `hardgate.toml`.
+//! Hardgate inventories repository files, classifies their roles, applies the
+//! engines enabled by `hardgate.toml`, and renders one report for people,
+//! agents, or automation. A missing configuration uses the same `strict-agent`
+//! preset object rendered by `hardgate init --preset strict-agent`.
 //!
 //! ## Engines
 //!
-//! * **[`engines::complexity`]** parses Rust (`.rs`), TypeScript (`.ts`, `.mts`, `.cts`, `.tsx`),
-//!   JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Python (`.py`), and Go (`.go`) with Tree-sitter.
-//!   It reports cyclomatic, cognitive, Halstead, ABC, parameter, line, statement, and nesting
-//!   metrics for functions.
-//! * **[`engines::anti_gaming`]** reports configured suppression directives and project-specific
-//!   forbidden tokens; strict defaults disallow the built-in suppression patterns.
-//! * **[`engines::budgets`]** enforces configured file byte/line limits and per-function ceilings.
-//! * **[`engines::clones`]** compares token streams with a rolling hash and reports matching spans,
-//!   honoring configured thresholds and exclusions.
-//! * **[`engines::invariants`]** checks path-scoped rules for forbidden imports, calls, and tokens.
-//! * **[`engines::coverage`]** reads LCOV reports and evaluates configured line, function, and branch
-//!   floors, CRAP scores, and critical paths.
-//! * **[`engines::mutation`]** generates and runs native AST mutations for supported production
-//!   files, using resolved test commands, per-mutant timeouts, and rollback guards; it also
-//!   evaluates configured mutation reports.
-//! * **[`engines::dead_code`]** optionally reports unreferenced files and JavaScript/TypeScript
-//!   exports.
-//! * **[`engines::orchestration`]** optionally runs configured formatter, linter, and test commands.
+//! * **[`engines::complexity`]** parses Rust, JavaScript, TypeScript/TSX,
+//!   Python, and Go with Tree-sitter and reports function metrics.
+//! * **[`engines::anti_gaming`]** finds configured suppression directives and
+//!   forbidden tokens in safety-checked roles.
+//! * **[`engines::budgets`]** enforces file byte/line and function ceilings.
+//! * **[`engines::clones`]** compares normalized token windows in independent
+//!   source, test, and fixture groups. Clone fingerprints exclude paths and
+//!   line numbers so safe rename lineage can preserve identity.
+//! * **[`engines::invariants`]** checks declarative path-scoped import, call,
+//!   and token rules.
+//! * **[`engines::coverage`]** evaluates enabled LCOV floors, CRAP scores,
+//!   critical paths, and changed executable lines in diff mode.
+//! * **[`engines::mutation`]** evaluates configured mutation reports and runs
+//!   native AST mutation through the `mutate` command.
+//! * **[`engines::dead_code`]** optionally reports unreferenced files and
+//!   JavaScript/TypeScript exports.
+//! * **[`engines::generated`]** runs an enabled generated-artifact freshness
+//!   command independently of file-budget exclusions.
+//! * **[`engines::orchestration`]** runs explicitly configured formatter,
+//!   linter, test, and freshness commands with bounded process handling.
 //!
-//! ## CLI behavior
+//! ## Roles and evidence
 //!
-//! `hardgate check` starts with the static engines. `check --all` additionally runs configured
-//! formatter, linter, and test commands. Dead-code analysis can be requested with `--dead-code` or
-//! enabled in configuration; coverage and mutation report checks run when their policies are enabled.
-//! `hardgate verify` runs the static engines and evaluates enabled coverage and mutation reports.
-//! Native mutation execution is a separate `hardgate mutate` command.
+//! Source, test, generated, fixture, and migration roles have independent
+//! severity, budget, clone, and native-mutation policies. Generated freshness
+//! remains a separate current check even when generated paths are excluded
+//! from file budgets. Each enabled coverage, mutation, freshness, and legacy
+//! reference check is required and blocking; empty or missing evidence is
+//! never treated as a pass. A legacy reference/merge-base ratchet may
+//! grandfather non-worsened static and configured dead-code debt, while
+//! current evidence engines remain outside the ratchet.
 //!
-//! ## Example: Loading Configuration and Inspecting a Project
+//! ## Command boundaries
+//!
+//! `check` runs static engines plus enabled report and freshness evaluators.
+//! `check --diff` scopes static files to changed/staged inventory, compares
+//! clones against a full repository index, and evaluates changed executable
+//! LCOV lines; an enabled legacy ratchet performs a full-tree static comparison
+//! with changed-hunk attribution. `check --all` additionally runs configured
+//! formatter, linter, and test commands. `verify` runs full static analysis,
+//! enabled reports/freshness, and the legacy static ratchet without
+//! orchestration or native mutation. `mutate` runs the native unmutated
+//! baseline and AST mutants.
+//!
+//! ## Example: loading configuration and discovering files
 //!
 //! ```no_run
 //! use hardgate::config::HardgateConfig;
-//! use hardgate::discovery::{discover_files, DiscoverOptions};
+//! use hardgate::discovery::{DiscoverOptions, discover_files};
 //! use std::path::Path;
 //!
-//! // Load hardgate.toml or the strict-agent defaults.
 //! let config = HardgateConfig::load_or_default(None).expect("config load");
-//!
-//! // Discover inventory files; budget exclusions remain visible to other engines.
-//! let root = Path::new(".");
 //! let files = discover_files(DiscoverOptions {
-//!     root,
+//!     root: Path::new("."),
 //!     diff_only: false,
 //!     exclusions: &config.budgets.files.exclusions.paths,
-//! }).expect("file discovery");
-//!
-//! println!("Discovered {} inventory files for analysis.", files.len());
+//! })
+//! .expect("file discovery");
+//! println!("Discovered {} inventory files.", files.len());
 //! ```
 //!
-//! ## Model Context Protocol (MCP) server
+//! ## Model Context Protocol (MCP)
 //!
-//! `hardgate mcp` serves MCP over standard input/output. It exposes the following tools:
-//!
-//! * `hardgate_check` checks the repository or supplied paths.
-//! * `hardgate_scan_file` analyzes one file.
-//! * `hardgate_get_metrics` returns metrics for a function symbol in a file.
+//! `hardgate mcp` serves MCP over stdio. The static-only tools are
+//! `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and
+//! `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the
+//! static gate and fails closed on invalid configuration or arguments, empty
+//! scopes/discovery, unreadable or unparsable files, and Git failures. It does
+//! not run coverage, mutation, freshness, dead-code, orchestration, or native
+//! mutation.
 
 pub mod adoption;
 pub mod commands;

@@ -1,60 +1,74 @@
 # Vision and paradigm: deterministic policy for agent-assisted code
 
-Autonomous coding agents make producing plausible code inexpensive. The scarce resource is review time: a maintainer must decide whether a change respects the repository's boundaries and has enough evidence behind it. Hardgate treats that decision as a policy problem, not a prompt-writing problem.
+Autonomous coding agents make plausible code inexpensive. The scarce resource is review time: a maintainer needs to know which files were inspected, which policy applied, and whether the evidence is current. Hardgate treats acceptance as a local policy problem rather than a prompt-writing problem.
 
 ```text
 probabilistic agent -> deterministic local policy -> actionable report
-                         | budgets
-                         | anti-gaming
-                         | architecture
-                         | evidence
+                         | roles and budgets
+                         | anti-gaming and invariants
+                         | evidence and freshness
+                         | explicit command boundaries
 ```
 
-## What agents can optimize around
+## What a green command must mean
 
-An agent asked only for a green command can choose shortcuts that are difficult to review:
+An agent can optimize for an exit code by adding suppression directives, moving code into an unexamined role, copying a nearby implementation, or pointing at a stale report. Hardgate makes those choices visible:
 
-1. add suppression directives instead of addressing a diagnostic;
-2. grow a function or file until the surrounding design is opaque;
-3. copy an existing block rather than discover a shared abstraction;
-4. cross a UI/domain boundary because a direct import is shorter;
-5. present a coverage or mutation number without proving that the report is current.
+1. inventory files receive a role before engines select inputs;
+2. each engine owns its exclusions and emits an advisory when it excludes a file;
+3. enabled evidence is required, and empty or missing inputs fail closed;
+4. disabled evidence is not read merely because an old report remains on disk;
+5. static checks, orchestration, report evaluation, and native mutation have separate commands and proof obligations.
 
-Hardgate does not infer intent. It makes the policy explicit and records what was actually inspected. Suppression findings come from source text; budgets come from measured bytes, lines, and parsed functions; invariant findings come from configured import/call/token rules; clone findings come from verified token windows.
+The result is not a universal quality proof. It is a truthful statement about the configured policy and evidence that this run actually evaluated.
 
 ## The local policy model
 
+### Roles before rules
+
+Source, test, generated, fixture, and migration are first-class roles with independent severity, size/complexity budgets, clone thresholds, and native-mutation eligibility. Configuration/documentation/vendor/unknown roles have narrower built-in handling. Ordered custom classification rules let a repository state its own conventions, while dependency/build pruning remains authoritative.
+
+Generated artifacts illustrate the boundary: they can be inventoried and excluded from handwritten debt checks, but `[generated].freshness_command` is a separate command-backed check. Excluding a generated path from file budgets never disables freshness.
+
 ### Structural budgets
 
-Physical file and function ceilings make growth visible at the point of change. Tree-sitter metrics provide cyclomatic and cognitive contributors, Halstead difficulty, ABC score, parameter count, statement count, body lines, and nesting depth for the supported parser targets. Teams can scale the thresholds with a preset, but a threshold remains a hard policy once configured.
+Physical byte/line ceilings make growth visible at the file boundary. Tree-sitter metrics provide cyclomatic and cognitive complexity, Halstead difficulty, ABC score, parameter count, statement count, function lines, and nesting depth for Rust, JavaScript, TypeScript/TSX, Python, and Go. Presets scale those values; explicit TOML keys override one value without requiring a copied preset.
 
-### Anti-gaming
+### Anti-gaming and architecture
 
-The anti-gaming scanner recognizes common suppression directives and project-forbidden tokens in safety-checked files. A project can disable the scanner, but then it has explicitly chosen not to enforce that evidence. There is no hidden allow-list or inline approval channel in the current configuration.
+The anti-gaming scanner recognizes common compiler, linter, type-checker, and coverage suppression directives plus project-forbidden tokens in safety-checked roles. There is no inline approval channel. Declarative invariant rules inspect imports, calls, and tokens on configured paths. They complement a compiler or dependency graph tool; they do not resolve modules or type-check a project.
 
-### Architecture
+### Evidence as an input contract
 
-Declarative invariant rules keep high-risk calls and imports near the boundary they protect. They are intentionally local checks: a rule says which paths and tokens are forbidden, and the report points to the exact line. They complement a compiler or a dedicated dependency tool rather than pretending to replace either.
+Coverage and mutation report policies are optional only when disabled explicitly. When enabled, coverage requires a non-empty, parseable LCOV report; mutation requires a non-empty, recognized JSON report with outcomes. Missing source records, empty reports, malformed records, and integrity outcomes are blocking regardless of `gate.strict`. A disabled policy ignores stale files.
 
-### Evidence
+`check` evaluates static engines plus enabled reports and generated freshness. `check --diff` scopes static findings to changed/staged files, uses a full clone index, and evaluates changed executable LCOV lines; with a legacy ratchet it runs a full-tree static comparison. `check --all` adds only configured formatter/linter/test commands. `verify` is full static + enabled reports/freshness/legacy static ratchet, without orchestration or native mutation. `mutate` runs a native unmutated baseline and AST mutants.
 
-Coverage and mutation are optional evidence engines. An enabled coverage policy requires an LCOV report; an enabled mutation policy requires a supported JSON report. Strict mode treats missing, unreadable, or malformed evidence as a finding, while disabled policies do not consume old files. check --all can run commands configured by the repository, but Hardgate never claims that an unconfigured test command ran.
+### Legacy adoption without a freeze
 
-Native hardgate mutate adds an executable feedback loop: baseline first, bounded AST mutants, explicit outcome categories, timeout handling, and byte-for-byte restoration. Report evaluation and native execution are separate paths. A Stryker report can be evaluated without Hardgate invoking Stryker; the native runner does not claim Stryker compatibility.
+Existing repositories need a path to stricter policy without hiding new debt. A configured legacy reference resolves a Git merge base and compares baseline static findings (plus configured dead code) with the current report. Non-worsened findings can be grandfathered as advisories; new or worsened findings stay blocking. Changed-file and changed-hunk attribution shows why a retained finding is relevant. Rename lineage and clone fingerprints are path/line independent where identity is safe. Coverage, mutation, generated freshness, and orchestration remain current blocking evidence and are never grandfathered.
 
-### Reviewable output
+### Native mutation feedback
 
-The same report can be rendered for a human terminal, an agent's context window, or automation. A failing location includes the metric or policy, actual value, configured limit, and a refactoring direction. Advisories keep exclusions and partial-gate scope visible without silently turning them into pass criteria.
+`hardgate mutate` is an executable feedback loop, not a score copied from a report. It selects source-role files, resolves an appropriate test command, runs the unmutated baseline first, applies bounded binary/boolean mutations, classifies killed/survived/timeout/compile/runner/equivalent/unviable outcomes, and restores source bytes after each attempt. A failed baseline or no viable mutation point is a failure.
 
-## Presets are policy bundles
+For JavaScript and TypeScript, resolution walks from the source toward the repository root, finds the nearest package and workspace markers, detects npm/pnpm/Yarn/Bun, and infers Jest/Vitest/Playwright from scripts, manifests, or config files. It searches for a matching test file and falls back to the full suite. Local manager commands are used without runtime installation; `--test-cmd` is the explicit escape hatch for project-specific runners.
 
-- strict-agent supplies the tightest structural budgets and strict evidence handling.
-- balanced supplies scaled budgets while retaining ordinary violations as failures.
-- legacy-migration currently scales budgets and reports evidence failures as advisories; it is not a reference-branch ratchet.
-- custom lets a repository state its own values.
+## Presets are explicit policy bundles
 
-A merge-base baseline/ratchet, changed-hunk attribution, and diff-coverage/new-clone evidence are stabilization targets. They are not part of the current preset behavior and must not be described as active until their implementations and regression proofs land.
+- `strict-agent`: tight structural limits and enabled configured coverage/mutation evidence.
+- `balanced`: scaled structural limits with coverage/mutation report engines disabled.
+- `legacy-migration`: scaled structural limits, coverage/mutation report engines disabled, and static reference/merge-base ratchet enabled.
+- `custom`: only explicit values plus deserialized defaults.
+
+The no-config `strict-agent` object is exactly what `hardgate init --preset strict-agent` renders. Presence-based merging means an omitted field inherits the preset; an explicit `false` or empty value remains a deliberate override.
+
+## Reviewable output and agent transport
+
+The same report can be rendered for terminal readers, agent context, or automation. JSON is a single structured report; agent Markdown includes locations, actual values, limits, and recommendations. Advisories keep exclusions, grandfathered debt, and partial command scope visible without turning them into pass criteria.
+
+The MCP server is stdio-only and static-only for `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. The check tool uses the CLI static path and fails closed on invalid configuration/arguments, empty scopes, missing or unreadable files, parser/Git errors, and empty discovery. It does not run reports, freshness, dead code, orchestration, or native mutation.
 
 ## What Hardgate is (and is not)
 
-Hardgate is a deterministic local policy and reporting layer for agent-assisted repositories. It is complementary to language compilers, formatters, linters, coverage providers, mutation runners, clone tools, and hosted dashboards. It does not make a quality claim merely because a command returned zero: the relevant engine must be enabled, its inputs must be present, and its report must be free of violations.
+Hardgate is a deterministic, repository-owned policy and reporting layer for agent-assisted work. It complements compilers, language linters, formatters, coverage providers, mutation runners, clone tools, and hosted quality dashboards. It does not replace their language-specific semantics, infer a test command that was not configured, or claim more evidence than its report contains.

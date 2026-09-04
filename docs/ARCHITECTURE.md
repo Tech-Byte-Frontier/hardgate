@@ -1,85 +1,102 @@
 # System architecture
 
-Hardgate is a local Rust CLI composed of discovery, policy engines, evidence evaluators, command orchestration, and report renderers. The design keeps each source of truth close to the engine that owns it: classification chooses inputs, policy controls whether an engine is enabled, and the report records every blocking finding and advisory.
+Hardgate is a local Rust CLI composed of configuration loading, inventory discovery, role classification, independent policy engines, evidence evaluators, optional command orchestration, and report renderers. Each engine owns its inputs and exclusions; a report keeps blocking findings and advisories visible together.
 
 ```text
 CLI / MCP (stdio)
        |
        v
-configuration + discovery + role classification
+config (preset + presence merge) -> discovery -> role classification
        |
        +--> file/anti-gaming safety
-       +--> Tree-sitter complexity (supported parser targets)
-       +--> declarative invariant checks
-       +--> bounded token-stream clone detector
+       +--> Tree-sitter complexity
+       +--> declarative invariants
+       +--> role-group clone index
        +--> optional dead-code analysis
-       +--> optional LCOV / mutation-report evidence
-       +--> optional formatter/linter/test orchestration
+       +--> enabled LCOV/mutation evidence
+       +--> generated freshness
+       +--> optional formatter/linter/test orchestration (--all)
        |
        v
-aggregated report -> terminal / agent Markdown / JSON / compact / summary
+  report -> terminal / agent Markdown / JSON / compact / summary
 ```
 
-## Discovery and roles
+## Configuration and discovery
 
-The walker inventories configured extensions while pruning dependency and build-output directories. Each file becomes a `ClassifiedFile` with a role and an AST-support flag:
+`HardgateConfig::load_or_default` loads `hardgate.toml`, or the `strict-agent` preset when no file exists. `hardgate init --preset strict-agent` serializes the same object. For non-custom presets, a TOML section/key overlays the preset only when that key is present. Explicit `false` and empty values remain explicit; omitted keys retain preset values.
 
-- `source`: ordinary safety, invariants, complexity when parsed, and native mutation targets;
-- `test`: safety, invariants, complexity, and clone analysis, but never a native mutation target;
-- `fixture`: safety and clone analysis;
-- `generated`: inventory and advisory only;
-- `migration`, `config`, `documentation`, `vendor`, or `unknown`: role-specific handling described in the configuration specification.
+The walker inventories source and text/data extensions while pruning dependency/build directories (`node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, `__pycache__`). User budget or clone exclusions are not discovery pruning. Excluded files remain visible to classification and other engines and produce an advisory from the owning engine.
 
-Parser targets are Rust (`.rs`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`), Python (`.py`), and Go (`.go`). Inventory-only formats remain visible for classification and policy but do not receive function metrics.
+Each file becomes a `ClassifiedFile` with a role and AST-support flag. Ordered custom classification rules run before built-ins; vendor/build pruning cannot be overridden by a user rule.
 
-A configured file-budget exclusion is owned by the file-budget engine. The file is still available to classification, anti-gaming, invariants, parsing, and clone checks, and the report emits an advisory for the exclusion.
+## Role policy
+
+The first-class policy roles are source, test, generated, fixture, and migration. Each has independent severity, file/function thresholds, clone settings, and native mutation eligibility:
+
+- **Source:** safety, invariants, AST complexity when supported, role-group clones, and native mutation targets.
+- **Test:** safety, invariants, AST complexity, role-group clones, never native mutation.
+- **Generated:** inventoried and surfaced as generated; ignored for handwritten complexity/clone debt by default.
+- **Fixture:** safety and role-group clone analysis; no complexity by default.
+- **Migration:** safety checks; no native mutation or clone analysis by default.
+
+Configuration and documentation files remain inventoried for applicable policy, vendor files are pruned, and unknown files can fail when `gate.enforce_classified_sources` is enabled. A role severity of `error`, `warning`, or `ignore` determines whether a role finding blocks, becomes an advisory, or is omitted. Static evidence without a role override falls back to `gate.strict`.
 
 ## Static engines
 
-### Structural budgets and complexity
+### Safety and budgets
 
-The Tree-sitter analyzer parses each supported source/test file and records function name, source span, parameters, statements, nesting, cyclomatic/cognitive contributors, Halstead difficulty, and ABC score. Configured ceilings produce actionable complexity findings. Parsing errors are evidence failures in strict mode rather than an empty-function success.
+File budgets measure raw bytes and physical lines. Function budgets use Tree-sitter metrics for Rust, JavaScript, TypeScript, TSX, Python, and Go: cyclomatic/cognitive complexity, Halstead difficulty, ABC, parameters, statements, function lines, and nesting. Parse and read failures stay evidence failures; they are not converted to zero functions.
 
-File budgets separately enforce raw byte and physical-line ceilings. They apply only to the extension keys configured under `[budgets.files.max_lines]` (or `default`).
+The anti-gaming scanner recognizes common suppression directives and configured forbidden tokens in safety-checked roles. There is no inline approval path.
 
-### Anti-gaming
+### Invariants
 
-The suppression scanner reads safety-checked files line by line. It recognizes known comment/attribute directives and configured literal tokens, while avoiding common occurrences inside strings. When `disallow_suppressions` is enabled, each recognized directive is a violation. The current policy has no per-file approval path.
+Invariant rules compile `from`/`exclude` globs and inspect import strings, call names, and literal tokens line by line. They intentionally do not resolve modules or type-check a project.
 
-### Architectural invariants
+The invariant engine is enabled by default; an empty rule list is a no-op, while `enforce = false` disables it explicitly.
 
-Invariant rules are compiled from `from`/ `exclude` globs and optional import, call, and token patterns. The checker strips line comments and scans source lines, preserving string content where needed to avoid false positives. It does not resolve modules or type-check the project.
+### Clones
 
-### Clone detection
+The clone detector tokenizes non-comment code, normalizes literal values, indexes bounded windows with a rolling hash, verifies token sequences, and coalesces adjacent matches. Source, test, and fixture files are analyzed in independent role groups with independently configurable thresholds. In diff mode the index contains the full discovered repository; only pairs touching a changed file are emitted.
 
-The clone engine lexes non-comment source lines into identifiers, punctuation, normalized numbers, and normalized strings. It indexes fixed-size token windows with a rolling hash, verifies token sequences after hash matches, coalesces adjacent windows, and caps repeated-hash work. It analyzes source, test, and fixture roles unless the clone policy excludes a path.
+Each violation carries a stable fingerprint computed from normalized token kinds. Paths and physical line numbers are excluded from that fingerprint. Git rename lineage can therefore map a current path to its baseline path without changing clone identity.
 
 ## Evidence engines
 
-### LCOV and CRAP
+### Coverage
 
-When `[coverage].enabled` is true, the coverage scorer parses LCOV records and computes global line/function/branch percentages, per-function CRAP, and optional critical-path line coverage. A missing report, malformed record, or missing source record is evidence failure under strict policy. No coverage provider is executed by Hardgate.
+When `[coverage].enabled` is true, the LCOV parser evaluates global line/function/branch floors, function CRAP scores, critical paths, and source records. In `check --diff`, changed Git lines are filtered to AST-supported source-role files and only changed executable lines are scored. Missing, empty, unreadable, malformed, or incomplete required coverage evidence is blocking regardless of `gate.strict`.
 
 ### Mutation reports
 
-When `[mutation].enabled` is true, `check` and `verify` parse configured JSON reports in Stryker, cargo-mutants, or generic outcome-count shapes. Scores use killed divided by killed plus survived. Missing reports and parser errors are recorded as evidence failures; timeout handling follows `reject_timeouts`, while compile, runner, and unviable outcomes remain integrity findings.
+When `[mutation].enabled` is true, `check` and `verify` evaluate Stryker-shaped, cargo-mutants-shaped, or generic outcome-count JSON. Scores use killed divided by killed plus survived. Empty reports/outcomes, missing paths, parse errors, and no viable outcomes fail. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings; report evidence is always current and never ratcheted.
 
-### Native mutation run
+### Generated freshness
 
-The `mutate` command uses the AST mutation generator over source-role files. It resolves a per-file test command, runs unmutated baselines first, applies one binary/boolean mutation at a time, executes the command with a timeout, and restores the original bytes through a verification guard. A baseline failure, restoration failure, or zero viable mutants fails the command. This runner is separate from Stryker and from mutation-report ingestion.
+`[generated]` is a separate command-backed evidence engine. When enabled, a non-empty `freshness_command` runs in `check` and `verify` with its own timeout. Excluding generated files from file budgets does not disable freshness. Missing command, timeout, runner failure, or non-zero exit is current blocking evidence and is outside legacy ratchet matching.
 
-## Orchestration and reports
+### Legacy adoption
 
-`check --all` invokes configured formatter, linter, and test commands sequentially through the orchestration engine. `fmt` invokes the configured formatter (or its check command in check-only mode). A repository-local `node_modules/.bin` is prepended to child-process `PATH); command output and non-zero exits become orchestration findings.
+With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference and merge base, loads a baseline snapshot, runs the static gate (plus configured dead code), and compares current findings. Existing non-worsened static debt can be grandfathered as advisories. New or worsened static debt remains blocking; retained findings are annotated with changed-file or changed-hunk context. Budget, suppression, complexity, invariant, clone, and dead-code findings participate. Coverage, mutation, generated freshness, and orchestration findings remain current blocking evidence and are not grandfathered. Missing reference, merge base, snapshot, or baseline analysis is a blocking evidence failure.
 
-The diagnostic aggregator freezes scan counts, duration, advisories, and violations. It renders terminal output for people, structured Markdown for agents, JSON for automation, or compact/summary views. A report passes only when its violation collections are empty.
+## Command boundaries
 
-## MCP transport
+- `check`: static engines, enabled reports, freshness, and optional configured dead code.
+- `check --diff`: changed/staged static scope, full-index clone matching, changed executable LCOV, and full-tree legacy static ratchet when enabled.
+- `check --all`: `check` plus configured formatter/linter/test orchestration.
+- `verify`: full static tree plus enabled reports, freshness, and legacy static/dead-code ratchet; no orchestration or native mutation.
+- `mutate`: native unmutated baseline and AST mutants; no report ingestion.
 
-The embedded MCP server reads newline-delimited or `Content-Length`-framed JSON-RPC from standard input and writes responses to standard output. It exposes `hardgate_check`, `hardgate_scan_file`, and `hardgate_get_metrics` for static analysis. It does not run orchestration, coverage, mutation, or dead-code analysis.
+Orchestration commands run sequentially from the repository root; a local `node_modules/.bin` is prepended to `PATH`. An unconfigured command is not inferred. A configured command that is empty, unavailable, times out, or exits non-zero yields an orchestration finding.
 
-## Concurrency and evidence boundaries
+## Native mutation and JavaScript resolution
 
-File reads and per-file static analysis use Rayon where safe; each engine owns its input policy and exclusions. Discovery errors, Git errors in diff mode, unreadable files, parser errors, and required-report failures are never converted into an empty success under strict policy. Disabled evidence engines do not inspect their configured stale files.
+Native mutation is source-role only. It resolves a test command per file, runs a passing unmutated baseline, mutates one AST point at a time, classifies outcomes, and verifies byte-for-byte restoration. A failed baseline or zero viable mutants fails before a green result.
 
-**Planned stabilization (not implemented here):** merge-base baseline/ratchet evaluation, changed-hunk coverage attribution, diff-coverage/new-clone fingerprints, and release artifact verification require separate implementation and regression proofs before they can be documented as active architecture.
+For JS/TS files, the resolver walks ancestor directories, chooses the nearest `package.json`, identifies workspace markers, and detects npm, pnpm, Yarn, or Bun from `packageManager`/lock/config markers (npm is the fallback). Jest, Vitest, and Playwright are inferred from the test script, manifest keys, or ancestor config files. The package/config root is the command working directory; the supplied repository root is the final fallback. A matching sibling or nested `<stem>.test|spec>` file is selected when reliable, otherwise the full suite runs. Manager-local `test`/`run`/`exec` commands are used, with `npm exec --offline` and `bun x --no-install` preventing runtime installation. `--test-cmd` overrides this resolver.
+
+## Reports and MCP
+
+The report aggregator records scan/function counts, violations, advisories, and duration, then renders terminal, agent Markdown, JSON, compact, or summary output. CLI empty discovery is an advisory while enabled evidence still runs; malformed or missing required evidence remains blocking. The MCP check surface rejects empty discovery before producing a report.
+
+The MCP server uses newline-delimited or `Content-Length`-framed JSON-RPC over stdio. Its tools are `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the static gate only, accepts optional paths and `diff`, and fails closed on invalid config/arguments, empty scopes, unreadable or unparsable files, Git failures, and empty discovery. MCP does not run coverage, mutation, freshness, dead code, orchestration, or native mutation.

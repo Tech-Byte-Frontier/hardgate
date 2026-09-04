@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
 [![GitHub Release](https://img.shields.io/github/v/release/Tech-Byte-Frontier/hardgate)](https://github.com/Tech-Byte-Frontier/hardgate/releases)
 
-The npm wrapper launches a prebuilt Hardgate Rust binary. Install it as a development dependency and run the CLI with your package manager:
+The npm wrapper launches a prebuilt Hardgate Rust binary. Install it as a development dependency and invoke it with the package manager used by the project:
 
 ```sh
 npm i -D @tech-byte-frontier/hardgate
@@ -13,35 +13,50 @@ pnpm add -D @tech-byte-frontier/hardgate
 pnpm exec hardgate check --diff
 
 yarn add -D @tech-byte-frontier/hardgate
-yarn dlx hardgate verify
+yarn exec hardgate verify
 
 bun add -d @tech-byte-frontier/hardgate
-bunx hardgate scan src/index.ts
+bunx --no-install hardgate scan src/index.ts
 ```
 
-The wrapper's optional dependencies are the six published Unix platform packages:
+## Platform packages and fallback
 
-- hardgate-linux-x64 (glibc)
-- hardgate-linux-x64-musl
-- hardgate-linux-arm64 (glibc)
-- hardgate-linux-arm64-musl
-- hardgate-darwin-x64
-- hardgate-darwin-arm64
+The wrapper publishes exactly six Unix optional dependencies:
 
-The launcher selects the package for the current platform and libc, checks discovered package candidates are machine binaries, and falls back between Linux libc variants or a development/Cargo/PATH binary when available. It does not fetch a binary at runtime. Set HARDGATE_BINARY to use an explicit binary path.
+- `hardgate-linux-x64` (glibc)
+- `hardgate-linux-x64-musl`
+- `hardgate-linux-arm64` (glibc)
+- `hardgate-linux-arm64-musl`
+- `hardgate-darwin-x64`
+- `hardgate-darwin-arm64`
+
+If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it resolves the package for the current OS/architecture and Linux libc. If a Linux optional package is unavailable, the other Linux libc package is tried. The launcher then permits a development Cargo binary or a real `hardgate` executable on `PATH`. It checks candidate file types so wrapper scripts do not recurse, and it never downloads a binary at runtime. Normal installs on unsupported platforms fail closed.
+
+Use `HARDGATE_BINARY=/absolute/path/to/hardgate` when the project supplies its own binary. Optional dependencies must not be omitted when the prebuilt package is expected; if they are omitted, use the explicit or Cargo/PATH fallback.
 
 ## Command scope
 
-The wrapper forwards arguments to the Rust CLI. In particular:
+The wrapper forwards arguments to the Rust CLI:
 
 ```sh
-npx hardgate check                 # static engines plus enabled report checks
+npx hardgate check                 # static engines + enabled reports/freshness
+npx hardgate check --diff          # changed static scope + full-index clones + diff LCOV
 npx hardgate check --all           # add configured formatter/linter/test commands
-npx hardgate verify                # evaluate enabled LCOV/mutation reports
-npx hardgate mutate --diff         # execute the native AST mutation loop
+npx hardgate verify                # full static + enabled evidence/ratchet
+npx hardgate mutate --diff        # native baseline + AST mutants
 npx hardgate init --preset strict-agent
 ```
 
-Coverage and mutation report checks are disabled in the initialized template until a project supplies report paths. A strict enabled policy fails when required evidence is missing or malformed; a disabled policy does not consume stale files. Native mutate is separate from Stryker report evaluation.
+No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation.
+
+For JavaScript/TypeScript mutation targets, Hardgate resolves npm, pnpm, Yarn, or Bun from the nearest package/workspace markers and infers Jest, Vitest, or Playwright from scripts, package metadata, or config files. It selects a matching test file where possible and otherwise runs the full suite. `--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
+
+## MCP
+
+The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is `hardgate_check(paths?, diff?)`; companion tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. The check tool does not run reports, freshness, orchestration, dead code, or native mutation and returns explicit failures for invalid config, empty scopes, missing/unreadable files, parser/Git errors, and empty discovery.
+
+## Release identity
+
+The shell installer and release archives support the same six Unix artifacts. Archives are listed in `SHA256SUMS`; `BUILD-METADATA.json` records target, package, version, and full source commit. Installation verifies the unique checksum entry before extraction and requires the binary's exact `hardgate VERSION (COMMIT)` identity. `HARDGATE_VERSION` accepts `latest`, `vX.Y.Z`, or `X.Y.Z`; `HARDGATE_INSTALL_DIR` chooses the destination. Windows and Homebrew are not supported by this package contract.
 
 Full documentation lives in the repository's [README](https://github.com/Tech-Byte-Frontier/hardgate) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/main/docs).
