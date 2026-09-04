@@ -309,3 +309,49 @@ ratchet = true
             })
     );
 }
+
+#[test]
+fn malformed_legacy_baseline_blocks_check_and_verify_without_grandfathering_debt() {
+    let root = tempdir("cli-legacy-malformed-baseline");
+    let mut config = base_config(
+        r#"[legacy]
+reference_branch = "HEAD"
+ratchet = true
+"#,
+    );
+    config = config.replace("max_bytes = 100000", "max_bytes = 1");
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "malformed baseline"]);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+
+    for command in ["check", "verify"] {
+        let report = failed_report(&root, command);
+        assert!(
+            report["budget_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|violation| violation["file"] == "src/lib.rs"),
+            "current static debt must remain when the baseline is malformed"
+        );
+        assert!(
+            report["orchestration_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|violation| violation["step"] == "legacy-ratchet"),
+            "malformed baseline must block the ratchet"
+        );
+        assert!(
+            report["advisories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|advisory| advisory.as_str().unwrap().contains("grandfathered=0")),
+            "malformed baseline must not grandfather any debt"
+        );
+    }
+}

@@ -196,6 +196,17 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
             );
         }
     }
+    if !baseline.orchestration_violations.is_empty() {
+        record_legacy_failure(
+            current,
+            &summary.reference,
+            format!(
+                "Legacy baseline static analysis produced {} required evidence violation(s); cannot apply the ratchet.",
+                baseline.orchestration_violations.len()
+            ),
+        );
+        return summary;
+    }
     let outcome = apply_legacy_ratchet(current, &baseline, &evidence.change_set);
     summary.grandfathered = outcome.grandfathered;
     summary.retained = outcome.retained;
