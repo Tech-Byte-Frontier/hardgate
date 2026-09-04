@@ -279,6 +279,10 @@ mod tests {
         let config = HardgateConfig::default();
         let contents = vec![
             (PathBuf::from("src/unused.rs"), "fn unused() {}".to_string()),
+            (
+                PathBuf::from("src/generated/unused.ts"),
+                "export function generatedOnly() {}".to_string(),
+            ),
             (PathBuf::from("package.json"), "{}".to_string()),
             (PathBuf::from("Cargo.toml"), "[package]".to_string()),
         ];
@@ -301,6 +305,12 @@ mod tests {
                 .dead_code_violations
                 .iter()
                 .all(|finding| finding.file.as_path() != Path::new("Cargo.toml"))
+        );
+        assert!(
+            report
+                .dead_code_violations
+                .iter()
+                .all(|finding| finding.file.as_path() != Path::new("src/generated/unused.ts"))
         );
     }
 }
