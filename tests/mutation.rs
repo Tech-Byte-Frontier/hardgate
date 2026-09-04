@@ -6,7 +6,7 @@ mod mutations;
 
 use fs::tempdir;
 use hardgate::config::MutationConfig;
-use hardgate::engines::{AstMutationGenerator, MutationGatekeeper};
+use hardgate::engines::{AstMutationGenerator, MutationGatekeeper, MutationStats};
 use mutations::has_mutation;
 use std::path::Path;
 
@@ -71,5 +71,82 @@ fn test_mutation_report_parsers() {
     let generic = tmp.join("gen.json");
     std::fs::write(&generic, r#"{"killed": 9, "survived": 1, "timeout": 0}"#).unwrap();
     assert!(keeper.evaluate_report(&generic).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_zero_viable_score_is_zero() {
+    assert_eq!(MutationStats::default().score_percent(), 0.0);
+
+    let stats = MutationStats {
+        unviable: 2,
+        equivalent: 1,
+        total: 3,
+        ..Default::default()
+    };
+    assert_eq!(stats.score_percent(), 0.0);
+}
+
+#[test]
+fn test_mutation_report_rejects_malformed_and_empty_shapes() {
+    let tmp = tempdir("mut-invalid");
+    let keeper = gatekeeper();
+    for (name, content) in [
+        ("empty.json", ""),
+        ("object.json", "{}"),
+        ("stryker-empty.json", r#"{"files": {}}"#),
+        (
+            "stryker-mutants-empty.json",
+            r#"{"files": {"a.rs": {"mutants": []}}}"#,
+        ),
+        ("cargo-empty.json", r#"{"outcomes": []}"#),
+        (
+            "cargo-malformed.json",
+            r#"{"outcomes": [{"summary": "unknown"}]}"#,
+        ),
+        ("generic-malformed.json", r#"{"killed": "one"}"#),
+    ] {
+        let path = tmp.join(name);
+        std::fs::write(&path, content).unwrap();
+        assert!(
+            keeper.evaluate_report(&path).is_err(),
+            "{name} should be rejected"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_mutation_report_integrity_outcomes_are_blocking() {
+    let tmp = tempdir("mut-integrity");
+    let keeper = gatekeeper();
+    let report = tmp.join("stryker.json");
+    std::fs::write(
+        &report,
+        r#"{"files":{"a.rs":{"mutants":[
+            {"status":"Killed"},
+            {"status":"CompileError"},
+            {"status":"RuntimeError"},
+            {"status":"Equivalent"},
+            {"status":"NoCoverage"}
+        ]}}}"#,
+    )
+    .unwrap();
+    let violations = keeper.evaluate_report(&report).unwrap();
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Mutation Compile Errors")
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Mutation Runner Errors")
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Mutation Unviable Mutants")
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }

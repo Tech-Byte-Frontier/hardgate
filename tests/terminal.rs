@@ -12,6 +12,9 @@ fn tally(killed: usize, survived: usize) -> MutationStats {
         killed,
         survived,
         timeout: 0,
+        compile_error: 0,
+        runner_error: 0,
+        equivalent: 0,
         unviable: 0,
         total: killed + survived,
     }
@@ -33,6 +36,8 @@ fn execution(line: usize, outcome: MutantOutcome) -> MutantExecutionResult {
         outcome,
         duration_ms: 5,
         command: "cargo test".to_string(),
+        diagnostic: String::new(),
+        source_restored: true,
     }
 }
 

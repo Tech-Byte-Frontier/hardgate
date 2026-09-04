@@ -19,7 +19,8 @@ pub use coverage::{CoverageScorer, CoverageViolation};
 pub use dead_code::{DeadCodeAnalyzer, DeadCodeViolation};
 pub use invariants::{InvariantViolation, InvariantsChecker};
 pub use mutation::{
-    AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationGatekeeper,
-    MutationStats, MutationViolation, NativeMutationRunner,
+    AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
+    MutantExecutionResult, MutantOutcome, MutationGatekeeper, MutationStats, MutationViolation,
+    NativeMutationRunner,
 };
 pub use orchestration::{OrchestrationEngine, OrchestrationResult, OrchestrationViolation};
