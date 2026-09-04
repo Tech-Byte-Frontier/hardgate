@@ -8,7 +8,7 @@ use crate::discovery::{
 use crate::engines::{
     AntiGamingScanner, BudgetViolation, CloneDetector, ComplexityAnalyzer, ComplexityViolation,
     FunctionMetrics, InvariantViolation, InvariantsChecker, SuppressionViolation,
-    check_file_budgets,
+    check_content_budgets,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -24,9 +24,45 @@ pub type StaticGateOutcome = Option<(
     Vec<FunctionMetrics>,
 )>;
 
+/// Static-gate artifacts computed directly from a Git snapshot's contents.
+pub type StaticSnapshotOutcome = (
+    GateReport,
+    Vec<PathBuf>,
+    Vec<(PathBuf, String)>,
+    Vec<FunctionMetrics>,
+);
+
 /// Run the static gate over the whole discovered tree.
 pub fn run_static_gate(config: &HardgateConfig, diff: bool) -> Result<StaticGateOutcome> {
     run_static_gate_scoped(config, diff, &[])
+}
+
+pub fn run_static_gate_snapshot(
+    config: &HardgateConfig,
+    contents: &[(PathBuf, String)],
+) -> Result<StaticSnapshotOutcome> {
+    let root = Path::new(".");
+    let files: Vec<PathBuf> = contents.iter().map(|(path, _)| path.clone()).collect();
+    let classified: Vec<(ClassifiedFile, String)> = contents
+        .iter()
+        .map(|(path, content)| (ClassifiedFile::new(path), content.clone()))
+        .collect();
+    let mut report = GateReport::new(config.gate.name.clone());
+    let roles: Vec<ClassifiedFile> = classified.iter().map(|(file, _)| file.clone()).collect();
+    record_classification_gaps(&roles, config, root, &mut report);
+    let functions = analyze_loaded_files(&classified, config, root, &mut report);
+    let read_results = contents.to_vec();
+    run_clone_analysis(
+        CloneRun {
+            read_results: &read_results,
+            changed_files: &[],
+            config,
+            root,
+            diff: false,
+        },
+        &mut report,
+    )?;
+    Ok((report, files, read_results, functions))
 }
 
 /// Run the static gate, optionally scoped to explicit files or directories.
@@ -131,6 +167,17 @@ fn run_file_analysis(
     root: &Path,
     report: &mut GateReport,
 ) -> (Vec<(PathBuf, String)>, Vec<FunctionMetrics>) {
+    let (read_results, analyzed_inputs) = read_classified_files(files, config, report);
+    let functions = analyze_loaded_files(&analyzed_inputs, config, root, report);
+    (read_results, functions)
+}
+
+fn analyze_loaded_files(
+    analyzed_inputs: &[(ClassifiedFile, String)],
+    config: &HardgateConfig,
+    root: &Path,
+    report: &mut GateReport,
+) -> Vec<FunctionMetrics> {
     let anti_gaming = AntiGamingScanner::new(&config.anti_gaming);
     let invariants = InvariantsChecker::new(&config.invariants.rules);
     let context = FileAnalysisContext {
@@ -139,10 +186,8 @@ fn run_file_analysis(
         anti_gaming: &anti_gaming,
         invariants: &invariants,
     };
-    let (read_results, analyzed_inputs) = read_classified_files(files, config, report);
-    let analyzed = analyze_inputs(&analyzed_inputs, &context);
-    let functions = merge_file_analysis(analyzed, config, report);
-    (read_results, functions)
+    let analyzed = analyze_inputs(analyzed_inputs, &context);
+    merge_file_analysis(analyzed, config, report)
 }
 
 type ReadInputs = (Vec<(PathBuf, String)>, Vec<(ClassifiedFile, String)>);
@@ -231,7 +276,7 @@ fn analyze_safety(
     let path = &file.path;
     let safety = file.role.receives_safety_checks();
     let budgets = if safety {
-        check_file_budgets(path, &context.config.budgets.files, context.root)
+        check_content_budgets(path, content, &context.config.budgets.files, context.root)
     } else {
         Vec::new()
     };

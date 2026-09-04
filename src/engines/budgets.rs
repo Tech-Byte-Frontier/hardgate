@@ -15,6 +15,20 @@ pub struct BudgetViolation {
 }
 
 pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Vec<BudgetViolation> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    check_content_budgets(path, &content, budgets, root)
+}
+
+/// Check an already-loaded file, allowing Git snapshots to use the exact
+/// same byte/line policy without materializing historical blobs on disk.
+pub fn check_content_budgets(
+    path: &Path,
+    content: &str,
+    budgets: &FileBudgets,
+    root: &Path,
+) -> Vec<BudgetViolation> {
     let mut violations = Vec::new();
 
     let rel_path = path.strip_prefix(root).unwrap_or(path);
@@ -25,28 +39,24 @@ pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Ve
         return violations;
     }
 
-    // 1. Check max_bytes
     if let Some(max_bytes) = budgets.max_bytes {
-        if let Ok(metadata) = fs::metadata(path) {
-            let file_size = metadata.len() as usize;
-            if file_size > max_bytes as usize {
-                violations.push(BudgetViolation {
-                    file: rel_path.to_path_buf(),
-                    metric: "File Byte Size".to_string(),
-                    actual: file_size,
-                    limit: max_bytes as usize,
-                    message: format!(
-                        "File size {} bytes exceeds hard limit of {} bytes ({:.1} KiB)",
-                        file_size,
-                        max_bytes,
-                        max_bytes as f64 / 1024.0
-                    ),
-                });
-            }
+        let file_size = content.len();
+        if file_size > max_bytes as usize {
+            violations.push(BudgetViolation {
+                file: rel_path.to_path_buf(),
+                metric: "File Byte Size".to_string(),
+                actual: file_size,
+                limit: max_bytes as usize,
+                message: format!(
+                    "File size {} bytes exceeds hard limit of {} bytes ({:.1} KiB)",
+                    file_size,
+                    max_bytes,
+                    max_bytes as f64 / 1024.0
+                ),
+            });
         }
     }
 
-    // 2. Check max_lines
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let limit = budgets
         .max_lines
@@ -55,20 +65,18 @@ pub fn check_file_budgets(path: &Path, budgets: &FileBudgets, root: &Path) -> Ve
         .or_else(|| budgets.max_lines.get("default").copied());
 
     if let Some(max_lines) = limit {
-        if let Ok(content) = fs::read_to_string(path) {
-            let physical_lines = content.lines().count();
-            if physical_lines > max_lines {
-                violations.push(BudgetViolation {
-                    file: rel_path.to_path_buf(),
-                    metric: format!("Physical Lines (.{})", ext),
-                    actual: physical_lines,
-                    limit: max_lines,
-                    message: format!(
-                        "File has {} physical lines, exceeding budget of {} lines for .{}",
-                        physical_lines, max_lines, ext
-                    ),
-                });
-            }
+        let physical_lines = content.lines().count();
+        if physical_lines > max_lines {
+            violations.push(BudgetViolation {
+                file: rel_path.to_path_buf(),
+                metric: format!("Physical Lines (.{})", ext),
+                actual: physical_lines,
+                limit: max_lines,
+                message: format!(
+                    "File has {} physical lines, exceeding budget of {} lines for .{}",
+                    physical_lines, max_lines, ext
+                ),
+            });
         }
     }
 

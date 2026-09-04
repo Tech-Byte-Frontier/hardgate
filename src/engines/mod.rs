@@ -10,7 +10,7 @@ pub mod orchestration;
 pub mod util;
 
 pub use anti_gaming::{AntiGamingScanner, SuppressionViolation};
-pub use budgets::{BudgetViolation, check_file_budgets};
+pub use budgets::{BudgetViolation, check_content_budgets, check_file_budgets};
 pub use clones::{CloneDetector, CloneViolation};
 pub use complexity::{
     ComplexityAnalyzer, ComplexityContribution, ComplexityViolation, FunctionMetrics,
