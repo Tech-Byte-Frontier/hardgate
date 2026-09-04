@@ -5,10 +5,15 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "process/cleanup.rs"]
+mod cleanup;
+
+use cleanup::terminate_process_tree;
+pub(crate) use cleanup::timeout_scope;
+
 const MAX_STREAM_BYTES: usize = 32 * 1024;
 const MAX_OUTPUT_BYTES: usize = MAX_STREAM_BYTES * 2;
 const OUTPUT_READ_TIMEOUT: Duration = Duration::from_secs(1);
-const TERMINATION_GRACE: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub(crate) enum ProcessOutcome {
@@ -17,9 +22,35 @@ pub(crate) enum ProcessOutcome {
     Failed { message: String, output: String },
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct CommandRoots<'a> {
+    pub working_dir: &'a Path,
+    pub package_root: &'a Path,
+    pub workspace_root: &'a Path,
+}
+
+impl<'a> CommandRoots<'a> {
+    pub(crate) fn single(root: &'a Path) -> Self {
+        Self {
+            working_dir: root,
+            package_root: root,
+            workspace_root: root,
+        }
+    }
+}
+
 pub(crate) fn run_command(
     tokens: &[String],
     root: &Path,
+    timeout: Duration,
+    operation: &str,
+) -> ProcessOutcome {
+    run_command_with_roots(tokens, CommandRoots::single(root), timeout, operation)
+}
+
+pub(crate) fn run_command_with_roots(
+    tokens: &[String],
+    roots: CommandRoots<'_>,
     timeout: Duration,
     operation: &str,
 ) -> ProcessOutcome {
@@ -29,7 +60,7 @@ pub(crate) fn run_command(
             output: String::new(),
         };
     };
-    let mut child = match spawn_command(tokens, root) {
+    let mut child = match spawn_command(tokens, roots) {
         Ok(child) => child,
         Err(error) => {
             return ProcessOutcome::Failed {
@@ -63,26 +94,38 @@ pub(crate) fn append_output(existing: String, extra: String) -> String {
     truncate_output(combined)
 }
 
-fn spawn_command(tokens: &[String], root: &Path) -> std::io::Result<Child> {
+fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<Child> {
     let mut command = Command::new(&tokens[0]);
     command
         .args(&tokens[1..])
-        .current_dir(root)
+        .current_dir(roots.working_dir)
+        .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    prepend_local_bin(&mut command, root);
+    prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
     command.spawn()
 }
 
-fn prepend_local_bin(command: &mut Command, root: &Path) {
-    let local_bin = root.join("node_modules").join(".bin");
-    if !local_bin.is_dir() {
+fn prepend_local_bins(command: &mut Command, package_root: &Path, workspace_root: &Path) {
+    let mut local_bins = Vec::new();
+    for root in [package_root, workspace_root] {
+        let local_bin = root.join("node_modules").join(".bin");
+        if local_bin.is_dir()
+            && !local_bins
+                .iter()
+                .any(|item: &std::path::PathBuf| item == &local_bin)
+        {
+            local_bins.push(local_bin);
+        }
+    }
+    if local_bins.is_empty() {
         return;
     }
-    let mut paths =
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
-    paths.insert(0, local_bin);
+    let mut paths = local_bins;
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     if let Ok(path) = std::env::join_paths(paths) {
         command.env("PATH", path);
     }
@@ -202,53 +245,56 @@ enum ProcessWait {
 fn wait_for_child(child: &mut Child, timeout: Duration, operation: &str) -> ProcessWait {
     let start = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return ProcessWait::Exited(status),
-            Ok(None) if start.elapsed() >= timeout => {
-                terminate_process_tree(child);
-                return ProcessWait::Timeout;
+        match poll_child(child) {
+            ChildPoll::Exited(status) => return ProcessWait::Exited(status),
+            ChildPoll::Running if start.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(10));
             }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                terminate_process_tree(child);
-                return ProcessWait::Error(format!(
-                    "Failed to wait for {operation} command: {error}"
-                ));
-            }
+            ChildPoll::Running => return timeout_process(child, operation),
+            ChildPoll::Error(error) => return wait_error_process(child, operation, error),
         }
     }
 }
 
-#[cfg(unix)]
-fn terminate_process_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    signal_process_group("-TERM", &pid);
-    wait_for_termination(child, TERMINATION_GRACE);
-    signal_process_group("-KILL", &pid);
-    let _ = child.wait();
+enum ChildPoll {
+    Exited(ExitStatus),
+    Running,
+    Error(std::io::Error),
 }
 
-#[cfg(unix)]
-fn signal_process_group(signal: &str, pid: &str) {
-    let _ = Command::new("kill")
-        .args([signal, "--", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-#[cfg(not(unix))]
-fn terminate_process_tree(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn wait_for_termination(child: &mut Child, grace: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < grace {
-        if child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(10));
+fn poll_child(child: &mut Child) -> ChildPoll {
+    match child.try_wait() {
+        Ok(Some(status)) => ChildPoll::Exited(status),
+        Ok(None) => ChildPoll::Running,
+        Err(error) => ChildPoll::Error(error),
     }
+}
+
+fn timeout_process(child: &mut Child, operation: &str) -> ProcessWait {
+    match terminate_process_tree(child) {
+        Ok(()) => ProcessWait::Timeout,
+        Err(error) => ProcessWait::Error(format!(
+            "{operation} command timed out, but {scope} cleanup failed: {error}",
+            scope = timeout_scope()
+        )),
+    }
+}
+
+fn wait_error_process(
+    child: &mut Child,
+    operation: &str,
+    wait_error: std::io::Error,
+) -> ProcessWait {
+    let cleanup = terminate_process_tree(child);
+    let message = match cleanup {
+        Ok(()) => format!(
+            "Failed to wait for {operation} command: {wait_error}; {scope} cleanup completed",
+            scope = timeout_scope()
+        ),
+        Err(cleanup_error) => format!(
+            "Failed to wait for {operation} command: {wait_error}; {scope} cleanup failed: {cleanup_error}",
+            scope = timeout_scope()
+        ),
+    };
+    ProcessWait::Error(message)
 }

@@ -73,6 +73,12 @@ fn timeout_terminates_descendant_processes() {
         .expect_err("hung command must time out");
     assert!(result.output.contains("timed out"), "{result:?}");
     assert!(result.output.contains("process group"), "{result:?}");
+    assert!(
+        result
+            .output
+            .contains("terminated and absence was verified"),
+        "{result:?}"
+    );
 
     let child_pid = std::fs::read_to_string(&pid_file).unwrap();
     let child_pid = child_pid.trim().parse::<i32>().unwrap();

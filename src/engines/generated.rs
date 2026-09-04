@@ -44,10 +44,7 @@ pub fn run_generated_freshness(
         root,
     );
     Some(result.map_err(|mut violation| {
-        if violation.exit_code.is_none()
-            && violation.output.contains("Command timed out after")
-            && violation.output.contains("process group terminated")
-        {
+        if violation.exit_code.is_none() && violation.output.contains("Command timed out after") {
             violation.recommendation = format!(
                 "Fix the generated freshness command or raise generated.timeout_secs above {timeout_secs} only when the longer runtime is expected."
             );

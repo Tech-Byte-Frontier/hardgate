@@ -114,6 +114,12 @@ fn freshness_timeout_is_a_violation() {
     assert!(violation.output.contains("timed out"), "{violation:?}");
     assert!(violation.output.contains("process group"), "{violation:?}");
     assert!(
+        violation
+            .output
+            .contains("terminated and absence was verified"),
+        "{violation:?}"
+    );
+    assert!(
         violation.recommendation.contains("generated.timeout_secs"),
         "{violation:?}"
     );

@@ -1,5 +1,5 @@
 use crate::config::OrchestrationConfig;
-use crate::engines::process::{ProcessOutcome, append_output, run_command};
+use crate::engines::process::{ProcessOutcome, append_output, run_command, timeout_scope};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -231,7 +231,10 @@ fn timeout_violation(
         exit_code: None,
         output: append_output(
             output,
-            format!("Command timed out after {timeout_secs}s; process group terminated."),
+            format!(
+                "Command timed out after {timeout_secs}s; {scope} terminated and absence was verified.",
+                scope = timeout_scope()
+            ),
         ),
         recommendation: format!(
             "Fix the {} command or raise orchestration.timeout_secs above {timeout_secs} only when the longer runtime is expected.",

@@ -1,6 +1,10 @@
 use super::generator::AstMutant;
 use super::js::{ResolvedTestPlan, TestSelection, is_javascript_path, resolve_js_test_plan};
 use super::process::{CommandExecution, execute_with_timeout};
+use crate::engines::process::{CommandRoots, append_output};
+#[path = "restore.rs"]
+mod restore;
+use restore::{atomic_replace, ensure_regular_file, restore_and_verify};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,27 +64,34 @@ pub struct NativeMutationRunner {
 struct RollbackGuard<'a> {
     file_path: &'a Path,
     original_bytes: &'a [u8],
+    original_permissions: std::fs::Permissions,
     restored: bool,
 }
 
 impl<'a> RollbackGuard<'a> {
-    fn new(file_path: &'a Path, original_bytes: &'a [u8]) -> Self {
+    fn new(
+        file_path: &'a Path,
+        original_bytes: &'a [u8],
+        original_permissions: std::fs::Permissions,
+    ) -> Self {
         Self {
             file_path,
             original_bytes,
+            original_permissions,
             restored: false,
         }
     }
 
     fn restore(&mut self) -> std::io::Result<()> {
-        fs::write(self.file_path, self.original_bytes)?;
-        if fs::read(self.file_path)? != self.original_bytes {
-            return Err(std::io::Error::other(
-                "restored source bytes differ from the original",
-            ));
+        let result = restore_and_verify(
+            self.file_path,
+            self.original_bytes,
+            &self.original_permissions,
+        );
+        if result.is_ok() {
+            self.restored = true;
         }
-        self.restored = true;
-        Ok(())
+        result
     }
 }
 
@@ -89,12 +100,20 @@ impl Drop for RollbackGuard<'_> {
         if self.restored {
             return;
         }
-        if let Err(error) = fs::write(self.file_path, self.original_bytes) {
-            eprintln!(
-                "hardgate: failed to restore {} after mutation: {}",
+        match restore_and_verify(
+            self.file_path,
+            self.original_bytes,
+            &self.original_permissions,
+        ) {
+            Ok(()) => eprintln!(
+                "hardgate: restored and verified {} after mutation during cleanup",
+                self.file_path.display()
+            ),
+            Err(error) => eprintln!(
+                "hardgate: failed to restore and verify {} after mutation: {}",
                 self.file_path.display(),
                 error
-            );
+            ),
         }
     }
 }
@@ -142,15 +161,44 @@ impl NativeMutationRunner {
         }
     }
 
+    fn full_suite_timeout_error(&self, plan: &ResolvedTestPlan) -> Option<String> {
+        (plan.full_suite_timeout_required() && self.timeout_secs < plan.recommended_timeout_secs)
+            .then(|| {
+                format!(
+                    "JavaScript full-suite test execution requires timeout_secs >= {}s (configured {}s)",
+                    plan.recommended_timeout_secs, self.timeout_secs
+                )
+            })
+    }
+
     /// Run one mutant and restore the source before returning.
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
         let target_path = resolve_target_path(&mutant.file, root);
         let plan = self.resolve_test_plan(&mutant.file, root);
+        if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
+            let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
+            result.source_restored = true;
+            return result;
+        }
+        let original_permissions = match ensure_regular_file(&target_path) {
+            Ok(permissions) => permissions,
+            Err(error) => {
+                return mutant_error(
+                    mutant,
+                    &plan.command,
+                    start,
+                    format!(
+                        "Failed to inspect mutation target '{}': {error}",
+                        target_path.display()
+                    ),
+                );
+            }
+        };
         let original_bytes = match fs::read(&target_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                return failed_mutant(
+                return mutant_error(
                     mutant,
                     &plan.command,
                     start,
@@ -161,7 +209,7 @@ impl NativeMutationRunner {
                 );
             }
         };
-        let mut guard = RollbackGuard::new(&target_path, &original_bytes);
+        let mut guard = RollbackGuard::new(&target_path, &original_bytes, original_permissions);
         let mut execution = apply_and_execute(
             self,
             MutationInput {
@@ -171,14 +219,15 @@ impl NativeMutationRunner {
                 plan: &plan,
             },
         );
-        let source_restored = guard.restore().is_ok();
-        if !source_restored {
+        let restore_error = guard.restore().err();
+        let source_restored = restore_error.is_none();
+        if let Some(error) = restore_error {
             execution.outcome = MutantOutcome::RunnerError;
             append_diagnostic(
                 &mut execution.diagnostic,
                 format!(
-                    "Failed to restore and verify original source '{}'.",
-                    target_path.display()
+                    "Failed to restore and verify original source '{}': {error}",
+                    target_path.display(),
                 ),
             );
         }
@@ -197,10 +246,20 @@ impl NativeMutationRunner {
     pub fn run_baseline(&self, file: &Path, root: &Path) -> BaselineExecutionResult {
         let start = Instant::now();
         let plan = self.resolve_test_plan(file, root);
-        let execution = execute_with_timeout(&plan.command, &plan.working_dir, self.timeout_secs);
+        if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
+            return BaselineExecutionResult {
+                file: file.to_path_buf(),
+                outcome: BaselineOutcome::RunnerError,
+                duration_ms: start.elapsed().as_millis(),
+                command: plan.command,
+                diagnostic,
+            };
+        }
+        let execution =
+            execute_with_timeout(&plan.command, process_roots(&plan), self.timeout_secs);
         BaselineExecutionResult {
             file: file.to_path_buf(),
-            outcome: baseline_outcome(execution.outcome),
+            outcome: baseline_outcome(&execution),
             duration_ms: start.elapsed().as_millis(),
             command: plan.command,
             diagnostic: baseline_diagnostic(execution.diagnostic, &plan.selection),
@@ -245,6 +304,14 @@ fn plain_plan(command: String, root: &Path, selection: TestSelection) -> Resolve
     }
 }
 
+fn process_roots(plan: &ResolvedTestPlan) -> CommandRoots<'_> {
+    CommandRoots {
+        working_dir: &plan.working_dir,
+        package_root: &plan.package_root,
+        workspace_root: &plan.workspace_root,
+    }
+}
+
 struct MutationInput<'a> {
     mutant: &'a AstMutant,
     target_path: &'a Path,
@@ -254,9 +321,15 @@ struct MutationInput<'a> {
 
 fn apply_and_execute(runner: &NativeMutationRunner, input: MutationInput<'_>) -> CommandExecution {
     match apply_mutant_bytes(input.target_path, input.mutant, input.original_bytes) {
-        Ok(()) => execute_with_timeout(
+        Ok(ApplyResult::Equivalent) => CommandExecution {
+            outcome: MutantOutcome::Equivalent,
+            diagnostic: "Replacement is byte-for-byte equivalent to the original source text."
+                .to_string(),
+            status: None,
+        },
+        Ok(ApplyResult::Applied) => execute_with_timeout(
             &input.plan.command,
-            &input.plan.working_dir,
+            process_roots(input.plan),
             runner.timeout_secs,
         ),
         Err(error) => CommandExecution {
@@ -266,11 +339,12 @@ fn apply_and_execute(runner: &NativeMutationRunner, input: MutationInput<'_>) ->
                 MutantOutcome::RunnerError
             },
             diagnostic: format!("Failed to apply mutant {}: {error}", input.mutant.id),
+            status: None,
         },
     }
 }
 
-fn failed_mutant(
+fn mutant_error(
     mutant: &AstMutant,
     command: &str,
     start: Instant,
@@ -286,15 +360,20 @@ fn failed_mutant(
     }
 }
 
-fn baseline_outcome(outcome: MutantOutcome) -> BaselineOutcome {
-    match outcome {
-        MutantOutcome::Survived => BaselineOutcome::Passed,
-        MutantOutcome::Timeout => BaselineOutcome::Timeout,
-        MutantOutcome::RunnerError => BaselineOutcome::RunnerError,
-        MutantOutcome::Killed
-        | MutantOutcome::CompileError
-        | MutantOutcome::Equivalent
-        | MutantOutcome::Unviable => BaselineOutcome::Failed,
+fn baseline_outcome(execution: &CommandExecution) -> BaselineOutcome {
+    match execution.status.as_ref() {
+        Some(status) if status.success() => BaselineOutcome::Passed,
+        Some(status) if status_is_runner_error(status) => BaselineOutcome::RunnerError,
+        Some(_) => BaselineOutcome::Failed,
+        None if execution.outcome == MutantOutcome::Timeout => BaselineOutcome::Timeout,
+        None => BaselineOutcome::RunnerError,
+    }
+}
+
+fn status_is_runner_error(status: &std::process::ExitStatus) -> bool {
+    match status.code() {
+        None => true,
+        Some(code) => matches!(code, 126 | 127) || code >= 128,
     }
 }
 
@@ -304,8 +383,7 @@ fn baseline_diagnostic(mut diagnostic: String, selection: &TestSelection) -> Str
         if diagnostic.is_empty() {
             return note.to_string();
         }
-        diagnostic.push('\n');
-        diagnostic.push_str(note);
+        diagnostic = append_output(diagnostic, note.to_string());
     }
     diagnostic
 }
@@ -322,7 +400,7 @@ fn apply_mutant_bytes(
     target_path: &Path,
     mutant: &AstMutant,
     original_bytes: &[u8],
-) -> std::io::Result<()> {
+) -> std::io::Result<ApplyResult> {
     if mutant.start_byte > mutant.end_byte || mutant.end_byte > original_bytes.len() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -335,20 +413,25 @@ fn apply_mutant_bytes(
             "mutant original text does not match the source bytes",
         ));
     }
+    if mutant.replacement.as_bytes() == &original_bytes[mutant.start_byte..mutant.end_byte] {
+        return Ok(ApplyResult::Equivalent);
+    }
     let mut mutated = Vec::with_capacity(
         original_bytes.len() - (mutant.end_byte - mutant.start_byte) + mutant.replacement.len(),
     );
     mutated.extend_from_slice(&original_bytes[..mutant.start_byte]);
     mutated.extend_from_slice(mutant.replacement.as_bytes());
     mutated.extend_from_slice(&original_bytes[mutant.end_byte..]);
-    fs::write(target_path, mutated)
+    let permissions = ensure_regular_file(target_path)?;
+    atomic_replace(target_path, &mutated, &permissions).map(|()| ApplyResult::Applied)
+}
+
+#[derive(Clone, Copy)]
+enum ApplyResult {
+    Applied,
+    Equivalent,
 }
 
 fn append_diagnostic(existing: &mut String, extra: String) {
-    if existing.is_empty() {
-        existing.push_str(&extra);
-    } else {
-        existing.push('\n');
-        existing.push_str(&extra);
-    }
+    *existing = append_output(std::mem::take(existing), extra);
 }

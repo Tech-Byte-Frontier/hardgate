@@ -375,8 +375,21 @@ fn run_mutant_batch(
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let res = runner.run_mutant(mutant, root);
+        let source_restored = res.source_restored;
+        let diagnostic = res.diagnostic.clone();
         print_outcome(&mut stats, res.outcome);
         results.push(res);
+        if !source_restored {
+            return Err(anyhow::anyhow!(
+                "mutation source restoration failed for `{}`; aborting before later mutants:\n{}",
+                mutant.file.display(),
+                if diagnostic.trim().is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.trim()
+                }
+            ));
+        }
     }
 
     Ok((results, stats))
