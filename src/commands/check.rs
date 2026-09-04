@@ -1,7 +1,9 @@
+use super::role_policy::{apply_dead_code_findings, classify_file};
 use super::static_gate::run_static_gate_scoped;
 use super::verify::{verify_coverage, verify_mutation};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
+use crate::discovery::FileRole;
 use crate::engines::{DeadCodeAnalyzer, OrchestrationEngine};
 use anyhow::Result;
 use colored::*;
@@ -56,7 +58,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     let root = Path::new(".");
     let config = HardgateConfig::load_or_default(None)?;
 
-    let Some((mut report, files, read_results, functions)) =
+    let Some((mut report, _files, read_results, functions)) =
         run_static_gate_scoped(&config, opts.diff, &opts.paths)?
     else {
         print_empty_discovery(opts.diff, !opts.paths.is_empty());
@@ -64,10 +66,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     };
 
     if opts.dead_code || config.analysis.dead_code.enabled {
-        let analyzer = DeadCodeAnalyzer::new(&config.analysis.dead_code);
-        report
-            .dead_code_violations
-            .extend(analyzer.analyze(&files, &read_results, root));
+        run_dead_code_analysis(&config, &read_results, root, &mut report)?;
     }
 
     if config.coverage.enabled {
@@ -108,6 +107,46 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         },
     );
     Ok(())
+}
+
+fn run_dead_code_analysis(
+    config: &HardgateConfig,
+    read_results: &[(PathBuf, String)],
+    root: &Path,
+    report: &mut GateReport,
+) -> Result<()> {
+    let mut graph_files = Vec::new();
+    let mut graph_contents = Vec::new();
+    let mut graph_roles = Vec::new();
+    for (path, content) in read_results {
+        let classified = classify_file(path, config)?;
+        if !classified.ast_supported
+            || !matches!(
+                classified.role,
+                FileRole::Source | FileRole::Test | FileRole::Generated | FileRole::Fixture
+            )
+        {
+            continue;
+        }
+        graph_files.push(path.clone());
+        graph_contents.push((path.clone(), content.clone()));
+        graph_roles.push(classified);
+    }
+    let analyzer = DeadCodeAnalyzer::new(&config.analysis.dead_code);
+    let findings = analyzer.analyze(&graph_files, &graph_contents, root);
+    for finding in findings {
+        let role = graph_roles
+            .iter()
+            .find(|file| relative_path(&file.path, root) == finding.file)
+            .map(|file| file.role)
+            .unwrap_or(FileRole::Unknown);
+        apply_dead_code_findings(report, config, role, vec![finding]);
+    }
+    Ok(())
+}
+
+fn relative_path<'a>(path: &'a Path, root: &Path) -> &'a Path {
+    path.strip_prefix(root).unwrap_or(path)
 }
 
 fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> Option<String> {
@@ -224,5 +263,44 @@ pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
     output_report_with_opts(report, emission.opts);
     if !report.passed {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_dead_code_analysis;
+    use crate::config::HardgateConfig;
+    use crate::diagnostics::GateReport;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn dead_code_graph_ignores_config_but_reports_unreferenced_source() {
+        let config = HardgateConfig::default();
+        let contents = vec![
+            (PathBuf::from("src/unused.rs"), "fn unused() {}".to_string()),
+            (PathBuf::from("package.json"), "{}".to_string()),
+            (PathBuf::from("Cargo.toml"), "[package]".to_string()),
+        ];
+        let mut report = GateReport::new("test".to_string());
+        run_dead_code_analysis(&config, &contents, Path::new("."), &mut report).unwrap();
+        assert!(
+            report
+                .dead_code_violations
+                .iter()
+                .any(|finding| finding.file.as_path() == Path::new("src/unused.rs"))
+        );
+        assert!(
+            report
+                .dead_code_violations
+                .iter()
+                .all(|finding| finding.file.as_path() != Path::new("package.json"))
+        );
+        assert!(
+            report
+                .dead_code_violations
+                .iter()
+                .all(|finding| finding.file.as_path() != Path::new("Cargo.toml"))
+        );
     }
 }

@@ -8,6 +8,7 @@ pub mod fmt;
 pub mod init;
 pub mod mutate;
 mod mutation_output;
+mod role_policy;
 pub mod scan;
 mod static_gate;
 pub mod verify;

@@ -1,4 +1,10 @@
 use super::evidence::{EvidenceFailure, record_evidence_failure};
+use super::role_policy::{
+    CloneRun, RoleEvidence, apply_budget_findings, apply_complexity_findings,
+    apply_invariant_findings, apply_suppression_findings, classify_file, classify_files,
+    effective_file_budgets, effective_function_budgets, record_role_evidence_failure,
+    run_clone_analysis,
+};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::{
@@ -6,9 +12,8 @@ use crate::discovery::{
     filter_files_by_paths,
 };
 use crate::engines::{
-    AntiGamingScanner, BudgetViolation, CloneDetector, ComplexityAnalyzer, ComplexityViolation,
-    FunctionMetrics, InvariantViolation, InvariantsChecker, SuppressionViolation,
-    check_content_budgets,
+    AntiGamingScanner, BudgetViolation, ComplexityAnalyzer, ComplexityViolation, FunctionMetrics,
+    InvariantViolation, InvariantsChecker, SuppressionViolation, check_content_budgets,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -45,8 +50,8 @@ pub fn run_static_gate_snapshot(
     let files: Vec<PathBuf> = contents.iter().map(|(path, _)| path.clone()).collect();
     let classified: Vec<(ClassifiedFile, String)> = contents
         .iter()
-        .map(|(path, content)| (ClassifiedFile::new(path), content.clone()))
-        .collect();
+        .map(|(path, content)| Ok((classify_file(path, config)?, content.clone())))
+        .collect::<Result<_>>()?;
     let mut report = GateReport::new(config.gate.name.clone());
     let roles: Vec<ClassifiedFile> = classified.iter().map(|(file, _)| file.clone()).collect();
     record_classification_gaps(&roles, config, root, &mut report);
@@ -84,8 +89,7 @@ pub fn run_static_gate_scoped(
 
     let mut report = GateReport::new(config.gate.name.clone());
     record_budget_exclusion_advisory(&discovery.excluded_files, &mut report);
-    let classified: Vec<ClassifiedFile> =
-        files.iter().map(|path| ClassifiedFile::new(path)).collect();
+    let classified = classify_files(&files, config)?;
     record_classification_gaps(&classified, config, root, &mut report);
     let (read_results, all_functions) = run_file_analysis(&classified, config, root, &mut report);
     run_clone_analysis(
@@ -109,54 +113,6 @@ fn record_budget_exclusion_advisory(excluded_files: &[PathBuf], report: &mut Gat
     let noun = if count == 1 { "file" } else { "files" };
     report.advisories.push(format!(
         "{} {} excluded from file budget checks via hardgate.toml.",
-        count, noun
-    ));
-}
-
-struct CloneRun<'a> {
-    read_results: &'a [(PathBuf, String)],
-    changed_files: &'a [PathBuf],
-    config: &'a HardgateConfig,
-    root: &'a Path,
-    diff: bool,
-}
-
-fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -> Result<()> {
-    if !input.config.clones.enabled {
-        return Ok(());
-    }
-    let detector = CloneDetector::new(&input.config.clones);
-    let clone_inputs = if input.diff {
-        full_clone_inputs(input.config, input.root, report)?
-    } else {
-        clone_eligible_inputs(input.read_results)
-    };
-    record_clone_exclusion_advisory(&detector, &clone_inputs, input.root, report);
-    if clone_inputs.len() < 2 {
-        return Ok(());
-    }
-    let mut violations = detector.detect_clones(&clone_inputs, input.root);
-    if input.diff {
-        violations
-            .retain(|violation| clone_touches_files(violation, input.changed_files, input.root));
-    }
-    report.clone_violations.extend(violations);
-    Ok(())
-}
-
-fn record_clone_exclusion_advisory(
-    detector: &CloneDetector,
-    inputs: &[(PathBuf, String)],
-    root: &Path,
-    report: &mut GateReport,
-) {
-    let count = detector.count_excluded_files(inputs, root);
-    if count == 0 {
-        return;
-    }
-    let noun = if count == 1 { "file" } else { "files" };
-    report.advisories.push(format!(
-        "{} {} excluded from clone detection via hardgate.toml.",
         count, noun
     ));
 }
@@ -212,10 +168,11 @@ fn read_classified_files(
                 read_results.push((file.path.clone(), content.clone()));
                 analyzed_inputs.push((file, content));
             }
-            Err(error) => record_evidence_failure(
+            Err(error) => record_role_evidence_failure(
                 report,
-                config.gate.strict,
-                EvidenceFailure {
+                RoleEvidence {
+                    config,
+                    role: file.role,
                     step: "read-source",
                     target: &file.path,
                     message: format!("Unable to read classified file: {error}"),
@@ -226,13 +183,16 @@ fn read_classified_files(
     (read_results, analyzed_inputs)
 }
 
-type FileAnalysis = (
-    Vec<BudgetViolation>,
-    Vec<SuppressionViolation>,
-    Vec<InvariantViolation>,
-    Vec<FunctionMetrics>,
-    Vec<ComplexityViolation>,
-);
+struct FileAnalysis {
+    role: FileRole,
+    path: PathBuf,
+    budgets: Vec<BudgetViolation>,
+    suppressions: Vec<SuppressionViolation>,
+    invariants: Vec<InvariantViolation>,
+    functions: Vec<FunctionMetrics>,
+    complexity: Vec<ComplexityViolation>,
+    parse_error: Option<String>,
+}
 
 struct FileAnalysisContext<'a> {
     config: &'a HardgateConfig,
@@ -244,7 +204,7 @@ struct FileAnalysisContext<'a> {
 fn analyze_inputs(
     inputs: &[(ClassifiedFile, String)],
     context: &FileAnalysisContext<'_>,
-) -> Vec<(FileAnalysis, Option<(PathBuf, String)>)> {
+) -> Vec<FileAnalysis> {
     inputs
         .par_iter()
         .map(|(file, content)| analyze_one(file, content, context))
@@ -255,13 +215,19 @@ fn analyze_one(
     file: &ClassifiedFile,
     content: &str,
     context: &FileAnalysisContext<'_>,
-) -> (FileAnalysis, Option<(PathBuf, String)>) {
+) -> FileAnalysis {
     let (budgets, suppressions, invariants) = analyze_safety(file, content, context);
-    let (functions, violations, parse_error) = analyze_complexity(file, content, context);
-    (
-        (budgets, suppressions, invariants, functions, violations),
-        parse_error,
-    )
+    let (functions, complexity, parse_error) = analyze_complexity(file, content, context);
+    FileAnalysis {
+        role: file.role,
+        path: file.path.clone(),
+        budgets,
+        suppressions,
+        invariants,
+        functions,
+        complexity,
+        parse_error: parse_error.map(|(_, error)| error),
+    }
 }
 
 fn analyze_safety(
@@ -276,7 +242,8 @@ fn analyze_safety(
     let path = &file.path;
     let safety = file.role.receives_safety_checks();
     let budgets = if safety {
-        check_content_budgets(path, content, &context.config.budgets.files, context.root)
+        let policy = effective_file_budgets(context.config, file.role);
+        check_content_budgets(path, content, &policy, context.root)
     } else {
         Vec::new()
     };
@@ -324,30 +291,31 @@ fn analyze_complexity(
             );
         }
     };
-    let violations =
-        ComplexityAnalyzer::check_violations(&functions, &context.config.budgets.functions);
+    let policy = effective_function_budgets(context.config, file.role);
+    let violations = ComplexityAnalyzer::check_violations(&functions, &policy);
     (functions, violations, None)
 }
 
 fn merge_file_analysis(
-    analyzed: Vec<(FileAnalysis, Option<(PathBuf, String)>)>,
+    analyzed: Vec<FileAnalysis>,
     config: &HardgateConfig,
     report: &mut GateReport,
 ) -> Vec<FunctionMetrics> {
     let mut all_functions = Vec::new();
-    for ((budgets, suppressions, invariants, functions, violations), parse_error) in analyzed {
-        report.budget_violations.extend(budgets);
-        report.suppression_violations.extend(suppressions);
-        report.invariant_violations.extend(invariants);
-        report.complexity_violations.extend(violations);
-        all_functions.extend(functions);
-        if let Some((path, error)) = parse_error {
-            record_evidence_failure(
+    for file in analyzed {
+        apply_budget_findings(report, config, file.role, file.budgets);
+        apply_suppression_findings(report, config, file.role, file.suppressions);
+        apply_invariant_findings(report, config, file.role, file.invariants);
+        apply_complexity_findings(report, config, file.role, file.complexity);
+        all_functions.extend(file.functions);
+        if let Some(error) = file.parse_error {
+            record_role_evidence_failure(
                 report,
-                config.gate.strict,
-                EvidenceFailure {
+                RoleEvidence {
+                    config,
+                    role: file.role,
                     step: "parse-source",
-                    target: &path,
+                    target: &file.path,
                     message: error,
                 },
             );
@@ -394,10 +362,11 @@ fn record_classification_gap(
             },
         );
     } else if matches!(file.role, FileRole::Source | FileRole::Migration) && !file.ast_supported {
-        record_evidence_failure(
+        record_role_evidence_failure(
             report,
-            config.gate.strict,
-            EvidenceFailure {
+            RoleEvidence {
+                config,
+                role: file.role,
                 step: "unsupported-source",
                 target: rel,
                 message: format!(
@@ -407,67 +376,6 @@ fn record_classification_gap(
             },
         );
     }
-}
-
-fn clone_eligible_inputs(read_results: &[(PathBuf, String)]) -> Vec<(PathBuf, String)> {
-    read_results
-        .iter()
-        .filter(|(path, _)| ClassifiedFile::new(path).role.receives_clone_analysis())
-        .cloned()
-        .collect()
-}
-
-fn full_clone_inputs(
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) -> Result<Vec<(PathBuf, String)>> {
-    let discovery = discover_files_with_exclusions(DiscoverOptions {
-        root,
-        diff_only: false,
-        exclusions: &config.budgets.files.exclusions.paths,
-    })?;
-    let files: Vec<ClassifiedFile> = discovery
-        .files
-        .iter()
-        .map(|path| ClassifiedFile::new(path))
-        .filter(|file| file.role.receives_clone_analysis())
-        .collect();
-    Ok(read_files_only(&files, config, report))
-}
-
-fn read_files_only(
-    files: &[ClassifiedFile],
-    config: &HardgateConfig,
-    report: &mut GateReport,
-) -> Vec<(PathBuf, String)> {
-    let mut read = Vec::new();
-    for file in files {
-        match fs::read_to_string(&file.path) {
-            Ok(content) => read.push((file.path.clone(), content)),
-            Err(error) => record_evidence_failure(
-                report,
-                config.gate.strict,
-                EvidenceFailure {
-                    step: "read-clone-index",
-                    target: &file.path,
-                    message: format!("Unable to read file required by full clone index: {error}"),
-                },
-            ),
-        }
-    }
-    read
-}
-
-fn clone_touches_files(
-    violation: &crate::engines::CloneViolation,
-    files: &[PathBuf],
-    root: &Path,
-) -> bool {
-    files.iter().any(|path| {
-        let rel = path.strip_prefix(root).unwrap_or(path);
-        rel == violation.file_a || rel == violation.file_b
-    })
 }
 
 /// Shared single-file analysis used by `scan` and the MCP server.
@@ -481,7 +389,21 @@ pub struct AnalyzeInput<'a> {
 }
 
 pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec<FunctionMetrics> {
-    let classified = ClassifiedFile::new(input.path);
+    let classified = match classify_file(input.path, input.config) {
+        Ok(file) => file,
+        Err(error) => {
+            record_evidence_failure(
+                report,
+                true,
+                EvidenceFailure {
+                    step: "classify-source",
+                    target: input.path,
+                    message: format!("Unable to classify file: {error}"),
+                },
+            );
+            return Vec::new();
+        }
+    };
     record_classification_gaps(
         std::slice::from_ref(&classified),
         input.config,
