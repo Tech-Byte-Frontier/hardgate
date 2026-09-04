@@ -313,6 +313,46 @@ fn mutate_json_disabled_policy_is_an_explicit_success_noop() {
 }
 
 #[test]
+fn mutate_json_overrides_terminal_when_both_flags_are_set() {
+    let disabled = Fixture::new(
+        "mutate-json-precedence-disabled",
+        BASE_CONFIG,
+        Some(("src/lib.rs", "pub fn answer() -> i32 { 42 }\n")),
+    );
+    let output = run(
+        disabled.as_ref(),
+        &["mutate", "--json", "--format", "terminal"],
+    );
+    let noop = assert_noop(&output, "policy", "disabled");
+    assert!(noop["message"].as_str().unwrap().contains("disabled"));
+
+    let baseline_failure = Fixture::new(
+        "mutate-json-precedence-error",
+        &mutation_config(0.0),
+        Some((
+            "src/lib.rs",
+            "pub fn accepts(value: bool) -> bool { value == true }\n",
+        )),
+    );
+    let output = run(
+        baseline_failure.as_ref(),
+        &[
+            "mutate",
+            "--scoped",
+            "src/lib.rs",
+            "--test-cmd",
+            "sh -c 'exit 1'",
+            "--max-mutants",
+            "1",
+            "--json",
+            "--format",
+            "terminal",
+        ],
+    );
+    assert_baseline_failure(&output, "test-failure", "unmutated baseline");
+}
+
+#[test]
 fn mutate_json_diff_without_changed_targets_is_an_explicit_success_noop() {
     let fixture = Fixture::new(
         "mutate-diff-noop",

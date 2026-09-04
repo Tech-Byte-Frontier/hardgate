@@ -310,7 +310,7 @@ fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
 }
 
 fn resolve_mutate_format(format: Option<String>, json: bool) -> Option<String> {
-    if json && format.is_none() {
+    if json {
         return Some("json".to_string());
     }
     format
