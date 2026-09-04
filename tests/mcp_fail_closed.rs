@@ -6,6 +6,67 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+const ROLE_POLICY_CONFIG: &str = r#"
+[gate]
+name = "mcp-role-policy"
+preset = "custom"
+strict = true
+
+[budgets.files]
+max_bytes = 100000
+
+[budgets.files.max_lines]
+default = 10000
+rs = 10000
+
+[budgets.functions]
+max_cyclomatic = 100
+max_cognitive = 100
+max_parameters = 20
+max_lines = 1000
+max_nesting_depth = 20
+
+[anti_gaming]
+disallow_suppressions = true
+
+[clones]
+enabled = false
+
+[classification]
+[[classification.rules]]
+glob = "src/**"
+role = "test"
+
+[roles.test]
+severity = "warning"
+max_cyclomatic = 1
+"#;
+
+const CLONE_CONFIG: &str = r#"
+[gate]
+preset = "custom"
+strict = true
+
+[budgets.files]
+max_bytes = 100000
+
+[budgets.files.max_lines]
+default = 10000
+rs = 10000
+
+[budgets.functions]
+max_cyclomatic = 100
+max_cognitive = 100
+max_parameters = 20
+max_lines = 1000
+max_nesting_depth = 20
+
+[clones]
+enabled = true
+min_lines = 3
+min_tokens = 10
+"#;
+
 fn call_tool(root: &Path, name: &str, arguments: Value) -> Value {
     let request = json!({
         "jsonrpc": "2.0",
@@ -38,6 +99,30 @@ fn assert_tool_error(root: &Path, arguments: Value, expected: &str) {
     assert!(tool_error_text(&response).contains(expected));
 }
 
+fn write(root: &Path, path: &str, content: &str) {
+    let target = root.join(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(target, content).unwrap();
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn init_repo(root: &Path) {
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "hardgate@example.invalid"]);
+    git(root, &["config", "user.name", "Hardgate Test"]);
+    git(root, &["config", "commit.gpgsign", "false"]);
+}
+
 #[test]
 fn scoped_missing_file_is_an_explicit_tool_error() {
     let root = fs::tempdir("mcp-missing");
@@ -46,13 +131,64 @@ fn scoped_missing_file_is_an_explicit_tool_error() {
 }
 
 #[test]
-fn unreadable_scoped_path_is_not_reported_as_a_pass() {
+fn empty_scoped_directory_is_not_reported_as_a_pass() {
     let root = fs::tempdir("mcp-unreadable");
     std::fs::create_dir(root.join("not-a-file")).unwrap();
     assert_tool_error(
         &root,
         json!({ "paths": ["not-a-file"] }),
-        "Unable to read required",
+        "No source files matched",
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn read_failure_is_reported_as_a_failed_gate() {
+    let root = fs::tempdir("mcp-read-failure");
+    let path = root.join("src/broken.rs");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, [0xff]).unwrap();
+
+    let response = call_tool(
+        &root,
+        "hardgate_check",
+        json!({ "paths": ["src/broken.rs"] }),
+    );
+    assert_ne!(response["result"]["isError"], true);
+    let text = tool_error_text(&response);
+    assert!(text.contains("Hardgate Failed"), "{text}");
+    assert!(text.contains("read-source"), "{text}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn parser_failure_is_reported_as_a_failed_gate() {
+    let root = fs::tempdir("mcp-parser-failure");
+    write(&root, "src/broken.rs", "fn broken( {\n");
+
+    let response = call_tool(
+        &root,
+        "hardgate_check",
+        json!({ "paths": ["src/broken.rs"] }),
+    );
+    assert_ne!(response["result"]["isError"], true);
+    let text = tool_error_text(&response);
+    assert!(text.contains("Hardgate Failed"), "{text}");
+    assert!(text.contains("parse-source"), "{text}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn invalid_config_is_an_explicit_tool_error() {
+    let root = fs::tempdir("mcp-config-failure");
+    write(&root, "hardgate.toml", "[gate\n");
+    write(&root, "src/lib.rs", "fn okay() {}\n");
+    assert_tool_error(
+        &root,
+        json!({ "paths": ["src/lib.rs"] }),
+        "Failed to load hardgate.toml",
     );
     let _ = std::fs::remove_dir_all(root);
 }
@@ -72,5 +208,66 @@ fn diff_discovery_requires_git_and_surfaces_failure() {
 fn malformed_tool_arguments_are_rejected() {
     let root = fs::tempdir("mcp-malformed");
     assert_tool_error(&root, json!({ "paths": [1] }), "only strings");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn empty_scope_is_an_explicit_tool_error() {
+    let root = fs::tempdir("mcp-empty");
+    assert_tool_error(
+        &root,
+        json!({ "paths": [] }),
+        "No paths provided; refusing an empty successful check",
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn scoped_directory_uses_custom_role_policy() {
+    let root = fs::tempdir("mcp-role-policy");
+    write(&root, "hardgate.toml", ROLE_POLICY_CONFIG);
+    write(
+        &root,
+        "src/policy.rs",
+        "fn branch(value: bool) -> bool { if value { true } else { false } }\n",
+    );
+
+    let response = call_tool(&root, "hardgate_check", json!({ "paths": ["src"] }));
+    assert_ne!(response["result"]["isError"], true);
+    let text = tool_error_text(&response);
+    assert!(text.contains("Hardgate Passed"), "{text}");
+    assert!(text.contains("role Test advisory"), "{text}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn diff_scope_uses_full_clone_index() {
+    let root = fs::tempdir("mcp-diff-clone");
+    let copied = r#"
+fn calculate_total(values: &[i32]) -> i32 {
+    let mut total = 0;
+    for value in values {
+        if *value > 0 {
+            total += *value;
+        }
+    }
+    total
+}
+"#;
+    write(&root, "hardgate.toml", CLONE_CONFIG);
+    write(&root, "src/original.rs", copied);
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "baseline"]);
+    write(&root, "src/copied.rs", copied);
+
+    let response = call_tool(&root, "hardgate_check", json!({ "diff": true }));
+    assert_ne!(response["result"]["isError"], true);
+    let text = tool_error_text(&response);
+    assert!(text.contains("Hardgate Failed"), "{text}");
+    assert!(text.contains("src/copied.rs"), "{text}");
+    assert!(text.contains("src/original.rs"), "{text}");
+
     let _ = std::fs::remove_dir_all(root);
 }

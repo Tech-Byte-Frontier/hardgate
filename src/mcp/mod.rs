@@ -1,8 +1,7 @@
-use crate::commands::{AnalyzeInput, analyze_file_content};
+use crate::commands::{AnalyzeInput, analyze_file_content, run_static_gate_scoped};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{DiscoverOptions, discover_files_with_exclusions};
-use crate::engines::{AntiGamingScanner, CloneDetector, ComplexityAnalyzer, InvariantsChecker};
+use crate::engines::{AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker};
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::json;
@@ -200,19 +199,30 @@ fn execute_check_with_config(
     args: &serde_json::Value,
     config: &HardgateConfig,
 ) -> serde_json::Value {
-    let root = Path::new(".");
-    let diff_only = match parse_bool_arg(args, "diff") {
-        Ok(value) => value,
+    let (diff_only, scoped) = match parse_check_args(args) {
+        Ok(parsed) => parsed,
         Err(error) => return tool_error(&error),
     };
-    let paths = match paths_arg(args) {
-        Ok(paths) => paths,
-        Err(error) => return tool_error(&error),
+    let paths = scoped.as_deref().unwrap_or_default();
+    let outcome = match run_static_gate_scoped(config, diff_only, paths) {
+        Ok(outcome) => outcome,
+        Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
     };
-    if let Some(arr) = paths {
-        return execute_scoped_check(arr, config, root);
-    }
-    execute_discovered_check(config, root, diff_only)
+    let Some((mut report, files, _, functions)) = outcome else {
+        return tool_error(if scoped.is_some() {
+            "No source files matched the provided paths; refusing an empty successful check"
+        } else {
+            "No source files discovered; refusing an empty successful check"
+        });
+    };
+    report.finalize(files.len(), functions.len(), 0);
+    json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
+}
+
+fn parse_check_args(args: &serde_json::Value) -> Result<(bool, Option<Vec<PathBuf>>), String> {
+    let diff_only = parse_bool_arg(args, "diff")?;
+    let scoped = paths_arg(args)?.map(parse_scoped_paths).transpose()?;
+    Ok((diff_only, scoped))
 }
 
 fn load_config() -> Result<HardgateConfig, serde_json::Value> {
@@ -230,57 +240,11 @@ fn paths_arg(args: &serde_json::Value) -> Result<Option<&[serde_json::Value]>, S
     }
 }
 
-fn execute_discovered_check(
-    config: &HardgateConfig,
-    root: &Path,
-    diff_only: bool,
-) -> serde_json::Value {
-    let discovery = match discover_files_with_exclusions(DiscoverOptions {
-        root,
-        diff_only,
-        exclusions: &config.budgets.files.exclusions.paths,
-    }) {
-        Ok(result) => result,
-        Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
-    };
-    if discovery.files.is_empty() {
-        return tool_error("No source files discovered; refusing an empty successful check");
+fn parse_scoped_paths(arr: &[serde_json::Value]) -> Result<Vec<PathBuf>, String> {
+    if arr.is_empty() {
+        return Err("No paths provided; refusing an empty successful check".to_string());
     }
-    finish_check_response(CheckResponseInput {
-        target_files: &discovery.files,
-        excluded_count: discovery.excluded_files.len(),
-        config,
-        root,
-        extra_advisories: Vec::new(),
-    })
-}
-fn execute_scoped_check(
-    arr: &[serde_json::Value],
-    config: &HardgateConfig,
-    root: &Path,
-) -> serde_json::Value {
-    let (files, missing) = match partition_existing_paths(arr) {
-        Ok(result) => result,
-        Err(error) => return tool_error(&error),
-    };
-    if !missing.is_empty() {
-        return tool_error(&format!("Files not found: {}", missing.join(", ")));
-    }
-    if files.is_empty() {
-        return tool_error("No paths provided; refusing an empty successful check");
-    }
-    finish_check_response(CheckResponseInput {
-        target_files: &files,
-        excluded_count: 0,
-        config,
-        root,
-        extra_advisories: Vec::new(),
-    })
-}
-fn partition_existing_paths(
-    arr: &[serde_json::Value],
-) -> Result<(Vec<PathBuf>, Vec<String>), String> {
-    let mut files = Vec::new();
+    let mut paths = Vec::with_capacity(arr.len());
     let mut missing = Vec::new();
     for value in arr {
         let Some(p) = value.as_str() else {
@@ -291,12 +255,16 @@ fn partition_existing_paths(
         }
         let pb = PathBuf::from(p);
         if pb.exists() {
-            files.push(pb);
+            paths.push(pb);
         } else {
             missing.push(p.to_string());
         }
     }
-    Ok((files, missing))
+    if missing.is_empty() {
+        Ok(paths)
+    } else {
+        Err(format!("Files not found: {}", missing.join(", ")))
+    }
 }
 fn parse_bool_arg(args: &serde_json::Value, key: &str) -> Result<bool, String> {
     match args.get(key) {
@@ -306,42 +274,6 @@ fn parse_bool_arg(args: &serde_json::Value, key: &str) -> Result<bool, String> {
             .ok_or_else(|| format!("Parameter '{key}' must be a boolean")),
     }
 }
-struct CheckResponseInput<'a> {
-    target_files: &'a [PathBuf],
-    excluded_count: usize,
-    config: &'a HardgateConfig,
-    root: &'a Path,
-    extra_advisories: Vec<String>,
-}
-
-fn finish_check_response(input: CheckResponseInput) -> serde_json::Value {
-    let CheckResponseInput {
-        target_files,
-        excluded_count,
-        config,
-        root,
-        mut extra_advisories,
-    } = input;
-    let mut report = GateReport::new(config.gate.name.clone());
-    report.advisories.append(&mut extra_advisories);
-    if excluded_count > 0 {
-        let noun = if excluded_count == 1 { "file" } else { "files" };
-        report.advisories.push(format!(
-            "{} {} excluded from file budget checks via hardgate.toml.",
-            excluded_count, noun
-        ));
-    }
-    let read_results = match read_files_content(target_files) {
-        Ok(contents) => contents,
-        Err(error) => return tool_error(&error),
-    };
-    let func_count = analyze_file_contents(&read_results, config, root, &mut report);
-    append_clone_results(&read_results, config, root, &mut report);
-
-    report.finalize(target_files.len(), func_count, 0);
-    json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
-}
-
 fn read_files_content(paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, String> {
     let mut contents = Vec::with_capacity(paths.len());
     let mut failures = Vec::new();
@@ -359,21 +291,6 @@ fn read_files_content(paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, Strin
             failures.join("; ")
         ))
     }
-}
-
-fn append_clone_results(
-    files: &[(PathBuf, String)],
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) {
-    if !config.clones.enabled || files.len() < 2 {
-        return;
-    }
-    let detector = CloneDetector::new(&config.clones);
-    report
-        .clone_violations
-        .extend(detector.detect_clones(files, root));
 }
 
 fn get_str_arg<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, serde_json::Value> {
