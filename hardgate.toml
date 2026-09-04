@@ -56,4 +56,15 @@ enabled = false
 entry_points = [
   "src/main.rs",
   "src/lib.rs",
+  "scripts/check-consumer-matrix.mjs",
+  "scripts/check-npm-quality.mjs",
+  "scripts/consumer-process-launcher.mjs",
+  "scripts/release-checksums.mjs",
+  "scripts/release-package.mjs",
+  "scripts/release-sbom-verify.mjs",
+  "scripts/release-sbom.mjs",
+  "scripts/release-verify.mjs",
+  "scripts/release-version.mjs",
+  "scripts/sync-npm-version.mjs",
+  "scripts/verify-npm-publication.mjs",
 ]

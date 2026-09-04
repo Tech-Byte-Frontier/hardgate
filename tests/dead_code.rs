@@ -210,3 +210,40 @@ fn import_and_rust_graph_edges_keep_reachable_exports() {
             .any(|violation| violation.symbol.as_deref() == Some("_private"))
     );
 }
+
+#[test]
+fn explicit_js_family_imports_keep_module_files_reachable() {
+    let files = fixture_paths(&[
+        "src/main.ts",
+        "src/feature.mjs",
+        "src/plugin.cjs",
+        "src/types.mts",
+        "src/config.cts",
+        "src/orphan.mjs",
+    ]);
+    let contents = vec![
+        entry(
+            "src/main.ts",
+            "import { feature } from './feature.mjs';\nimport types from './types.mts';\nconst plugin = require('./plugin.cjs');\nconst config = require('./config.cts');\nfeature(); void types; void plugin; void config;",
+        ),
+        entry(
+            "src/feature.mjs",
+            "export function feature() { return 1; }\nexport function stale() { return 0; }",
+        ),
+        entry("src/plugin.cjs", "module.exports = {};"),
+        entry("src/types.mts", "export default {};"),
+        entry("src/config.cts", "module.exports = {};"),
+        entry("src/orphan.mjs", "export const orphan = true;"),
+    ];
+
+    let violations = find_dead_code(files, contents);
+    assert_eq!(
+        unreferenced_files(&violations),
+        vec![PathBuf::from("src/orphan.mjs")]
+    );
+    assert!(violations.iter().any(|violation| {
+        violation.file == Path::new("src/feature.mjs")
+            && violation.symbol.as_deref() == Some("stale")
+            && violation.violation_type == "Unused Export"
+    }));
+}

@@ -264,11 +264,11 @@ fn scan_import_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(imp);
-            let cleaned = file_name
-                .trim_end_matches(".ts")
-                .trim_end_matches(".tsx")
-                .trim_end_matches(".js");
-            stems.insert(cleaned.to_string());
+            let stem = Path::new(file_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_name);
+            stems.insert(stem.to_string());
         }
     }
 }
@@ -299,7 +299,10 @@ fn is_index_or_entry_stem(stem: &str) -> bool {
 
 fn is_js_or_ts_file(path: &Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    matches!(ext, "ts" | "tsx" | "js" | "jsx")
+    matches!(
+        ext,
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs"
+    )
 }
 
 fn find_declared_exports(content: &str) -> Vec<(usize, String)> {
