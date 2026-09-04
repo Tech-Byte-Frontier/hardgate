@@ -377,7 +377,10 @@ jobs:
           set -euo pipefail
           release_tag=$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)
           test "$release_tag" = "$RELEASE_TAG"
-          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS
+          assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          for asset in hardgate-linux-x64.tar.gz hardgate-linux-x64-musl.tar.gz hardgate-linux-arm64.tar.gz hardgate-linux-arm64-musl.tar.gz hardgate-darwin-x64.tar.gz hardgate-darwin-arm64.tar.gz SHA256SUMS "hardgate-${RELEASE_VERSION}.sbom.cdx.json"; do
+            printf '%s\n' "$assets" | grep -qx "$asset"
+          done
           crate_version=$(curl --fail --location --silent "https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])')
           test "$crate_version" = "$RELEASE_VERSION"
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do

@@ -100,6 +100,7 @@ includesAll(release, [
   "actions/attest",
   "publish-crates",
   "verify-channels:",
+  "hardgate-${RELEASE_VERSION}.sbom.cdx.json",
 ], "release");
 includesAll(packageScript, ["--sort=name", "--mtime=@0", "gzip", "-n", "SHA256SUMS", "chmodSync(destination, 0o755)", "full hexadecimal source identity"], "archive helper");
 includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "cargo install cargo-llvm-cov --version", "--all-targets", "--all-features", "--lcov", "coverage/lcov.info"], "coverage helper");
