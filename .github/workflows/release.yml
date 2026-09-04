@@ -454,6 +454,15 @@ jobs:
   attest:
     name: Attest verified release artifacts
     needs: [version-check, package]
+    # `package` intentionally depends on a skipped build matrix during a
+    # verified resume. `always()` prevents that skip from propagating after
+    # package itself succeeded.
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -599,6 +608,14 @@ jobs:
   github-release:
     name: Publish verified GitHub Release
     needs: [version-check, package, attest, publication-preflight]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success' &&
+        needs.attest.result == 'success' &&
+        needs.publication-preflight.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -702,6 +719,13 @@ jobs:
   publish-crates:
     name: Publish verified crate
     needs: [version-check, package, github-release]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success' &&
+        needs.github-release.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -871,6 +895,14 @@ jobs:
   publish-npm:
     name: Publish platform packages, then wrapper
     needs: [version-check, package, github-release, publish-crates]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success' &&
+        needs.github-release.result == 'success' &&
+        needs.publish-crates.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1077,6 +1109,14 @@ jobs:
   verify-channels:
     name: Verify all published channels
     needs: [version-check, github-release, publish-crates, publish-npm]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.github-release.result == 'success' &&
+        needs.publish-crates.result == 'success' &&
+        needs.publish-npm.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1388,3 +1428,14 @@ jobs:
           HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
           test -x "$install_root/hardgate"
           test "$("$install_root/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+
+  release-complete:
+    name: Release publication aggregate
+    if: ${{ always() }}
+    needs: [version-check, package, attest, publication-preflight, github-release, publish-crates, publish-npm, verify-channels]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every publication and verification job to pass
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+      - run: echo "release publication and channel verification passed"

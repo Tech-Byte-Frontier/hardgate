@@ -28,6 +28,9 @@ assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/,
 const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
 const publishCratesJob = release.slice(release.indexOf("  publish-crates:"), release.indexOf("  publish-npm:"));
 const publishNpmJob = release.slice(release.indexOf("  publish-npm:"), release.indexOf("  verify-channels:"));
+const attestJob = release.slice(release.indexOf("  attest:"), release.indexOf("  publication-preflight:"));
+const verifyChannelsJob = release.slice(release.indexOf("  verify-channels:"), release.indexOf("  release-complete:"));
+const releaseCompleteJob = release.slice(release.indexOf("  release-complete:"));
 const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  build:"));
 includesAll(
   versionCheckJob,
@@ -116,6 +119,30 @@ assert.match(
   githubReleaseJob,
   /needs: \[version-check, package, attest, publication-preflight\]/,
   "GitHub publication must wait for attestation and registry preflight",
+);
+for (const [label, job, requiredNeeds] of [
+  ["attestation", attestJob, ["version-check", "package"]],
+  ["GitHub Release", githubReleaseJob, ["version-check", "package", "attest", "publication-preflight"]],
+  ["crates.io", publishCratesJob, ["version-check", "package", "github-release"]],
+  ["npm", publishNpmJob, ["version-check", "package", "github-release", "publish-crates"]],
+  ["channel verification", verifyChannelsJob, ["version-check", "github-release", "publish-crates", "publish-npm"]],
+]) {
+  assert.match(job, /if: >-\s+\$\{\{\s+always\(\)/, `${label} must override intentional resume skip propagation`);
+  for (const dependency of requiredNeeds) {
+    assert.ok(job.includes(`needs.${dependency}.result == 'success'`), `${label} must require successful ${dependency}`);
+  }
+}
+includesAll(
+  releaseCompleteJob,
+  [
+    "name: Release publication aggregate",
+    "if: ${{ always() }}",
+    "needs: [version-check, package, attest, publication-preflight, github-release, publish-crates, publish-npm, verify-channels]",
+    "contains(needs.*.result, 'failure')",
+    "contains(needs.*.result, 'cancelled')",
+    "contains(needs.*.result, 'skipped')",
+  ],
+  "release completion aggregate",
 );
 for (const [label, job] of [
   ["GitHub Release", githubReleaseJob],

@@ -330,7 +330,7 @@ assert.match(cratePublishStep, /CARGO_REGISTRY_TOKEN:[\s\S]*?cargo publish --loc
 assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?CARGO_REGISTRY_TOKEN=\"\$publish_token\" cargo publish --locked/, "crate token must be process-scoped");
 assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?sleep 1[\s\S]*?cargo publish --locked/, "crate state probe and upload must respect the one-request-per-second policy");
 assert.doesNotMatch(crateVerifyStep, /CARGO_REGISTRY_TOKEN/, "crate verification must not inherit publish credentials");
-for (const job of ["version-check", "package", "attest", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
+for (const job of ["version-check", "package", "attest", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels", "release-complete"]) {
   assert.match(release, new RegExp(`${job}:[\\s\\S]*?runs-on: ubuntu-24\\.04`), `${job} should use the current x64 Linux runner`);
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");
