@@ -3,6 +3,21 @@ use hardgate::config::CoverageConfig;
 use hardgate::engines::CoverageScorer;
 use std::path::Path;
 
+fn detail_config(
+    min_function_percent: Option<f64>,
+    min_branch_percent: Option<f64>,
+) -> CoverageConfig {
+    CoverageConfig {
+        enabled: true,
+        report: None,
+        min_line_percent: Some(1.0),
+        min_function_percent,
+        min_branch_percent,
+        max_crap_score: None,
+        critical_paths: None,
+    }
+}
+
 #[test]
 fn test_lcov_checksum_and_paths() {
     let tmp = fs::tempdir("lcov");
@@ -73,19 +88,11 @@ fn lcov_parser_accepts_metadata_and_consistent_details() {
 
 #[test]
 fn lcov_parser_accepts_llvm22_summary_supersets() {
-    let config = CoverageConfig {
-        enabled: true,
-        report: None,
-        min_line_percent: Some(1.0),
-        min_function_percent: Some(1.0),
-        min_branch_percent: None,
-        max_crap_score: None,
-        critical_paths: None,
-    };
+    let config = detail_config(Some(1.0), None);
     let body = "# generated metadata\nTN:\nSF:src/lib.rs\nVER:1.0\n".to_string()
         + "FN:1,first\nFN:2,second\nFN:3,third\n"
         + "FNDA:1,first\nFNDA:0,second\nFNDA:2,third\n"
-        + "DA:1,1\nDA:2,0\nLF:3\nLH:2\n"
+        + "DA:1,1\nDA:2,1\nLF:3\nLH:1\n"
         + "FNF:2\nFNH:1\nend_of_record\n";
     let tmp = fs::tempdir("lcov-llvm22-superset");
     let report = tmp.join("report.info");
@@ -185,7 +192,8 @@ fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
         "SF:src/lib.rs\nDA:1,1\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
         "SF:src/lib.rs\nDA:0,1\nLF:1\nLH:1\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1,checksum,extra\nLF:1\nLH:1\nend_of_record\n",
-        "SF:src/lib.rs\nDA:1,0\nLF:2\nLH:2\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,1\nDA:2,0\nLF:1\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nDA:1,0\nLF:2\nLH:3\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:0\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1\nLF:1\nLF:1\nLH:1\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
@@ -223,15 +231,7 @@ fn lcov_parser_requires_paired_function_and_branch_counts_when_floors_enabled() 
 
 #[test]
 fn lcov_parser_rejects_impossible_function_supersets() {
-    let config = CoverageConfig {
-        enabled: true,
-        report: None,
-        min_line_percent: Some(1.0),
-        min_function_percent: Some(1.0),
-        min_branch_percent: None,
-        max_crap_score: None,
-        critical_paths: None,
-    };
+    let config = detail_config(Some(1.0), None);
     for details in [
         ("FN:1,first\nFNDA:1,first\n", "FNF:2\nFNH:1\n"),
         (

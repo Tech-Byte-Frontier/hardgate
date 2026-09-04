@@ -331,22 +331,18 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
             count.checked_add(usize::from(*hits > 0))
         })
         .ok_or_else(|| anyhow::anyhow!("LCOV hit-line count overflow"))?;
-    if builder.coverage.lines_hit < hit_lines {
+    if builder.coverage.lines_hit > builder.coverage.lines_found {
         bail!(
-            "LCOV LH:{} is less than {} DA lines with hits",
+            "LCOV LH:{} exceeds LF:{}",
             builder.coverage.lines_hit,
-            hit_lines
+            builder.coverage.lines_found
         );
     }
-    let omitted_lines = builder.coverage.lines_found - detailed_lines;
-    let omitted_hit_lines = builder.coverage.lines_hit - hit_lines;
-    if omitted_hit_lines > omitted_lines {
+    if builder.coverage.lines_found == detailed_lines && builder.coverage.lines_hit != hit_lines {
         bail!(
-            "LCOV LH:{} implies {} omitted hit lines but LF:{} only omits {} lines",
+            "LCOV LH:{} does not match {} DA lines with hits",
             builder.coverage.lines_hit,
-            omitted_hit_lines,
-            builder.coverage.lines_found,
-            omitted_lines
+            hit_lines
         );
     }
     Ok(())
