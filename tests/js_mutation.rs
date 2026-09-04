@@ -316,7 +316,7 @@ fn malformed_nearest_package_manifest_errors_before_baseline_invocation() {
     write(
         &root,
         "package.json",
-        r#"{"packageManager":"bun@1.1.0","scripts":{"test":"node scripts/test.mjs"}}"#,
+        r#"{"packageManager":"npm@10.0.0","scripts":{"test":"node scripts/test.mjs"}}"#,
     );
     write(
         &root,

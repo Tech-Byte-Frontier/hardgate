@@ -1,124 +1,6 @@
-use super::js::PackageMetadata;
-use serde_json::Value;
+use super::js_manifest::PackageMetadata;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-pub(crate) fn parse_workspaces(value: Option<&Value>) -> bool {
-    match value {
-        Some(Value::Array(entries)) => valid_workspace_patterns(entries),
-        Some(Value::Object(object)) => object
-            .get("packages")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| valid_workspace_patterns(entries)),
-        _ => false,
-    }
-}
-
-fn valid_workspace_patterns(entries: &[Value]) -> bool {
-    !entries.is_empty()
-        && entries.iter().all(|entry| {
-            entry
-                .as_str()
-                .is_some_and(|pattern| !pattern.trim().is_empty())
-        })
-}
-
-pub(crate) fn valid_pnpm_workspace_file(path: &Path) -> bool {
-    path.is_file()
-        && fs::read_to_string(path)
-            .ok()
-            .is_some_and(|content| valid_pnpm_workspace_content(&content))
-}
-
-fn valid_pnpm_workspace_content(content: &str) -> bool {
-    let lines = workspace_lines(content);
-    let Some((index, (indent, value))) = lines
-        .iter()
-        .enumerate()
-        .find(|(_, (indent, value))| *indent == 0 && value.starts_with("packages:"))
-    else {
-        return false;
-    };
-    let inline = value["packages:".len()..].trim();
-    if !inline.is_empty() {
-        return parse_inline_workspace_patterns(inline);
-    }
-    let entries = lines
-        .iter()
-        .skip(index + 1)
-        .take_while(|(next_indent, _)| *next_indent > *indent)
-        .collect::<Vec<_>>();
-    !entries.is_empty()
-        && entries
-            .iter()
-            .all(|(_, value)| valid_workspace_list_item(value))
-}
-
-fn workspace_lines(content: &str) -> Vec<(usize, String)> {
-    content.lines().filter_map(parse_workspace_line).collect()
-}
-
-fn parse_workspace_line(raw_line: &str) -> Option<(usize, String)> {
-    let line = strip_yaml_comment(raw_line);
-    let value = line.trim();
-    (!value.is_empty()).then(|| (line.len() - line.trim_start().len(), value.to_string()))
-}
-
-fn valid_workspace_list_item(value: &str) -> bool {
-    value
-        .strip_prefix('-')
-        .and_then(parse_yaml_string)
-        .is_some_and(|item| !item.is_empty())
-}
-
-fn parse_inline_workspace_patterns(value: &str) -> bool {
-    if let Ok(entries) = serde_json::from_str::<Vec<String>>(value) {
-        return !entries.is_empty() && entries.iter().all(|entry| !entry.trim().is_empty());
-    }
-    let Some(value) = value
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
-        return false;
-    };
-    let entries = value.split(',').map(str::trim).collect::<Vec<_>>();
-    !entries.is_empty()
-        && entries
-            .iter()
-            .all(|item| parse_yaml_string(item).is_some_and(|entry| !entry.is_empty()))
-}
-
-fn parse_yaml_string(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.len() >= 2
-        && ((value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\'')))
-    {
-        return Some(value[1..value.len() - 1].trim().to_string());
-    }
-    if matches!(
-        value.to_ascii_lowercase().as_str(),
-        "true" | "false" | "null"
-    ) || value.parse::<f64>().is_ok()
-    {
-        return None;
-    }
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn strip_yaml_comment(line: &str) -> String {
-    let mut quote = None;
-    for (index, character) in line.char_indices() {
-        match character {
-            '\'' | '"' if quote.is_none() => quote = Some(character),
-            character if quote == Some(character) => quote = None,
-            '#' if quote.is_none() => return line[..index].to_string(),
-            _ => {}
-        }
-    }
-    line.to_string()
-}
-
 pub(crate) fn find_relevant_test(
     source: &Path,
     execution_root: &Path,
@@ -143,7 +25,6 @@ pub(crate) fn find_relevant_test(
     }
     None
 }
-
 fn direct_test_bases(source: &Path, execution_root: &Path, package_root: &Path) -> Vec<PathBuf> {
     let mut bases = Vec::new();
     if let Some(parent) = source.parent()
@@ -167,35 +48,32 @@ fn direct_test_bases(source: &Path, execution_root: &Path, package_root: &Path) 
     }
     bases
 }
-
 fn test_names(stem: &str, source_extension: Option<&str>) -> Vec<String> {
-    let mut names = Vec::new();
-    for kind in ["test", "spec"] {
-        for extension in ordered_extensions(source_extension) {
-            names.push(format!("{stem}.{kind}.{extension}"));
-        }
-    }
-    names
+    ["test", "spec"]
+        .into_iter()
+        .flat_map(|kind| {
+            ordered_extensions(source_extension)
+                .into_iter()
+                .map(move |extension| format!("{stem}.{kind}.{extension}"))
+        })
+        .collect()
 }
-
 fn ordered_extensions(source_extension: Option<&str>) -> Vec<&str> {
     let extensions = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"];
     let source_extension = source_extension.map(str::to_ascii_lowercase);
-    let mut ordered = Vec::with_capacity(extensions.len());
-    if let Some(source) = source_extension.as_deref()
-        && let Some(found) = extensions.iter().find(|extension| **extension == source)
+    let mut ordered = extensions
+        .iter()
+        .filter(|extension| Some(**extension) != source_extension.as_deref())
+        .copied()
+        .collect::<Vec<_>>();
+    if let Some(source) = source_extension
+        .as_deref()
+        .filter(|source| extensions.contains(source))
     {
-        ordered.push(*found);
+        ordered.insert(0, source);
     }
-    ordered.extend(
-        extensions
-            .iter()
-            .filter(|extension| Some(**extension) != source_extension.as_deref())
-            .copied(),
-    );
     ordered
 }
-
 fn test_roots(execution_root: &Path, package_root: &Path) -> Vec<PathBuf> {
     let mut roots = vec![package_root.join("tests"), package_root.join("__tests__")];
     if execution_root != package_root && execution_root.starts_with(package_root) {
@@ -204,66 +82,80 @@ fn test_roots(execution_root: &Path, package_root: &Path) -> Vec<PathBuf> {
     }
     roots
 }
-
 fn find_direct_test(base: &Path, names: &[String], package_root: &Path) -> Option<PathBuf> {
-    if !base.starts_with(package_root) {
+    if !within_package_root(base, package_root) || is_nested_package(base, package_root) {
         return None;
     }
     names
         .iter()
         .map(|name| base.join(name))
-        .find(|path| path.is_file() && path.starts_with(package_root))
+        .find(|path| path.is_file() && within_package_root(path, package_root))
 }
-
 fn find_nested_test(
     base: &Path,
     names: &[String],
     depth: usize,
     package_root: &Path,
 ) -> Option<PathBuf> {
-    if depth == 0 || !base.is_dir() || !base.starts_with(package_root) {
+    if !can_search_nested(base, depth, package_root) {
         return None;
     }
     let mut entries = fs::read_dir(base)
         .ok()?
-        .filter_map(Result::ok)
+        .filter_map(std::result::Result::ok)
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        if is_named_test(&path, names) {
-            return Some(path);
-        }
-        if path.is_dir()
-            && path != package_root
-            && !is_package_boundary(&path, package_root)
-            && !is_pruned_test_dir(&path)
-            && let Some(found) = find_nested_test(&path, names, depth - 1, package_root)
-        {
-            return Some(found);
-        }
-    }
-    None
+    entries
+        .into_iter()
+        .find_map(|entry| find_nested_entry(&entry.path(), names, depth, package_root))
 }
-
-fn is_named_test(path: &Path, names: &[String]) -> bool {
+fn can_search_nested(base: &Path, depth: usize, package_root: &Path) -> bool {
+    depth > 0
+        && base.is_dir()
+        && within_package_root(base, package_root)
+        && !is_nested_package(base, package_root)
+}
+fn find_nested_entry(
+    path: &Path,
+    names: &[String],
+    depth: usize,
+    package_root: &Path,
+) -> Option<PathBuf> {
+    if is_named_test(path, names, package_root) {
+        return Some(path.to_path_buf());
+    }
+    if !path.is_dir()
+        || path == package_root
+        || is_nested_package(path, package_root)
+        || is_pruned_test_dir(path)
+        || !within_package_root(path, package_root)
+    {
+        return None;
+    }
+    find_nested_test(path, names, depth.saturating_sub(1), package_root)
+}
+fn is_named_test(path: &Path, names: &[String], package_root: &Path) -> bool {
     path.is_file()
+        && within_package_root(path, package_root)
         && path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| names.iter().any(|candidate| candidate == name))
 }
-
-fn is_package_boundary(path: &Path, package_root: &Path) -> bool {
-    path != package_root && path.join("package.json").is_file()
+fn is_nested_package(path: &Path, package_root: &Path) -> bool {
+    path != package_root && fs::symlink_metadata(path.join("package.json")).is_ok()
 }
-
+fn within_package_root(path: &Path, package_root: &Path) -> bool {
+    let canonical_root =
+        fs::canonicalize(package_root).unwrap_or_else(|_| package_root.to_path_buf());
+    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical_path.starts_with(canonical_root)
+}
 fn is_pruned_test_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| matches!(name, "node_modules" | "dist" | "build" | "vendor"))
 }
-
 fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut output = Vec::new();
     for path in paths {
@@ -273,71 +165,87 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     }
     output
 }
-
 #[cfg(test)]
-mod tests {
-    use super::super::js::{
-        PackageManager, ResolvedTestPlan, TestFramework, TestSelection, resolve_js_test_plan,
-    };
+pub(crate) mod test_support {
     use std::path::{Path, PathBuf};
-
-    fn temp_root(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("hardgate-js-{label}-{}", std::process::id()));
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT_TEMP_ROOT: AtomicUsize = AtomicUsize::new(0);
+    const WORKSPACE_PACKAGE: &str =
+        r#"{"workspaces":["packages/*"],"scripts":{"test":"node root.mjs"}}"#;
+    pub(crate) fn temp_root(label: &str) -> PathBuf {
+        let id = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("hardgate-js-{label}-{}-{id}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
     }
-
-    fn write(root: &Path, path: &str, content: &str) {
+    pub(crate) fn write(root: &Path, path: &str, content: &str) {
         let target = root.join(path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(target, content).unwrap();
     }
-
+    pub(crate) fn write_workspace_fixture(root: &Path, config: &str) {
+        write(root, "package.json", WORKSPACE_PACKAGE);
+        write(root, "packages/app/package.json", r#"{"name":"app"}"#);
+        write(root, &format!("packages/app/{config}"), "");
+        for (path, content) in [
+            ("packages/app/src/value.ts", "export const value = true;\n"),
+            (
+                "packages/app/tests/value.test.ts",
+                "test('value', () => {});\n",
+            ),
+        ] {
+            write(root, path, content);
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::js::{
+        PackageManager, ResolvedTestPlan, TestFramework, TestSelection, resolve_js_test_plan,
+    };
+    use super::super::js_manifest::valid_pnpm_workspace_content;
+    use super::test_support::{temp_root, write, write_workspace_fixture};
+    use std::path::Path;
     fn plan(root: &Path) -> ResolvedTestPlan {
         resolve_js_test_plan(&root.join("src/value.ts"), root).unwrap()
     }
-
     fn script_plan(root: &Path, manager: &str, script: &str) -> ResolvedTestPlan {
-        write(
+        write_package(
             root,
-            "package.json",
             &format!(r#"{{"packageManager":"{manager}","scripts":{{"test":"{script}"}}}}"#),
         );
         write(root, "src/value.ts", "export const value = true;\n");
         write(root, "tests/value.test.ts", "test('value', () => {});\n");
         plan(root)
     }
-
+    fn write_app(root: &Path, file: &str, content: &str) {
+        write(root, &format!("packages/app/{file}"), content);
+    }
+    fn write_package(root: &Path, content: &str) {
+        write(root, "package.json", content);
+    }
     fn assert_full_suite(value: &ResolvedTestPlan, label: &str) {
         assert_eq!(value.framework, None, "{label}");
         assert_eq!(value.selection, TestSelection::FullSuite, "{label}");
         assert_eq!(value.recommended_timeout_secs, 60, "{label}");
         assert!(!value.command.contains("value.test.ts"), "{label}");
     }
-
     #[test]
     fn lockfile_only_nested_package_is_not_a_workspace_boundary() {
         let root = temp_root("lockfile");
-        write(&root, "package.json", r#"{"packageManager":"npm@10"}"#);
+        write_package(&root, r#"{"packageManager":"npm@10"}"#);
         write(
             &root,
             "packages/app/package.json",
             r#"{"name":"app","scripts":{"test":"node scripts/test.mjs"}}"#,
         );
         write(&root, "packages/app/pnpm-lock.yaml", "lockfileVersion: 9\n");
-        write(
-            &root,
-            "packages/app/src/value.ts",
-            "export const value = true;\n",
-        );
-        write(
-            &root,
-            "packages/app/tests/value.test.ts",
-            "test('value', () => {});\n",
-        );
+        write_app(&root, "src/value.ts", "export const value = true;\n");
+        write_app(&root, "tests/value.test.ts", "test('value', () => {});\n");
         let value = resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root).unwrap();
         assert_eq!(value.package_root, root.join("packages/app"));
         assert_eq!(value.workspace_root, root.join("packages/app"));
@@ -346,17 +254,12 @@ mod tests {
         assert!(!value.command.contains("value.test.ts"));
         let _ = std::fs::remove_dir_all(root);
     }
-
     #[test]
     fn malformed_nearest_manifest_returns_explicit_error() {
         let root = temp_root("malformed-manifest");
-        write(&root, "package.json", r#"{"packageManager":"bun@1"}"#);
+        write_package(&root, r#"{"packageManager":"bun@1"}"#);
         write(&root, "packages/app/package.json", "{\"name\":\"app\",\n");
-        write(
-            &root,
-            "packages/app/src/value.ts",
-            "export const value = true;\n",
-        );
+        write_app(&root, "src/value.ts", "export const value = true;\n");
         let error = resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root)
             .expect_err("nearest malformed package must fail closed");
         let message = error.to_string();
@@ -364,7 +267,6 @@ mod tests {
         assert!(message.contains("packages/app/package.json"));
         let _ = std::fs::remove_dir_all(root);
     }
-
     #[test]
     fn invalid_package_workspaces_shapes_do_not_create_boundaries() {
         for (label, workspaces) in [
@@ -376,24 +278,18 @@ mod tests {
             ("array-number", "[1]"),
         ] {
             let root = temp_root(label);
-            write(
+            write_package(
                 &root,
-                "package.json",
                 &format!(r#"{{"packageManager":"pnpm@9","workspaces":{workspaces}}}"#),
             );
             write(&root, "packages/app/package.json", r#"{"name":"app"}"#);
-            write(
-                &root,
-                "packages/app/src/value.ts",
-                "export const value = true;\n",
-            );
+            write_app(&root, "src/value.ts", "export const value = true;\n");
             let value =
                 resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root).unwrap();
             assert_eq!(value.workspace_root, root.join("packages/app"), "{label}");
             let _ = std::fs::remove_dir_all(root);
         }
     }
-
     #[test]
     fn arbitrary_node_scripts_are_full_suite_for_every_manager() {
         for (label, manager) in [
@@ -408,22 +304,69 @@ mod tests {
             let _ = std::fs::remove_dir_all(root);
         }
     }
-
     #[test]
-    fn framework_substrings_in_helpers_comments_and_paths_are_not_evidence() {
-        for (label, script) in [
-            ("helper", "node scripts/vitest-helper.mjs"),
-            ("comment", "node scripts/runner.mjs # jest"),
-            ("argument", "node scripts/runner.mjs --runner=playwright"),
-            ("quoted", "node -e \"// vitest\""),
+    fn multiple_named_test_scripts_fail_closed_independent_of_order() {
+        for (label, scripts) in [
+            (
+                "first-order",
+                r#"{"test:unit":"jest","test:e2e":"playwright test"}"#,
+            ),
+            (
+                "reverse-order",
+                r#"{"test:e2e":"playwright test","test:unit":"jest"}"#,
+            ),
         ] {
             let root = temp_root(label);
-            let value = script_plan(&root, "npm@10", script);
-            assert_full_suite(&value, label);
+            write_package(
+                &root,
+                &format!(r#"{{"packageManager":"npm@10","scripts":{scripts}}}"#),
+            );
+            write(&root, "src/value.ts", "export const value = true;\n");
+            let error = resolve_js_test_plan(&root.join("src/value.ts"), &root)
+                .expect_err("ambiguous test scripts must fail closed");
+            assert!(error.to_string().contains("multiple test:* scripts"));
             let _ = std::fs::remove_dir_all(root);
         }
     }
-
+    #[test]
+    fn one_named_test_script_remains_usable() {
+        let root = temp_root("single-test-script");
+        write_package(
+            &root,
+            r#"{"packageManager":"npm@10","scripts":{"test:unit":"jest"}}"#,
+        );
+        write(&root, "src/value.ts", "export const value = true;\n");
+        write(&root, "tests/value.test.ts", "test('value', () => {});\n");
+        let value = plan(&root);
+        assert_eq!(value.command, "npm run test:unit -- tests/value.test.ts");
+        assert!(matches!(value.selection, TestSelection::Relevant(_)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn child_framework_signal_precedes_workspace_script() {
+        for (label, config, framework, command) in [
+            ("child-jest", "jest.config.js", TestFramework::Jest, "jest"),
+            (
+                "child-vitest",
+                "vitest.config.ts",
+                TestFramework::Vitest,
+                "vitest",
+            ),
+        ] {
+            let root = temp_root(label);
+            write_workspace_fixture(&root, config);
+            let value =
+                resolve_js_test_plan(&root.join("packages/app/src/value.ts"), &root).unwrap();
+            assert_eq!(value.framework, Some(framework), "{label}");
+            assert!(value.command.contains(command), "{label}");
+            assert_eq!(value.working_dir, root.join("packages/app"), "{label}");
+            assert!(
+                matches!(value.selection, TestSelection::Relevant(_)),
+                "{label}"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
     #[test]
     fn ambiguous_framework_configs_fail_conservatively() {
         let root = temp_root("ambiguous-config");
@@ -461,6 +404,31 @@ mod tests {
             );
             assert!(value.command.contains("tests/value.test.ts"), "{label}");
             let _ = std::fs::remove_dir_all(root);
+        }
+    }
+    #[test]
+    fn pnpm_workspace_yaml_requires_scalar_package_patterns() {
+        assert!(valid_pnpm_workspace_content(
+            "packages:\n- packages/*\n- tools/*\n"
+        ));
+        assert!(valid_pnpm_workspace_content(
+            "packages:\n  - packages/*\n  - tools/*\n"
+        ));
+        assert!(valid_pnpm_workspace_content(
+            "sharedWorkspaceLockfile: true\npackages:\n- packages/*\n"
+        ));
+        for content in [
+            "packages:\n- {name: app}\n",
+            "packages:\n  - packages/*: app\n",
+            "packages:\n  - [packages/*]\n",
+            "packages:\n  - \"packages/*\n",
+            "packages:\n  - true\n",
+            "packages:\n  - packages/*\npackages:\n  - tools/*\n",
+            "packages:\n  - packages/*\ntrailing: [\n",
+            "packages:\n\t- packages/*\n",
+            "packages:\n  \t- packages/*\n",
+        ] {
+            assert!(!valid_pnpm_workspace_content(content), "{content}");
         }
     }
 }

@@ -2,6 +2,7 @@ pub mod gatekeeper;
 pub mod generator;
 pub mod js;
 mod js_command;
+pub(crate) mod js_manifest;
 mod js_tests;
 mod process;
 pub mod runner;

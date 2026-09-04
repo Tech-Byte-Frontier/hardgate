@@ -1,7 +1,5 @@
 use super::js::{PackageManager, TestFramework};
 use std::path::Path;
-use std::str::Chars;
-
 pub(crate) struct JsCommandInput<'a> {
     pub(crate) manager: PackageManager,
     pub(crate) framework: Option<TestFramework>,
@@ -11,10 +9,13 @@ pub(crate) struct JsCommandInput<'a> {
     pub(crate) bun_test_script: bool,
     pub(crate) working_dir: &'a Path,
 }
-
 pub(crate) fn build_js_command(input: JsCommandInput<'_>) -> String {
     if let Some(script) = input.script {
-        let base = manager_script_command(input.manager, script);
+        let base = if input.bun_test_script {
+            manager_full_suite_command(input.manager)
+        } else {
+            manager_script_command(input.manager, script)
+        };
         return if input.selector_capable && input.bun_test_script {
             append_bun_candidate(base, input.candidate, input.working_dir)
         } else if input.selector_capable {
@@ -33,9 +34,8 @@ pub(crate) fn build_js_command(input: JsCommandInput<'_>) -> String {
     }
     manager_full_suite_command(input.manager)
 }
-
 fn manager_script_command(manager: PackageManager, script: &str) -> String {
-    if script == "test" {
+    if script == "test" && manager != PackageManager::Bun {
         return manager_full_suite_command(manager);
     }
     match manager {
@@ -45,7 +45,6 @@ fn manager_script_command(manager: PackageManager, script: &str) -> String {
         PackageManager::Bun => format!("bun run {script}"),
     }
 }
-
 fn manager_exec_command(manager: PackageManager, framework: TestFramework) -> String {
     match manager {
         PackageManager::Npm => format!("npm exec --offline -- {}", framework.binary()),
@@ -54,7 +53,6 @@ fn manager_exec_command(manager: PackageManager, framework: TestFramework) -> St
         PackageManager::Bun => format!("bun x --no-install {}", framework.binary()),
     }
 }
-
 fn manager_full_suite_command(manager: PackageManager) -> String {
     match manager {
         PackageManager::Npm => "npm test".to_string(),
@@ -63,7 +61,6 @@ fn manager_full_suite_command(manager: PackageManager) -> String {
         PackageManager::Bun => "bun test".to_string(),
     }
 }
-
 fn append_candidate(base: String, candidate: Option<&Path>, working_dir: &Path) -> String {
     let Some(candidate) = candidate else {
         return base;
@@ -74,7 +71,6 @@ fn append_candidate(base: String, candidate: Option<&Path>, working_dir: &Path) 
         .to_string_lossy();
     format!("{base} -- {}", shell_quote(&relative))
 }
-
 fn append_bun_candidate(base: String, candidate: Option<&Path>, working_dir: &Path) -> String {
     let Some(candidate) = candidate else {
         return base;
@@ -85,7 +81,6 @@ fn append_bun_candidate(base: String, candidate: Option<&Path>, working_dir: &Pa
         .to_string_lossy();
     format!("{base} {}", shell_quote(&relative))
 }
-
 fn shell_quote(value: &str) -> String {
     if value
         .chars()
@@ -95,151 +90,65 @@ fn shell_quote(value: &str) -> String {
     }
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-
 pub(crate) fn framework_from_command(command: &str) -> Option<TestFramework> {
-    let tokens = shell_tokens(command);
-    if tokens.is_empty()
-        || tokens
-            .iter()
-            .any(|token| matches!(token.as_str(), "&&" | "||" | ";" | "|"))
-    {
+    let tokens = shell_tokens(command)?;
+    if tokens.is_empty() || tokens.iter().any(|token| token.contains('=')) {
         return None;
     }
-    framework_for_executable(command_executable(&tokens)?)
+    framework_for_token(command_executable(&tokens)?)
 }
-
 pub(crate) fn is_exact_bun_test_command(command: &str) -> bool {
-    let tokens = shell_tokens(command);
-    if tokens
-        .iter()
-        .any(|token| matches!(token.as_str(), "&&" | "||" | ";" | "|"))
-    {
-        return false;
-    }
-    let Some(index) = first_non_assignment(&tokens) else {
+    let Some(tokens) = shell_tokens(command) else {
         return false;
     };
-    executable_name(&tokens[index]) == Some("bun")
-        && tokens.len() == index + 2
-        && tokens.get(index + 1).is_some_and(|token| token == "test")
+    tokens.len() == 2 && tokens[0] == "bun" && tokens[1] == "test"
 }
-
-fn shell_tokens(command: &str) -> Vec<String> {
-    let mut parser = ShellTokenizer::default();
-    let mut chars = command.chars().peekable();
-    while let Some(character) = chars.next() {
-        if parser.is_comment_start(character) {
-            break;
-        }
-        parser.consume(character, &mut chars);
+fn shell_tokens(command: &str) -> Option<Vec<String>> {
+    if command.chars().any(|character| {
+        matches!(
+            character,
+            '\n' | '\r'
+                | '#'
+                | '&'
+                | ';'
+                | '|'
+                | '<'
+                | '>'
+                | '$'
+                | '('
+                | ')'
+                | '`'
+                | '\''
+                | '"'
+                | '\\'
+        )
+    }) {
+        return None;
     }
-    parser.finish()
+    Some(command.split_whitespace().map(str::to_string).collect())
 }
-
-#[derive(Default)]
-struct ShellTokenizer {
-    tokens: Vec<String>,
-    current: String,
-    quote: Option<char>,
-}
-
-impl ShellTokenizer {
-    fn is_comment_start(&self, character: char) -> bool {
-        character == '#' && self.quote.is_none() && self.current.is_empty()
-    }
-
-    fn consume(&mut self, character: char, chars: &mut std::iter::Peekable<Chars<'_>>) {
-        if let Some(active_quote) = self.quote {
-            consume_quoted_character(character, active_quote, &mut self.quote, &mut self.current);
-            return;
-        }
-        match character {
-            '\'' | '"' => self.quote = Some(character),
-            character if character.is_whitespace() => {
-                push_token(&mut self.tokens, &mut self.current)
-            }
-            '&' if chars.peek() == Some(&'&') => {
-                push_double_separator(chars, &mut self.tokens, &mut self.current, "&&")
-            }
-            '|' if chars.peek() == Some(&'|') => {
-                push_double_separator(chars, &mut self.tokens, &mut self.current, "||")
-            }
-            ';' | '|' => push_single_separator(&mut self.tokens, &mut self.current, character),
-            _ => self.current.push(character),
-        }
-    }
-
-    fn finish(mut self) -> Vec<String> {
-        push_token(&mut self.tokens, &mut self.current);
-        self.tokens
-    }
-}
-
-fn consume_quoted_character(
-    character: char,
-    active_quote: char,
-    quote: &mut Option<char>,
-    current: &mut String,
-) {
-    if character == active_quote {
-        *quote = None;
-    } else {
-        current.push(character);
-    }
-}
-
-fn push_double_separator(
-    chars: &mut std::iter::Peekable<Chars<'_>>,
-    tokens: &mut Vec<String>,
-    current: &mut String,
-    separator: &str,
-) {
-    chars.next();
-    push_token(tokens, current);
-    tokens.push(separator.to_string());
-}
-
-fn push_single_separator(tokens: &mut Vec<String>, current: &mut String, separator: char) {
-    push_token(tokens, current);
-    tokens.push(separator.to_string());
-}
-
-fn push_token(tokens: &mut Vec<String>, current: &mut String) {
-    if !current.is_empty() {
-        tokens.push(std::mem::take(current));
-    }
-}
-
 fn command_executable(tokens: &[String]) -> Option<&str> {
-    let index = first_non_assignment(tokens)?;
-    let executable = executable_name(&tokens[index])?;
-    command_after_wrapper(executable, &tokens[index + 1..])
+    let token = tokens.first()?;
+    let executable = executable_name(token)?;
+    command_after_wrapper(token, executable, &tokens[1..])
 }
-
-fn command_after_wrapper<'a>(executable: &'a str, args: &'a [String]) -> Option<&'a str> {
+fn command_after_wrapper<'a>(
+    token: &'a str,
+    executable: &str,
+    args: &'a [String],
+) -> Option<&'a str> {
     match executable {
-        "npx" | "bunx" => first_non_option(args),
-        "pnpm" | "yarn" | "npm" | "bun" => package_manager_command(executable, args),
-        "env" | "cross-env" => args
-            .iter()
-            .find(|token| !is_environment_assignment(token) && !token.starts_with('-'))
-            .and_then(|token| executable_name(token)),
-        _ => Some(executable),
-    }
-}
-
-fn package_manager_command<'a>(manager: &str, args: &'a [String]) -> Option<&'a str> {
-    if manager == "yarn" {
-        if let Some(subcommand) = args.first().and_then(|token| executable_name(token))
-            && framework_for_executable(subcommand).is_some()
-        {
-            return Some(subcommand);
+        "npx" | "bunx" if token == executable => first_executable_after_options(args),
+        "pnpm" | "yarn" | "npm" | "bun" if token == executable => {
+            package_manager_command(executable, args)
         }
+        _ => Some(token),
     }
-    let skip = package_manager_exec_skip(manager, args.first()?.as_str())?;
-    first_non_option(args.get(skip..)?)
 }
-
+fn package_manager_command<'a>(manager: &str, args: &'a [String]) -> Option<&'a str> {
+    let skip = package_manager_exec_skip(manager, args.first()?.as_str())?;
+    first_executable_after_options(args.get(skip..)?)
+}
 fn package_manager_exec_skip(manager: &str, subcommand: &str) -> Option<usize> {
     match (manager, subcommand) {
         ("pnpm", "exec" | "dlx") | ("yarn", "exec") | ("npm", "exec" | "x") | ("bun", "x") => {
@@ -248,39 +157,286 @@ fn package_manager_exec_skip(manager: &str, subcommand: &str) -> Option<usize> {
         _ => None,
     }
 }
-
-fn first_non_option(tokens: &[String]) -> Option<&str> {
-    tokens
-        .iter()
-        .find(|token| !token.starts_with('-'))
-        .and_then(|token| executable_name(token))
+fn first_executable_after_options(tokens: &[String]) -> Option<&str> {
+    let mut skip_value = false;
+    for (index, token) in tokens.iter().enumerate() {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if token == "--" {
+            return tokens.get(index + 1).map(String::as_str);
+        }
+        if token.starts_with('-') {
+            skip_value = option_requires_value(token)?;
+            continue;
+        }
+        return Some(token);
+    }
+    None
 }
-
-fn first_non_assignment(tokens: &[String]) -> Option<usize> {
-    tokens
-        .iter()
-        .position(|token| !is_environment_assignment(token))
+fn option_requires_value(token: &str) -> Option<bool> {
+    if token.contains('=') {
+        return None;
+    }
+    let option = token;
+    let requires_value = matches!(
+        option,
+        "-c" | "-p"
+            | "-w"
+            | "--call"
+            | "--config"
+            | "--cwd"
+            | "--filter"
+            | "--node-options"
+            | "--package"
+            | "--prefix"
+            | "--workspace"
+    );
+    let allowed_flag = matches!(
+        option,
+        "--ignore-existing"
+            | "--no-install"
+            | "--offline"
+            | "--prefer-offline"
+            | "--prefer-online"
+            | "--quiet"
+            | "--yes"
+    );
+    (requires_value || allowed_flag).then_some(requires_value)
 }
-
-fn is_environment_assignment(token: &str) -> bool {
-    let Some((name, _)) = token.split_once('=') else {
-        return false;
-    };
-    let mut chars = name.chars();
-    matches!(chars.next(), Some('_' | 'A'..='Z' | 'a'..='z'))
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
-}
-
 fn executable_name(token: &str) -> Option<&str> {
     let token = token.rsplit(['/', '\\']).next()?.trim_end_matches(".cmd");
     (!token.is_empty()).then_some(token)
 }
-
+fn framework_for_token(token: &str) -> Option<TestFramework> {
+    let executable = executable_name(token)?;
+    let normalized = token.replace('\\', "/");
+    let normalized = normalized.strip_suffix(".cmd").unwrap_or(&normalized);
+    let bin_path = format!("node_modules/.bin/{executable}");
+    if normalized != executable && normalized != format!("./{bin_path}") && normalized != bin_path {
+        return None;
+    }
+    framework_for_executable(executable)
+}
 fn framework_for_executable(executable: &str) -> Option<TestFramework> {
     match executable {
         "jest" => Some(TestFramework::Jest),
         "vitest" => Some(TestFramework::Vitest),
         "playwright" => Some(TestFramework::Playwright),
         _ => None,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engines::mutation::js::{
+        PackageManager, ResolvedTestPlan, TestFramework, TestSelection, resolve_js_test_plan,
+    };
+    use crate::engines::mutation::js_tests::test_support::{temp_root, write};
+    use std::path::Path;
+    fn plan(root: &Path, source: &str) -> ResolvedTestPlan {
+        resolve_js_test_plan(&root.join(source), root).unwrap()
+    }
+    struct CommandCase<'a> {
+        manager: PackageManager,
+        framework: Option<TestFramework>,
+        script: Option<&'a str>,
+        selector_capable: bool,
+        bun_test_script: bool,
+    }
+    fn command(case: CommandCase<'_>) -> String {
+        build_js_command(JsCommandInput {
+            manager: case.manager,
+            framework: case.framework,
+            script: case.script,
+            candidate: Some(Path::new("tests/value.test.ts")),
+            selector_capable: case.selector_capable,
+            bun_test_script: case.bun_test_script,
+            working_dir: Path::new("."),
+        })
+    }
+    fn assert_full_suite(plan: &ResolvedTestPlan, label: &str) {
+        assert_eq!(plan.framework, None, "{label}");
+        assert_eq!(plan.selection, TestSelection::FullSuite, "{label}");
+        assert!(!plan.command.contains("value.test.ts"), "{label}");
+    }
+    fn workspace_plan(root: &Path, manager: &str, script: Option<&str>) -> ResolvedTestPlan {
+        let package = script.map_or_else(
+            || format!(r#"{{"packageManager":"{manager}","workspaces":["packages/*"]}}"#),
+            |script| format!(r#"{{"packageManager":"{manager}","workspaces":["packages/*"],"scripts":{{"test":"{script}"}}}}"#),
+        );
+        write(root, "package.json", &package);
+        write(root, "packages/app/package.json", r#"{"name":"app"}"#);
+        write(
+            root,
+            "packages/app/src/value.ts",
+            "export const value = true;\n",
+        );
+        write(
+            root,
+            "packages/app/tests/value.test.ts",
+            "test('value', () => {});\n",
+        );
+        plan(root, "packages/app/src/value.ts")
+    }
+    #[test]
+    fn bun_script_commands_preserve_script_body_and_builtin_selector() {
+        assert_eq!(
+            command(CommandCase {
+                manager: Bun,
+                framework: Some(Vitest),
+                script: Some("test"),
+                selector_capable: true,
+                bun_test_script: false,
+            }),
+            "bun run test -- tests/value.test.ts"
+        );
+        assert_eq!(
+            command(CommandCase {
+                manager: Bun,
+                framework: None,
+                script: Some("test"),
+                selector_capable: false,
+                bun_test_script: false,
+            }),
+            "bun run test"
+        );
+        assert_eq!(
+            command(CommandCase {
+                manager: Bun,
+                framework: None,
+                script: Some("test"),
+                selector_capable: true,
+                bun_test_script: true,
+            }),
+            "bun test tests/value.test.ts"
+        );
+        assert_eq!(
+            command(CommandCase {
+                manager: Bun,
+                framework: None,
+                script: Some("test:unit"),
+                selector_capable: false,
+                bun_test_script: false,
+            }),
+            "bun run test:unit"
+        );
+        assert!(is_exact_bun_test_command("bun test"));
+        assert!(!is_exact_bun_test_command("bun test # comment"));
+        assert_eq!(framework_from_command("jest"), Some(TestFramework::Jest));
+        assert_eq!(
+            framework_from_command("vitest run"),
+            Some(TestFramework::Vitest)
+        );
+        assert_eq!(
+            framework_from_command("playwright test"),
+            Some(TestFramework::Playwright)
+        );
+    }
+    #[test]
+    fn shell_composition_comments_and_unclosed_tokens_disable_selectors() {
+        for command in [
+            "jest # comment",
+            "jest\njest",
+            "jest\n",
+            "jest & echo done",
+            "jest&echo done",
+            "npx 'jest",
+            "jest \\",
+            "bun test # comment",
+            "bun test\n",
+        ] {
+            assert_eq!(framework_from_command(command), None, "{command:?}");
+            assert!(!is_exact_bun_test_command(command), "{command:?}");
+        }
+    }
+    #[test]
+    fn wrapper_option_values_and_helper_paths_are_not_frameworks() {
+        for command in [
+            "npx --package jest helper",
+            "npx --package=jest helper",
+            "npx --unknown jest",
+            "npm exec --package jest node",
+            "bunx --package vitest helper",
+            "yarn jest",
+            "FOO=bar bun test",
+            "/opt/bun test",
+            "scripts/npm exec jest",
+            "/opt/npm exec jest",
+            "./scripts/jest",
+            "scripts/vitest",
+            "/opt/playwright",
+        ] {
+            assert_eq!(framework_from_command(command), None, "{command}");
+        }
+        assert_eq!(
+            framework_from_command("npx --package jest -- jest"),
+            Some(TestFramework::Jest)
+        );
+        assert_eq!(
+            framework_from_command("yarn exec jest"),
+            Some(TestFramework::Jest)
+        );
+        assert_eq!(
+            framework_from_command("./node_modules/.bin/jest"),
+            Some(TestFramework::Jest)
+        );
+    }
+    #[test]
+    fn workspace_root_script_is_bounded_fallback() {
+        for (label, manager, expected) in [
+            ("npm", "npm@10", "npm test"),
+            ("pnpm", "pnpm@9", "pnpm test"),
+            ("yarn", "yarn@4", "yarn test"),
+            ("bun", "bun@1", "bun run test"),
+        ] {
+            let root = temp_root(label);
+            let value = workspace_plan(&root, manager, Some("node scripts/test.mjs"));
+            assert_eq!(value.command, expected, "{label}");
+            assert_eq!(value.working_dir, root, "{label}");
+            assert_full_suite(&value, label);
+            let _ = std::fs::remove_dir_all(root);
+        }
+        let root = temp_root("workspace-no-root-script");
+        let value = workspace_plan(&root, "npm@10", None);
+        assert_eq!(value.command, "npm test");
+        assert_eq!(value.working_dir, root.join("packages/app"));
+        assert_full_suite(&value, "no root script");
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn nested_package_and_symlinked_tests_do_not_leak_candidates() {
+        let root = temp_root("nested-package-tests");
+        write(
+            &root,
+            "package.json",
+            r#"{"packageManager":"npm@10","scripts":{"test":"jest"}}"#,
+        );
+        write(&root, "src/value.ts", "export const value = true;\n");
+        write(&root, "tests/package.json", r#"{"name":"nested-tests"}"#);
+        write(&root, "tests/value.test.ts", "test('value', () => {});\n");
+        let value = plan(&root, "src/value.ts");
+        assert_full_suite(&value, "nested package");
+        let _ = std::fs::remove_dir_all(&root);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let root = temp_root("symlinked-tests");
+            let outside = temp_root("symlink-target");
+            write(
+                &root,
+                "package.json",
+                r#"{"packageManager":"npm@10","scripts":{"test":"jest"}}"#,
+            );
+            write(&root, "src/value.ts", "export const value = true;\n");
+            write(&outside, "value.test.ts", "test('value', () => {});\n");
+            std::fs::create_dir_all(root.join("tests")).unwrap();
+            symlink(&outside, root.join("tests/outside")).unwrap();
+            let value = plan(&root, "src/value.ts");
+            assert_full_suite(&value, "symlink outside package");
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_dir_all(outside);
+        }
     }
 }
