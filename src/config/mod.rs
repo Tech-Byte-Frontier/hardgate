@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// Root `hardgate.toml` configuration: gate identity plus every engine budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HardgateConfig {
     #[serde(default)]
     pub gate: GateConfig,
@@ -58,6 +59,7 @@ impl Default for HardgateConfig {
 
 /// Gate identity: display name, base preset, and strictness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GateConfig {
     #[serde(default = "default_gate_name")]
     pub name: String,
@@ -90,6 +92,7 @@ fn default_true() -> bool {
 
 /// Physical file budgets plus per-function AST complexity budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct BudgetsConfig {
     #[serde(default)]
     pub files: FileBudgets,
@@ -99,6 +102,7 @@ pub struct BudgetsConfig {
 
 /// Byte/line ceilings per file, with glob exclusions that surface advisories.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FileBudgets {
     pub max_bytes: Option<u64>,
     #[serde(default)]
@@ -108,6 +112,7 @@ pub struct FileBudgets {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ExclusionConfig {
     #[serde(default)]
     pub paths: Vec<String>,
@@ -116,6 +121,7 @@ pub struct ExclusionConfig {
 /// Per-function ceilings: cyclomatic, cognitive, Halstead, ABC, parameters,
 /// lines, statements, and nesting depth.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FunctionBudgets {
     pub max_cyclomatic: Option<u32>,
     pub max_cognitive: Option<u32>,
@@ -129,6 +135,7 @@ pub struct FunctionBudgets {
 
 /// Zero-tolerance suppression policy plus project-specific forbidden tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AntiGamingConfig {
     #[serde(default = "default_true")]
     pub disallow_suppressions: bool,
@@ -147,6 +154,7 @@ impl Default for AntiGamingConfig {
 
 /// Architectural boundary rules between subsystems.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvariantsConfig {
     #[serde(default = "default_true")]
     pub enforce: bool,
@@ -166,6 +174,7 @@ impl Default for InvariantsConfig {
 /// One boundary rule: which files it covers and what imports, calls, or
 /// tokens are forbidden there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvariantRule {
     pub name: Option<String>,
     pub from: String,
@@ -178,6 +187,7 @@ pub struct InvariantRule {
 
 /// Token-stream clone detection thresholds and exclusion globs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloneConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -210,6 +220,7 @@ fn default_min_clone_tokens() -> usize {
 /// Coverage floors (line/function/branch), CRAP ceiling, and critical paths
 /// requiring full coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CoverageConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -236,6 +247,7 @@ pub struct MutationConfig {
 
 /// External formatter/linter/test commands orchestrated by `fmt` and `check --all`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct OrchestrationConfig {
     pub format_check: Option<String>,
     pub format: Option<String>,
@@ -247,6 +259,7 @@ pub struct OrchestrationConfig {
 
 /// Post-static analyses such as dead-code detection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisConfig {
     #[serde(default)]
     pub dead_code: DeadCodeConfig,
@@ -254,6 +267,7 @@ pub struct AnalysisConfig {
 
 /// Dead-code detection: entry points plus exclusion globs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeadCodeConfig {
     #[serde(default)]
     pub enabled: bool,
