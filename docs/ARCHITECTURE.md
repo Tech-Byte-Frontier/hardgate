@@ -83,7 +83,7 @@ Each violation carries a stable fingerprint computed from normalized token kinds
 
 ### Coverage
 
-When `[coverage].enabled` is true, the LCOV parser evaluates global line/function/branch floors, function CRAP scores, critical paths, and source records. In `check --diff`, changed Git lines are filtered to AST-supported source-role files and only changed executable lines are scored. Missing, empty, unreadable, malformed, or incomplete required coverage evidence is blocking regardless of `gate.strict`.
+When `[coverage].enabled` is true, the LCOV parser evaluates global line/function/branch floors, function CRAP scores, critical paths, and source records. CRAP scoring requires at least one LCOV `DA` entry inside the parsed function range: a zero-hit entry remains uncovered, while a range with no executable line evidence is omitted as target- or `cfg`-excluded. In `check --diff`, changed Git lines are filtered to AST-supported source-role files and only changed executable lines are scored. Missing, empty, unreadable, malformed, or incomplete required coverage evidence is blocking regardless of `gate.strict`.
 
 ### Mutation reports
 
