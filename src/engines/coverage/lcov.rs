@@ -315,11 +315,12 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
     if builder.coverage.line_hits.is_empty() {
         bail!("LCOV source record contains no DA line data");
     }
-    if builder.coverage.lines_found != builder.coverage.line_hits.len() {
+    let detailed_lines = builder.coverage.line_hits.len();
+    if builder.coverage.lines_found < detailed_lines {
         bail!(
-            "LCOV LF:{} does not match {} unique DA lines",
+            "LCOV LF:{} is less than {} unique DA lines",
             builder.coverage.lines_found,
-            builder.coverage.line_hits.len()
+            detailed_lines
         );
     }
     let hit_lines = builder
@@ -330,11 +331,22 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
             count.checked_add(usize::from(*hits > 0))
         })
         .ok_or_else(|| anyhow::anyhow!("LCOV hit-line count overflow"))?;
-    if builder.coverage.lines_hit != hit_lines {
+    if builder.coverage.lines_hit < hit_lines {
         bail!(
-            "LCOV LH:{} does not match {} DA lines with hits",
+            "LCOV LH:{} is less than {} DA lines with hits",
             builder.coverage.lines_hit,
             hit_lines
+        );
+    }
+    let omitted_lines = builder.coverage.lines_found - detailed_lines;
+    let omitted_hit_lines = builder.coverage.lines_hit - hit_lines;
+    if omitted_hit_lines > omitted_lines {
+        bail!(
+            "LCOV LH:{} implies {} omitted hit lines but LF:{} only omits {} lines",
+            builder.coverage.lines_hit,
+            omitted_hit_lines,
+            builder.coverage.lines_found,
+            omitted_lines
         );
     }
     Ok(())

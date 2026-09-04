@@ -166,12 +166,21 @@ fn validate_functions(details: &FunctionDetails, input: &DetailValidation<'_>) -
         bail!("LCOV FN/FNDA function identities do not match");
     }
     let aggregate = input.seen_counts.contains("FNF");
-    if (!details.declarations.is_empty() && !aggregate && !input.require_functions)
-        || (aggregate || input.require_functions)
-            && (details.declarations.len() != input.functions_found
-                || hit_count(details.hits.values()) != input.functions_hit)
-    {
+    let detail_count = details.declarations.len();
+    if detail_count == 0 {
+        return Ok(());
+    }
+    if !aggregate && !input.require_functions {
         bail!("LCOV FN/FNDA details require matching FNF/FNH counts");
+    }
+    let detail_hit_count = hit_count(details.hits.values());
+    if detail_count < input.functions_found || detail_hit_count < input.functions_hit {
+        bail!("LCOV FN/FNDA details require matching FNF/FNH counts");
+    }
+    let extra_total = detail_count - input.functions_found;
+    let extra_hit = detail_hit_count - input.functions_hit;
+    if extra_hit > extra_total {
+        bail!("LCOV FN/FNDA details contain impossible hit instances");
     }
     Ok(())
 }
