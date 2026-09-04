@@ -1,19 +1,23 @@
-use std::io::Read;
+#[cfg(unix)]
+use std::io;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "process/capture.rs"]
+mod capture;
 #[path = "process/cleanup.rs"]
 mod cleanup;
 
+use capture::{CaptureResult, CapturedOutput};
 use cleanup::terminate_process_tree;
 pub(crate) use cleanup::timeout_scope;
 
 const MAX_STREAM_BYTES: usize = 32 * 1024;
 const MAX_OUTPUT_BYTES: usize = MAX_STREAM_BYTES * 2;
 const OUTPUT_READ_TIMEOUT: Duration = Duration::from_secs(1);
+const READER_SHUTDOWN_GRACE: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub(crate) enum ProcessOutcome {
@@ -69,29 +73,30 @@ pub(crate) fn run_command_with_roots(
             };
         }
     };
-    let captured = CapturedOutput::from_child(&mut child);
-    match wait_for_child(&mut child, timeout, operation) {
-        ProcessWait::Exited(status) => ProcessOutcome::Completed {
-            status,
-            output: captured.collect(),
-        },
-        ProcessWait::Timeout => ProcessOutcome::TimedOut {
-            output: captured.collect(),
-        },
-        ProcessWait::Error(message) => ProcessOutcome::Failed {
-            message,
-            output: captured.collect(),
-        },
-    }
+    let mut captured = CapturedOutput::from_child(&mut child);
+    finish_process_wait(
+        wait_for_child(&mut child, timeout, operation),
+        &mut child,
+        &mut captured,
+    )
 }
 
 pub(crate) fn append_output(existing: String, extra: String) -> String {
-    let combined = match (existing.is_empty(), extra.is_empty()) {
-        (true, _) => extra,
-        (_, true) => existing,
-        (false, false) => format!("{existing}\n{extra}"),
-    };
-    truncate_output(combined)
+    if extra.is_empty() {
+        return truncate_output(existing);
+    }
+    if existing.is_empty() {
+        return truncate_output(extra);
+    }
+    if extra.len() >= MAX_OUTPUT_BYTES {
+        return truncate_output(extra);
+    }
+    let separator = "\n";
+    let existing = truncate_output_to(
+        existing,
+        MAX_OUTPUT_BYTES.saturating_sub(separator.len() + extra.len()),
+    );
+    format!("{existing}{separator}{extra}")
 }
 
 fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<Child> {
@@ -141,94 +146,47 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
-struct CapturedOutput {
-    stdout: Option<Receiver<CapturedStream>>,
-    stderr: Option<Receiver<CapturedStream>>,
-}
-
-impl CapturedOutput {
-    fn from_child(child: &mut Child) -> Self {
-        Self {
-            stdout: child.stdout.take().map(spawn_reader),
-            stderr: child.stderr.take().map(spawn_reader),
+#[cfg(unix)]
+macro_rules! declare_fcntl {
+    () => {
+        unsafe extern "C" {
+            fn fcntl(fd: i32, command: i32, ...) -> i32;
         }
-    }
-
-    fn collect(self) -> String {
-        let stdout = receive_stream(self.stdout);
-        let stderr = receive_stream(self.stderr);
-        combine_streams(stdout, stderr)
-    }
-}
-
-#[derive(Debug)]
-struct CapturedStream {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-fn spawn_reader<R>(mut reader: R) -> Receiver<CapturedStream>
-where
-    R: Read + Send + 'static,
-{
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut bytes = Vec::with_capacity(MAX_STREAM_BYTES);
-        let mut truncated = false;
-        let mut buffer = [0_u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => append_chunk(&mut bytes, &mut truncated, &buffer[..read]),
-                Err(_) => break,
-            }
-        }
-        let _ = sender.send(CapturedStream { bytes, truncated });
-    });
-    receiver
-}
-
-fn append_chunk(bytes: &mut Vec<u8>, truncated: &mut bool, chunk: &[u8]) {
-    let remaining = MAX_STREAM_BYTES.saturating_sub(bytes.len());
-    let keep = chunk.len().min(remaining);
-    bytes.extend_from_slice(&chunk[..keep]);
-    *truncated |= keep < chunk.len();
-}
-
-fn receive_stream(receiver: Option<Receiver<CapturedStream>>) -> CapturedStream {
-    receiver
-        .and_then(|channel| channel.recv_timeout(OUTPUT_READ_TIMEOUT).ok())
-        .unwrap_or(CapturedStream {
-            bytes: Vec::new(),
-            truncated: false,
-        })
-}
-
-fn combine_streams(stdout: CapturedStream, stderr: CapturedStream) -> String {
-    let stdout = stream_text(stdout);
-    let stderr = stream_text(stderr);
-    let combined = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => stdout,
-        (true, false) => stderr,
-        (false, false) => format!("{stdout}\n{stderr}"),
     };
-    truncate_output(combined)
 }
 
-fn stream_text(stream: CapturedStream) -> String {
-    let mut text = String::from_utf8_lossy(&stream.bytes).trim().to_string();
-    if stream.truncated {
-        text.push_str("\n[output truncated after 32768 bytes]");
+#[cfg(unix)]
+declare_fcntl!();
+
+#[cfg(unix)]
+fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    const O_NONBLOCK: i32 = 0x0004;
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    const O_NONBLOCK: i32 = 0x0800;
+
+    let flags = unsafe { fcntl(fd, F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
     }
-    text
+    if unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK) } < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
-fn truncate_output(mut text: String) -> String {
-    if text.len() <= MAX_OUTPUT_BYTES {
+fn truncate_output(text: String) -> String {
+    truncate_output_to(text, MAX_OUTPUT_BYTES)
+}
+
+fn truncate_output_to(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
         return text;
     }
-    let mut end = MAX_OUTPUT_BYTES;
+    let mut end = max_bytes;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -240,6 +198,96 @@ enum ProcessWait {
     Exited(ExitStatus),
     Timeout,
     Error(String),
+}
+
+fn finish_process_wait(
+    wait: ProcessWait,
+    child: &mut Child,
+    captured: &mut CapturedOutput,
+) -> ProcessOutcome {
+    let initial = captured.collect(OUTPUT_READ_TIMEOUT);
+    let cleanup_error = cleanup_after_capture(initial.incomplete, &wait, child);
+    let capture = finish_capture(captured, initial);
+    let reader_error = capture_reader_error(&capture);
+    finish_wait_outcome(wait, capture, cleanup_error, reader_error)
+}
+
+fn cleanup_after_capture(
+    incomplete: bool,
+    wait: &ProcessWait,
+    child: &mut Child,
+) -> Option<String> {
+    if incomplete && matches!(wait, ProcessWait::Exited(_)) {
+        terminate_process_tree(child).err()
+    } else {
+        None
+    }
+}
+
+fn finish_capture(captured: &mut CapturedOutput, initial: CaptureResult) -> CaptureResult {
+    if initial.incomplete {
+        captured.cancel();
+        captured.collect(READER_SHUTDOWN_GRACE)
+    } else {
+        initial
+    }
+}
+
+fn capture_reader_error(capture: &CaptureResult) -> Option<String> {
+    capture
+        .incomplete
+        .then(|| "output readers did not terminate within the bounded cleanup window".to_string())
+}
+
+fn finish_wait_outcome(
+    wait: ProcessWait,
+    capture: CaptureResult,
+    cleanup_error: Option<String>,
+    reader_error: Option<String>,
+) -> ProcessOutcome {
+    match wait {
+        ProcessWait::Exited(status) => {
+            finish_exited(status, capture.output, cleanup_error, reader_error)
+        }
+        ProcessWait::Timeout => finish_timeout(capture.output, reader_error),
+        ProcessWait::Error(message) => finish_wait_error(message, capture.output, reader_error),
+    }
+}
+
+fn finish_exited(
+    status: ExitStatus,
+    output: String,
+    cleanup_error: Option<String>,
+    reader_error: Option<String>,
+) -> ProcessOutcome {
+    if cleanup_error.is_none() && reader_error.is_none() {
+        return ProcessOutcome::Completed { status, output };
+    }
+    let message = cleanup_error
+        .map(|error| {
+            format!(
+                "command exited, but process cleanup failed while closing inherited pipes: {error}"
+            )
+        })
+        .or(reader_error)
+        .unwrap_or_else(|| "command exited but process cleanup failed".to_string());
+    ProcessOutcome::Failed { message, output }
+}
+
+fn finish_timeout(output: String, reader_error: Option<String>) -> ProcessOutcome {
+    match reader_error {
+        None => ProcessOutcome::TimedOut { output },
+        Some(message) => ProcessOutcome::Failed { message, output },
+    }
+}
+
+fn finish_wait_error(
+    message: String,
+    output: String,
+    reader_error: Option<String>,
+) -> ProcessOutcome {
+    let message = reader_error.map_or(message.clone(), |reader| format!("{message}; {reader}"));
+    ProcessOutcome::Failed { message, output }
 }
 
 fn wait_for_child(child: &mut Child, timeout: Duration, operation: &str) -> ProcessWait {

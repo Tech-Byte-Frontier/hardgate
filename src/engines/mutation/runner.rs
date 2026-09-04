@@ -1,10 +1,13 @@
 use super::generator::AstMutant;
 use super::js::{ResolvedTestPlan, TestSelection, is_javascript_path, resolve_js_test_plan};
-use super::process::{CommandExecution, execute_with_timeout};
+use super::process::{CommandExecution, baseline_outcome, execute_with_timeout};
 use crate::engines::process::{CommandRoots, append_output};
 #[path = "restore.rs"]
 mod restore;
-use restore::{atomic_replace, ensure_regular_file, restore_and_verify};
+use restore::{
+    SourceSnapshot, atomic_replace, ensure_regular_file, restore_and_verify, snapshot_regular_file,
+    verify_and_restore,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,6 +66,7 @@ pub struct NativeMutationRunner {
 
 struct RollbackGuard<'a> {
     file_path: &'a Path,
+    root: &'a Path,
     original_bytes: &'a [u8],
     original_permissions: std::fs::Permissions,
     restored: bool,
@@ -71,11 +75,13 @@ struct RollbackGuard<'a> {
 impl<'a> RollbackGuard<'a> {
     fn new(
         file_path: &'a Path,
+        root: &'a Path,
         original_bytes: &'a [u8],
         original_permissions: std::fs::Permissions,
     ) -> Self {
         Self {
             file_path,
+            root,
             original_bytes,
             original_permissions,
             restored: false,
@@ -85,6 +91,7 @@ impl<'a> RollbackGuard<'a> {
     fn restore(&mut self) -> std::io::Result<()> {
         let result = restore_and_verify(
             self.file_path,
+            self.root,
             self.original_bytes,
             &self.original_permissions,
         );
@@ -102,6 +109,7 @@ impl Drop for RollbackGuard<'_> {
         }
         match restore_and_verify(
             self.file_path,
+            self.root,
             self.original_bytes,
             &self.original_permissions,
         ) {
@@ -175,18 +183,12 @@ impl NativeMutationRunner {
     pub fn run_mutant(&self, mutant: &AstMutant, root: &Path) -> MutantExecutionResult {
         let start = Instant::now();
         let target_path = resolve_target_path(&mutant.file, root);
-        let plan = self.resolve_test_plan(&mutant.file, root);
-        if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
-            let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
-            result.source_restored = true;
-            return result;
-        }
-        let original_permissions = match ensure_regular_file(&target_path) {
+        let original_permissions = match ensure_regular_file(&target_path, root) {
             Ok(permissions) => permissions,
             Err(error) => {
                 return mutant_error(
                     mutant,
-                    &plan.command,
+                    self.test_cmd.as_deref().unwrap_or_default(),
                     start,
                     format!(
                         "Failed to inspect mutation target '{}': {error}",
@@ -195,6 +197,12 @@ impl NativeMutationRunner {
                 );
             }
         };
+        let plan = self.resolve_test_plan(&mutant.file, root);
+        if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
+            let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
+            result.source_restored = true;
+            return result;
+        }
         let original_bytes = match fs::read(&target_path) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -209,12 +217,14 @@ impl NativeMutationRunner {
                 );
             }
         };
-        let mut guard = RollbackGuard::new(&target_path, &original_bytes, original_permissions);
+        let mut guard =
+            RollbackGuard::new(&target_path, root, &original_bytes, original_permissions);
         let mut execution = apply_and_execute(
             self,
             MutationInput {
                 mutant,
                 target_path: &target_path,
+                root,
                 original_bytes: &original_bytes,
                 plan: &plan,
             },
@@ -255,14 +265,31 @@ impl NativeMutationRunner {
                 diagnostic,
             };
         }
+        let target_path = resolve_target_path(file, root);
+        let original = match snapshot_regular_file(&target_path, root) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return BaselineExecutionResult {
+                    file: file.to_path_buf(),
+                    outcome: BaselineOutcome::RunnerError,
+                    duration_ms: start.elapsed().as_millis(),
+                    command: plan.command,
+                    diagnostic: format!(
+                        "Failed to inspect baseline source '{}': {error}",
+                        target_path.display()
+                    ),
+                };
+            }
+        };
         let execution =
             execute_with_timeout(&plan.command, process_roots(&plan), self.timeout_secs);
+        let (outcome, diagnostic) = baseline_integrity(execution, &target_path, root, &original);
         BaselineExecutionResult {
             file: file.to_path_buf(),
-            outcome: baseline_outcome(&execution),
+            outcome,
             duration_ms: start.elapsed().as_millis(),
             command: plan.command,
-            diagnostic: baseline_diagnostic(execution.diagnostic, &plan.selection),
+            diagnostic: baseline_diagnostic(diagnostic, &plan.selection),
         }
     }
 }
@@ -315,12 +342,18 @@ fn process_roots(plan: &ResolvedTestPlan) -> CommandRoots<'_> {
 struct MutationInput<'a> {
     mutant: &'a AstMutant,
     target_path: &'a Path,
+    root: &'a Path,
     original_bytes: &'a [u8],
     plan: &'a ResolvedTestPlan,
 }
 
 fn apply_and_execute(runner: &NativeMutationRunner, input: MutationInput<'_>) -> CommandExecution {
-    match apply_mutant_bytes(input.target_path, input.mutant, input.original_bytes) {
+    match apply_mutant_bytes(
+        input.target_path,
+        input.root,
+        input.mutant,
+        input.original_bytes,
+    ) {
         Ok(ApplyResult::Equivalent) => CommandExecution {
             outcome: MutantOutcome::Equivalent,
             diagnostic: "Replacement is byte-for-byte equivalent to the original source text."
@@ -360,21 +393,38 @@ fn mutant_error(
     }
 }
 
-fn baseline_outcome(execution: &CommandExecution) -> BaselineOutcome {
-    match execution.status.as_ref() {
-        Some(status) if status.success() => BaselineOutcome::Passed,
-        Some(status) if status_is_runner_error(status) => BaselineOutcome::RunnerError,
-        Some(_) => BaselineOutcome::Failed,
-        None if execution.outcome == MutantOutcome::Timeout => BaselineOutcome::Timeout,
-        None => BaselineOutcome::RunnerError,
+fn baseline_integrity(
+    execution: CommandExecution,
+    path: &Path,
+    root: &Path,
+    original: &SourceSnapshot,
+) -> (BaselineOutcome, String) {
+    let mut outcome = baseline_outcome(&execution);
+    let mut diagnostic = execution.diagnostic;
+    match verify_and_restore(path, root, original) {
+        Ok(false) => {}
+        Ok(true) => {
+            outcome = BaselineOutcome::RunnerError;
+            append_diagnostic(
+                &mut diagnostic,
+                format!(
+                    "Baseline command modified source '{}'; original bytes and permissions were restored, so mutation testing was aborted.",
+                    path.display()
+                ),
+            );
+        }
+        Err(error) => {
+            outcome = BaselineOutcome::RunnerError;
+            append_diagnostic(
+                &mut diagnostic,
+                format!(
+                    "Baseline source integrity check failed for '{}': {error}; mutation testing was aborted.",
+                    path.display()
+                ),
+            );
+        }
     }
-}
-
-fn status_is_runner_error(status: &std::process::ExitStatus) -> bool {
-    match status.code() {
-        None => true,
-        Some(code) => matches!(code, 126 | 127) || code >= 128,
-    }
+    (outcome, diagnostic)
 }
 
 fn baseline_diagnostic(mut diagnostic: String, selection: &TestSelection) -> String {
@@ -398,6 +448,7 @@ fn resolve_target_path(file: &Path, root: &Path) -> PathBuf {
 
 fn apply_mutant_bytes(
     target_path: &Path,
+    root: &Path,
     mutant: &AstMutant,
     original_bytes: &[u8],
 ) -> std::io::Result<ApplyResult> {
@@ -422,8 +473,8 @@ fn apply_mutant_bytes(
     mutated.extend_from_slice(&original_bytes[..mutant.start_byte]);
     mutated.extend_from_slice(mutant.replacement.as_bytes());
     mutated.extend_from_slice(&original_bytes[mutant.end_byte..]);
-    let permissions = ensure_regular_file(target_path)?;
-    atomic_replace(target_path, &mutated, &permissions).map(|()| ApplyResult::Applied)
+    let permissions = ensure_regular_file(target_path, root)?;
+    atomic_replace(target_path, root, &mutated, &permissions).map(|()| ApplyResult::Applied)
 }
 
 #[derive(Clone, Copy)]

@@ -1,4 +1,7 @@
 use super::mutation_output::{MutationSummaryContext, render_mutation_output};
+#[cfg(test)]
+#[path = "mutate_tests.rs"]
+mod mutate_tests;
 mod targets;
 
 use crate::config::HardgateConfig;

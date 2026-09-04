@@ -1,12 +1,25 @@
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEMP_ATTEMPTS: u64 = 32;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn ensure_regular_file(path: &Path) -> io::Result<Permissions> {
+#[derive(Debug)]
+pub(super) struct SourceSnapshot {
+    pub(super) bytes: Vec<u8>,
+    pub(super) permissions: Permissions,
+}
+
+pub(super) fn snapshot_regular_file(path: &Path, root: &Path) -> io::Result<SourceSnapshot> {
+    let permissions = ensure_regular_file(path, root)?;
+    let bytes = fs::read(path)?;
+    Ok(SourceSnapshot { bytes, permissions })
+}
+
+pub(super) fn ensure_regular_file(path: &Path, root: &Path) -> io::Result<Permissions> {
+    ensure_safe_ancestors(path, root)?;
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         return Err(io::Error::new(
@@ -31,12 +44,18 @@ pub(super) fn ensure_regular_file(path: &Path) -> io::Result<Permissions> {
 
 pub(super) fn restore_and_verify(
     path: &Path,
+    root: &Path,
     original_bytes: &[u8],
     permissions: &Permissions,
 ) -> io::Result<()> {
-    ensure_restore_target(path)?;
-    atomic_replace(path, original_bytes, permissions)?;
-    ensure_regular_file(path)?;
+    ensure_restore_target(path, root)?;
+    atomic_replace(path, root, original_bytes, permissions)?;
+    let restored_permissions = ensure_regular_file(path, root)?;
+    if !same_permissions(permissions, &restored_permissions) {
+        return Err(io::Error::other(
+            "restored source permissions differ from the original",
+        ));
+    }
     let restored = fs::read(path)?;
     if restored == original_bytes {
         Ok(())
@@ -47,7 +66,27 @@ pub(super) fn restore_and_verify(
     }
 }
 
-fn ensure_restore_target(path: &Path) -> io::Result<()> {
+pub(super) fn verify_and_restore(
+    path: &Path,
+    root: &Path,
+    original: &SourceSnapshot,
+) -> io::Result<bool> {
+    let changed = match snapshot_regular_file(path, root) {
+        Ok(current) => {
+            !same_permissions(&current.permissions, &original.permissions)
+                || current.bytes != original.bytes
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(error) => return Err(error),
+    };
+    if changed {
+        restore_and_verify(path, root, &original.bytes, &original.permissions)?;
+    }
+    Ok(changed)
+}
+
+fn ensure_restore_target(path: &Path, root: &Path) -> io::Result<()> {
+    ensure_safe_ancestors(path, root)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -71,9 +110,11 @@ fn ensure_restore_target(path: &Path) -> io::Result<()> {
 
 pub(super) fn atomic_replace(
     path: &Path,
+    root: &Path,
     bytes: &[u8],
     permissions: &Permissions,
 ) -> io::Result<()> {
+    ensure_safe_ancestors(path, root)?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -93,6 +134,7 @@ pub(super) fn atomic_replace(
         AtomicWrite {
             temp_path: &temp_path,
             path,
+            root,
             bytes,
             permissions,
         },
@@ -130,6 +172,7 @@ fn create_temp_file(parent: &Path, name: &str) -> io::Result<(std::path::PathBuf
 struct AtomicWrite<'a> {
     temp_path: &'a Path,
     path: &'a Path,
+    root: &'a Path,
     bytes: &'a [u8],
     permissions: &'a Permissions,
 }
@@ -140,7 +183,12 @@ fn write_temp_and_rename(mut temp: File, write: AtomicWrite<'_>) -> io::Result<(
     temp.sync_all()?;
     drop(temp);
     fs::rename(write.temp_path, write.path)?;
-    let _ = ensure_regular_file(write.path)?;
+    let written_permissions = ensure_regular_file(write.path, write.root)?;
+    if !same_permissions(write.permissions, &written_permissions) {
+        return Err(io::Error::other(
+            "atomic replacement permissions differ from requested source permissions",
+        ));
+    }
     let written = fs::read(write.path)?;
     if written == write.bytes {
         Ok(())
@@ -171,6 +219,112 @@ fn cleanup_temp<T>(temp_path: &Path, result: io::Result<T>) -> io::Result<T> {
             "{error}; failed to clean temporary mutation file '{}': {cleanup}",
             temp_path.display()
         ))),
+    }
+}
+
+fn ensure_safe_ancestors(path: &Path, root: &Path) -> io::Result<()> {
+    let root = fs::canonicalize(root)?;
+    let path = normalize_absolute(path)?;
+    let relative = path.strip_prefix(&root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing mutation target '{}' outside repository root '{}'",
+                path.display(),
+                root.display()
+            ),
+        )
+    })?;
+    let relative_parent = relative
+        .parent()
+        .filter(|item| !item.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new(""));
+    let mut current = root;
+    for component in relative_parent.components() {
+        let Component::Normal(part) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "mutation target '{}' has unsafe ancestor components",
+                    path.display()
+                ),
+            ));
+        };
+        current.push(part);
+        let metadata = fs::symlink_metadata(&current)?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing mutation target '{}'; ancestor '{}' is a symlink",
+                    path.display(),
+                    current.display()
+                ),
+            ));
+        }
+        if !metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing mutation target '{}'; ancestor '{}' is not a directory",
+                    path.display(),
+                    current.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_absolute(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        normalize_component(&mut normalized, component, path)?;
+    }
+    Ok(normalized)
+}
+
+fn normalize_component(
+    normalized: &mut PathBuf,
+    component: Component<'_>,
+    original: &Path,
+) -> io::Result<()> {
+    match component {
+        Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+        Component::RootDir => normalized.push(component.as_os_str()),
+        Component::CurDir => {}
+        Component::ParentDir => pop_component(normalized, original)?,
+        Component::Normal(part) => normalized.push(part),
+    }
+    Ok(())
+}
+
+fn pop_component(normalized: &mut PathBuf, original: &Path) -> io::Result<()> {
+    if normalized.pop() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path '{}' escapes its filesystem root", original.display()),
+        ))
+    }
+}
+
+fn same_permissions(expected: &Permissions, actual: &Permissions) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        expected.mode() == actual.mode()
+    }
+    #[cfg(not(unix))]
+    {
+        expected.readonly() == actual.readonly()
     }
 }
 

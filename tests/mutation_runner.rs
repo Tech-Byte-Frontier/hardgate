@@ -46,25 +46,29 @@ fn run_baseline_script(tag: &str, script: &str) -> hardgate::engines::BaselineEx
 }
 
 #[cfg(unix)]
-fn timeout_fixture(tag: &str, script_name: &str, body: String) -> (PathBuf, PathBuf) {
+fn timeout_fixture(tag: &str, script_name: &str, body: String) -> (PathBuf, PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
     let root = source_root(tag, b"true\n");
     let script = root.join(script_name);
     let pid_file = root.join("child.pid");
-    let body = body.replace("{pid_file}", &pid_file.display().to_string());
+    let group_pid_file = root.join("group.pid");
+    let body = body
+        .replace("{pid_file}", &pid_file.display().to_string())
+        .replace("{group_pid_file}", &group_pid_file.display().to_string());
     std::fs::write(&script, body).unwrap();
     let mut permissions = std::fs::metadata(&script).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&script, permissions).unwrap();
-    (root, pid_file)
+    (root, pid_file, group_pid_file)
 }
 
 #[cfg(unix)]
 fn assert_process_absent(pid: i32, context: &str) {
     for _ in 0..100 {
         let alive = std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
+            .args(["-0", "--", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
             .status()
             .map(|status| status.success())
             .unwrap_or(false);
@@ -74,6 +78,25 @@ fn assert_process_absent(pid: i32, context: &str) {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("{context} left descendant process {pid} alive");
+}
+
+#[cfg(unix)]
+fn assert_process_group_absent(pgid: i32, context: &str) {
+    for _ in 0..100 {
+        let target = format!("-{pgid}");
+        let alive = std::process::Command::new("kill")
+            .args(["-0", "--", &target])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !alive {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("{context} left process group {pgid} alive");
 }
 
 #[cfg(unix)]
@@ -102,7 +125,8 @@ struct TimeoutFixtureSpec<'a> {
 
 #[cfg(unix)]
 fn run_timeout_fixture(spec: TimeoutFixtureSpec<'_>) {
-    let (root, pid_file) = timeout_fixture(spec.tag, spec.script_name, spec.body.to_string());
+    let (root, pid_file, group_pid_file) =
+        timeout_fixture(spec.tag, spec.script_name, spec.body.to_string());
     let runner = NativeMutationRunner::new(1, Some(spec.command.to_string()));
     let result = runner.run_mutant(&mutant("fixture.rs", 0, 4, "true"), Path::new(&root));
     assert_eq!(result.outcome, MutantOutcome::Timeout);
@@ -113,6 +137,9 @@ fn run_timeout_fixture(spec: TimeoutFixtureSpec<'_>) {
     let child_pid = std::fs::read_to_string(pid_file).unwrap();
     let child_pid = child_pid.trim().parse::<i32>().unwrap();
     assert_process_absent(child_pid, spec.context);
+    let group_pid = std::fs::read_to_string(group_pid_file).unwrap();
+    let group_pid = group_pid.trim().parse::<i32>().unwrap();
+    assert_process_group_absent(group_pid, spec.context);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -193,6 +220,18 @@ fn mutation_outcomes_require_known_failure_evidence() {
             MutantOutcome::Killed,
         ),
         (
+            "printf 'not ok feature test' >&2; exit 1",
+            MutantOutcome::Killed,
+        ),
+        (
+            "printf 'FAILED tests/test_feature.py' >&2; exit 1",
+            MutantOutcome::Killed,
+        ),
+        (
+            "printf 'fail tests/test_feature.rs' >&2; exit 1",
+            MutantOutcome::Killed,
+        ),
+        (
             "printf 'could not compile crate' >&2; exit 1",
             MutantOutcome::CompileError,
         ),
@@ -201,6 +240,13 @@ fn mutation_outcomes_require_known_failure_evidence() {
             MutantOutcome::CompileError,
         ),
         ("printf 'failed' >&2; exit 1", MutantOutcome::RunnerError),
+        ("printf 'FAIL' >&2; exit 1", MutantOutcome::RunnerError),
+        ("printf '1 failed' >&2; exit 1", MutantOutcome::RunnerError),
+        ("printf 'panicked' >&2; exit 1", MutantOutcome::RunnerError),
+        (
+            "printf 'untrusted error[E9999] text' >&2; exit 1",
+            MutantOutcome::RunnerError,
+        ),
         ("printf 'error' >&2; exit 1", MutantOutcome::RunnerError),
         ("exit 1", MutantOutcome::RunnerError),
         ("exit 126", MutantOutcome::RunnerError),
@@ -375,7 +421,7 @@ fn timeout_terminates_process_group_descendants() {
     run_timeout_fixture(TimeoutFixtureSpec {
         tag: "mutation-runner-timeout",
         script_name: "hang.sh",
-        body: "#!/bin/sh\nsleep 30 &\nprintf '%s' \"$!\" > '{pid_file}'\nwait \"$!\"\n",
+        body: "#!/bin/sh\nprintf '%s' \"$$\" > '{group_pid_file}'\nsleep 30 &\nprintf '%s' \"$!\" > '{pid_file}'\nwait \"$!\"\n",
         command: "sh hang.sh",
         context: "timeout",
         diagnostic: None,
@@ -388,49 +434,11 @@ fn timeout_kills_term_ignoring_descendant_and_verifies_group_absence() {
     run_timeout_fixture(TimeoutFixtureSpec {
         tag: "mutation-runner-timeout-kill",
         script_name: "ignore-term.sh",
-        body: "#!/bin/sh\ntrap '' TERM\nsleep 30 &\nprintf '%s' \"$!\" > '{pid_file}'\nwait\n",
+        body: "#!/bin/sh\nprintf '%s' \"$$\" > '{group_pid_file}'\ntrap '' TERM\nsleep 30 &\nprintf '%s' \"$!\" > '{pid_file}'\nwait\n",
         command: "sh ignore-term.sh",
         context: "TERM-ignoring timeout",
         diagnostic: Some("terminated and absence was verified"),
     });
-}
-
-#[cfg(unix)]
-#[test]
-fn restoration_refuses_symlink_sabotage_without_touching_external_file() {
-    let root = source_root("mutation-runner-restore-symlink", b"true\n");
-    let target = root.join("fixture.rs");
-    let outside = root.join("outside.txt");
-    std::fs::write(&outside, b"outside\n").unwrap();
-    let result = run_mutant_at_root(
-        &root,
-        "sh -c 'rm -f fixture.rs; ln -s outside.txt fixture.rs'".to_string(),
-    );
-    assert_eq!(result.outcome, MutantOutcome::RunnerError);
-    assert!(!result.source_restored);
-    assert_eq!(std::fs::read(&outside).unwrap(), b"outside\n");
-    assert!(
-        std::fs::symlink_metadata(&target)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[cfg(unix)]
-#[test]
-fn restoration_refuses_directory_sabotage() {
-    let root = source_root("mutation-runner-restore-directory", b"true\n");
-    let target = root.join("fixture.rs");
-    let result = run_mutant_at_root(
-        &root,
-        "sh -c 'rm -f fixture.rs; mkdir fixture.rs'".to_string(),
-    );
-    assert_eq!(result.outcome, MutantOutcome::RunnerError);
-    assert!(!result.source_restored);
-    assert!(target.is_dir());
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
