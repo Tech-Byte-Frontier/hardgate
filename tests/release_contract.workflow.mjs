@@ -238,7 +238,7 @@ const registryDelay = Number(release.match(/HARDGATE_REGISTRY_DELAY:\s*(\d+)/)?.
 const curlMaxTime = Number(release.match(/HARDGATE_CURL_MAX_TIME:\s*(\d+)/)?.[1]);
 assert.ok(Number.isInteger(registryAttempts) && Number.isInteger(registryDelay) && Number.isInteger(curlMaxTime));
 assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDelay <= 300, "each registry wait must fit within five minutes");
-assert.match(release, /already-published path needs an[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
+assert.match(release, /explicit gap before the identity probe[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
 assert.doesNotMatch(
   launcher,
@@ -322,6 +322,7 @@ const crateVerifyStep = release.slice(release.indexOf("- name: Verify published 
 assert.doesNotMatch(crateStateStep, /CARGO_REGISTRY_TOKEN/, "crate probes must not receive publication credentials");
 assert.match(cratePublishStep, /CARGO_REGISTRY_TOKEN:[\s\S]*?cargo publish --locked/, "crate token must scope only publication");
 assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?CARGO_REGISTRY_TOKEN=\"\$publish_token\" cargo publish --locked/, "crate token must be process-scoped");
+assert.match(cratePublishStep, /unset CARGO_REGISTRY_TOKEN[\s\S]*?sleep 1[\s\S]*?cargo publish --locked/, "crate state probe and upload must respect the one-request-per-second policy");
 assert.doesNotMatch(crateVerifyStep, /CARGO_REGISTRY_TOKEN/, "crate verification must not inherit publish credentials");
 for (const job of ["version-check", "package", "attest", "publication-preflight", "github-release", "publish-crates", "publish-npm", "verify-channels"]) {
   assert.match(release, new RegExp(`${job}:[\\s\\S]*?runs-on: ubuntu-24\\.04`), `${job} should use the current x64 Linux runner`);

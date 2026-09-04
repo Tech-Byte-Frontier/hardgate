@@ -731,6 +731,9 @@ jobs:
           set -euo pipefail
           publish_token="${CARGO_REGISTRY_TOKEN:?CARGO_REGISTRY_TOKEN is required}"
           unset CARGO_REGISTRY_TOKEN
+          # Pace the preceding anonymous version probe and this upload to the
+          # crates.io limit of at most one API request per second.
+          sleep 1
           CARGO_REGISTRY_TOKEN="$publish_token" cargo publish --locked
           unset publish_token
       - name: Verify published crate identity without publish credentials
@@ -739,9 +742,8 @@ jobs:
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
-          # crates.io permits at most one API request per second. The publish
-          # path naturally exceeds this; the already-published path needs an
-          # explicit gap between its state and identity probes.
+          # crates.io permits at most one API request per second. Keep an
+          # explicit gap before the identity probe on every publication path.
           sleep 1
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
           crate_probe() {
