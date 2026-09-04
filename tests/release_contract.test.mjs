@@ -94,6 +94,8 @@ includesAll(ci, [
 includesAll(release, [
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0",
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
   "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b",
   "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
   "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
