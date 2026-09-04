@@ -1,7 +1,7 @@
 use crate::config::CoverageConfig;
 use crate::engines::complexity::FunctionMetrics;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -89,6 +89,59 @@ impl CoverageScorer {
         self.evaluate_missing_function_files(coverage_map, functions, &mut violations);
         self.evaluate_function_crap(coverage_map, functions, &mut violations);
         self.evaluate_critical_paths(coverage_map, root, &mut violations);
+        violations
+    }
+    /// Evaluate changed executable lines from a normalized diff map.
+    pub fn evaluate_diff_coverage(
+        &self,
+        coverage_map: &HashMap<PathBuf, FileCoverage>,
+        changed_lines: &BTreeMap<PathBuf, BTreeSet<usize>>,
+    ) -> Vec<CoverageViolation> {
+        let mut violations = Vec::new();
+        for (file, lines) in changed_lines {
+            let Some((_, coverage)) = coverage_map
+                .iter()
+                .find(|(path, _)| coverage_path_matches(path, file))
+            else {
+                violations.push(CoverageViolation {
+                    file: file.clone(),
+                    function_name: None,
+                    metric: "Missing Diff Coverage".to_string(),
+                    actual: 0.0,
+                    limit: 100.0,
+                    message: format!("Changed source `{}` has no coverage record", file.display()),
+                    recommendation: "Regenerate LCOV for every changed source file.".to_string(),
+                });
+                continue;
+            };
+            let hits = &coverage.line_hits;
+            let executable = lines.iter().filter(|l| hits.contains_key(l)).count();
+            if executable == 0 {
+                continue;
+            }
+            let uncovered: Vec<_> = lines
+                .iter()
+                .filter(|line| hits.get(line) == Some(&0))
+                .map(|line| line.to_string())
+                .collect();
+            if uncovered.is_empty() {
+                continue;
+            }
+            let pct = calc_pct(executable - uncovered.len(), executable);
+            violations.push(CoverageViolation {
+                file: file.clone(),
+                function_name: None,
+                metric: "Diff Line Coverage".to_string(),
+                actual: pct,
+                limit: 100.0,
+                message: format!(
+                    "Uncovered lines {} in `{}` ({pct:.1}%, need 100%)",
+                    uncovered.join(", "),
+                    file.display()
+                ),
+                recommendation: "Add tests covering the changed executable lines.".to_string(),
+            });
+        }
         violations
     }
 
