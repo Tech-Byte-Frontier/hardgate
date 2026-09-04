@@ -10,6 +10,10 @@ use hardgate::engines::{AstMutationGenerator, MutationGatekeeper, MutationStats}
 use mutations::has_mutation;
 use std::path::{Path, PathBuf};
 
+fn default_value<T: Default>() -> T {
+    T::default()
+}
+
 fn gatekeeper() -> MutationGatekeeper {
     gatekeeper_with_floor(85.0)
 }
@@ -33,7 +37,7 @@ fn write_report(root: &Path, name: &str, content: &str) -> PathBuf {
 
 #[test]
 fn test_ast_mutation_generator() {
-    let mut generator = AstMutationGenerator::new();
+    let mut generator = default_value::<AstMutationGenerator>();
 
     let code = r#"
     fn evaluate(a: i32, b: i32) -> bool {
