@@ -3,8 +3,10 @@ pub use check::{
     output_report_with_opts, print_empty_discovery,
 };
 pub mod check;
+mod dead_code;
 mod evidence;
 pub mod fmt;
+mod gate_evidence;
 pub mod init;
 pub mod mutate;
 mod mutation_output;

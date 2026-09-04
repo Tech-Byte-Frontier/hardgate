@@ -1,6 +1,10 @@
-use super::check::{Emission, OutputOptions, emit_gate_report, print_empty_discovery};
+use super::check::{Emission, OutputOptions, emit_gate_report};
+use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
-use super::static_gate::run_static_gate_scoped;
+use super::gate_evidence::{
+    GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
+    run_static_gate_or_empty,
+};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
@@ -26,15 +30,34 @@ pub struct VerifyOptions {
 /// Exits non-zero when violations are found.
 pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     let start_time = Instant::now();
+    let root = Path::new(".");
     let config = HardgateConfig::load_or_default(None)?;
     let scoped = !opts.paths.is_empty();
 
-    let Some((mut report, _files, read_results, functions)) =
-        run_static_gate_scoped(&config, false, &opts.paths)?
-    else {
-        print_empty_discovery(false, scoped);
-        return Ok(());
-    };
+    let GateRun {
+        mut report,
+        empty,
+        read_results,
+        functions,
+        ..
+    } = run_static_gate_or_empty(&config, false, &opts.paths)?;
+    if empty {
+        report
+            .advisories
+            .push(empty_discovery_advisory(false, scoped));
+    }
+
+    if config.analysis.dead_code.enabled {
+        run_dead_code_analysis(&config, &read_results, root, &mut report)?;
+    }
+
+    run_legacy_ratchet(
+        &config,
+        root,
+        &mut report,
+        config.analysis.dead_code.enabled,
+    );
+    run_generated_freshness(&config, root, &mut report);
 
     verify_coverage(
         &config,
@@ -87,6 +110,7 @@ pub struct CoverageVerification<'a> {
 }
 
 /// Ingest an lcov report and flag functions breaching coverage/CRAP floors.
+/// Enabled coverage is required evidence regardless of static gate strictness.
 pub fn verify_coverage(
     config: &HardgateConfig,
     cli_report: Option<String>,
@@ -119,7 +143,7 @@ fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
     let Some(ref path_str) = cov_path else {
         record_evidence_failure(
             request.report,
-            request.config.gate.strict,
+            true,
             EvidenceFailure {
                 step: "coverage-report",
                 target: Path::new("<not-configured>"),
@@ -132,7 +156,7 @@ fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
     if !p.exists() {
         record_evidence_failure(
             request.report,
-            request.config.gate.strict,
+            true,
             EvidenceFailure {
                 step: "coverage-report",
                 target: p,
@@ -147,7 +171,7 @@ fn evaluate_coverage_report(request: &mut CoverageVerification<'_>) {
         Err(e) => {
             record_evidence_failure(
                 request.report,
-                request.config.gate.strict,
+                true,
                 EvidenceFailure {
                     step: "coverage-report",
                     target: p,
@@ -171,7 +195,8 @@ fn append_coverage_violations(
 }
 
 /// Ingest mutation reports (Stryker, cargo-mutants, generic) and flag scores
-/// below the configured floor.
+/// below the configured floor. Enabled mutation is required evidence
+/// regardless of static gate strictness.
 pub fn verify_mutation(
     config: &HardgateConfig,
     cli_report: Option<String>,
@@ -187,7 +212,7 @@ pub fn verify_mutation(
     let Some(reports) = mut_reports else {
         record_evidence_failure(
             report,
-            config.gate.strict,
+            true,
             EvidenceFailure {
                 step: "mutation-report",
                 target: Path::new("<not-configured>"),
@@ -199,7 +224,7 @@ pub fn verify_mutation(
     if reports.is_empty() {
         record_evidence_failure(
             report,
-            config.gate.strict,
+            true,
             EvidenceFailure {
                 step: "mutation-report",
                 target: Path::new("<empty-report-list>"),
@@ -215,7 +240,7 @@ pub fn verify_mutation(
         if !p.exists() {
             record_evidence_failure(
                 report,
-                config.gate.strict,
+                true,
                 EvidenceFailure {
                     step: "mutation-report",
                     target: p,
@@ -229,7 +254,7 @@ pub fn verify_mutation(
             Err(e) => {
                 record_evidence_failure(
                     report,
-                    config.gate.strict,
+                    true,
                     EvidenceFailure {
                         step: "mutation-report",
                         target: p,

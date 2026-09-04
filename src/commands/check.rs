@@ -1,10 +1,15 @@
-use super::role_policy::{apply_dead_code_findings, classify_file};
-use super::static_gate::run_static_gate_scoped;
-use super::verify::{verify_coverage, verify_mutation};
+use super::dead_code::run_dead_code_analysis;
+use super::gate_evidence::{
+    ChangedLineFilter, GateRun, empty_discovery_advisory, filter_changed_lines,
+    run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
+};
+use super::verify::{
+    CoverageVerification, verify_coverage, verify_coverage_with_diff, verify_mutation,
+};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::FileRole;
-use crate::engines::{DeadCodeAnalyzer, OrchestrationEngine};
+use crate::engines::OrchestrationEngine;
+use crate::git_evidence::{ReferenceEvidence, load_reference};
 use anyhow::Result;
 use colored::*;
 use std::path::{Path, PathBuf};
@@ -57,26 +62,50 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     let start_time = Instant::now();
     let root = Path::new(".");
     let config = HardgateConfig::load_or_default(None)?;
+    let ratchet_enabled = config.legacy.ratchet;
+    let static_diff = opts.diff && !ratchet_enabled;
 
-    let Some((mut report, _files, read_results, functions)) =
-        run_static_gate_scoped(&config, opts.diff, &opts.paths)?
-    else {
-        print_empty_discovery(opts.diff, !opts.paths.is_empty());
-        return Ok(());
-    };
+    let GateRun {
+        mut report,
+        files,
+        read_results,
+        functions,
+        empty,
+    } = run_static_gate_or_empty(&config, static_diff, &opts.paths)?;
+    if empty {
+        report
+            .advisories
+            .push(empty_discovery_advisory(opts.diff, !opts.paths.is_empty()));
+    }
 
     if opts.dead_code || config.analysis.dead_code.enabled {
         run_dead_code_analysis(&config, &read_results, root, &mut report)?;
     }
 
-    if config.coverage.enabled {
-        verify_coverage(
+    let reference_evidence = if ratchet_enabled {
+        run_legacy_ratchet(
             &config,
-            find_coverage_report(&config, opts.coverage_report.clone()),
-            &functions,
+            root,
             &mut report,
-        );
-    }
+            opts.dead_code || config.analysis.dead_code.enabled,
+        )
+    } else {
+        None
+    };
+
+    run_generated_freshness(&config, root, &mut report);
+
+    run_check_coverage(CheckCoverage {
+        config: &config,
+        diff: opts.diff,
+        cli_report: opts.coverage_report.clone(),
+        files: &files,
+        read_results: &read_results,
+        functions: &functions,
+        reference_evidence: reference_evidence.as_ref(),
+        root,
+        report: &mut report,
+    })?;
 
     if config.mutation.enabled {
         verify_mutation(&config, None, &mut report);
@@ -109,44 +138,86 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-fn run_dead_code_analysis(
-    config: &HardgateConfig,
-    read_results: &[(PathBuf, String)],
-    root: &Path,
-    report: &mut GateReport,
-) -> Result<()> {
-    let mut graph_files = Vec::new();
-    let mut graph_contents = Vec::new();
-    let mut graph_roles = Vec::new();
-    for (path, content) in read_results {
-        let classified = classify_file(path, config)?;
-        if !classified.ast_supported
-            || !matches!(
-                classified.role,
-                FileRole::Source | FileRole::Test | FileRole::Generated | FileRole::Fixture
-            )
-        {
-            continue;
-        }
-        graph_files.push(path.clone());
-        graph_contents.push((path.clone(), content.clone()));
-        graph_roles.push(classified);
+struct CheckCoverage<'a> {
+    config: &'a HardgateConfig,
+    diff: bool,
+    cli_report: Option<String>,
+    files: &'a [PathBuf],
+    read_results: &'a [(PathBuf, String)],
+    functions: &'a [crate::engines::FunctionMetrics],
+    reference_evidence: Option<&'a ReferenceEvidence>,
+    root: &'a Path,
+    report: &'a mut GateReport,
+}
+
+fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
+    if !request.config.coverage.enabled {
+        return Ok(());
     }
-    let analyzer = DeadCodeAnalyzer::new(&config.analysis.dead_code);
-    let findings = analyzer.analyze(&graph_files, &graph_contents, root);
-    for finding in findings {
-        let role = graph_roles
-            .iter()
-            .find(|file| relative_path(&file.path, root) == finding.file)
-            .map(|file| file.role)
-            .unwrap_or(FileRole::Unknown);
-        apply_dead_code_findings(report, config, role, vec![finding]);
+    let coverage_report = find_coverage_report(request.config, request.cli_report.clone());
+    if !request.diff {
+        verify_coverage(
+            request.config,
+            coverage_report,
+            request.functions,
+            request.report,
+        );
+        return Ok(());
     }
+
+    let changed_lines = match request.reference_evidence {
+        Some(evidence) => Some(filter_changed_lines(ChangedLineFilter {
+            changed_lines: &evidence.change_set.changed_lines,
+            selected_files: request.files,
+            read_results: request.read_results,
+            config: request.config,
+            root: request.root,
+        })?),
+        None if request.config.legacy.ratchet => Some(Default::default()),
+        None => load_changed_lines_for_coverage(&mut request)?,
+    };
+    verify_coverage_with_diff(CoverageVerification {
+        config: request.config,
+        cli_report: coverage_report,
+        functions: request.functions,
+        changed_lines: changed_lines.as_ref(),
+        report: request.report,
+    });
     Ok(())
 }
 
-fn relative_path<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
+fn load_changed_lines_for_coverage(
+    request: &mut CheckCoverage<'_>,
+) -> Result<Option<crate::git_evidence::ChangedLineMap>> {
+    let reference = request
+        .config
+        .legacy
+        .reference_branch
+        .as_deref()
+        .unwrap_or("HEAD");
+    match load_reference(request.root, reference) {
+        Ok(evidence) => Ok(Some(filter_changed_lines(ChangedLineFilter {
+            changed_lines: &evidence.change_set.changed_lines,
+            selected_files: request.files,
+            read_results: request.read_results,
+            config: request.config,
+            root: request.root,
+        })?)),
+        Err(error) => {
+            super::evidence::record_evidence_failure(
+                request.report,
+                true,
+                super::evidence::EvidenceFailure {
+                    step: "coverage-diff",
+                    target: Path::new(reference),
+                    message: format!(
+                        "Unable to load Git reference evidence for changed-line coverage: {error}"
+                    ),
+                },
+            );
+            Ok(Some(Default::default()))
+        }
+    }
 }
 
 fn find_coverage_report(config: &HardgateConfig, cli_report: Option<String>) -> Option<String> {
@@ -263,54 +334,5 @@ pub fn emit_gate_report(report: &mut GateReport, emission: Emission) {
     output_report_with_opts(report, emission.opts);
     if !report.passed {
         std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::run_dead_code_analysis;
-    use crate::config::HardgateConfig;
-    use crate::diagnostics::GateReport;
-    use std::path::Path;
-    use std::path::PathBuf;
-
-    #[test]
-    fn dead_code_graph_ignores_config_but_reports_unreferenced_source() {
-        let config = HardgateConfig::default();
-        let contents = vec![
-            (PathBuf::from("src/unused.rs"), "fn unused() {}".to_string()),
-            (
-                PathBuf::from("src/generated/unused.ts"),
-                "export function generatedOnly() {}".to_string(),
-            ),
-            (PathBuf::from("package.json"), "{}".to_string()),
-            (PathBuf::from("Cargo.toml"), "[package]".to_string()),
-        ];
-        let mut report = GateReport::new("test".to_string());
-        run_dead_code_analysis(&config, &contents, Path::new("."), &mut report).unwrap();
-        assert!(
-            report
-                .dead_code_violations
-                .iter()
-                .any(|finding| finding.file.as_path() == Path::new("src/unused.rs"))
-        );
-        assert!(
-            report
-                .dead_code_violations
-                .iter()
-                .all(|finding| finding.file.as_path() != Path::new("package.json"))
-        );
-        assert!(
-            report
-                .dead_code_violations
-                .iter()
-                .all(|finding| finding.file.as_path() != Path::new("Cargo.toml"))
-        );
-        assert!(
-            report
-                .dead_code_violations
-                .iter()
-                .all(|finding| finding.file.as_path() != Path::new("src/generated/unused.ts"))
-        );
     }
 }
