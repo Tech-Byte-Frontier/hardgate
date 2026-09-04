@@ -9,10 +9,12 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-function detectMusl(platform, glibcVersionRuntime, alpineReleaseExists) {
+function detectMusl(platform, glibcVersionRuntime) {
   if (platform !== "linux") return false;
-  if (typeof glibcVersionRuntime === "string") return false;
-  return alpineReleaseExists;
+  return !(
+    typeof glibcVersionRuntime === "string" &&
+    glibcVersionRuntime.trim().length > 0
+  );
 }
 
 function readGlibcVersion() {
@@ -27,22 +29,11 @@ function readGlibcVersion() {
   }
 }
 
-function hasAlpineRelease() {
-  // fs.existsSync never throws for a constant valid path (it returns false
-  // on error by contract), so no defensive catch here: dead catches generate
-  // equivalent mutants no honest test can kill.
-  return fs.existsSync("/etc/alpine-release");
-}
-
 function isMusl() {
-  // No platform guard here: detectMusl already returns false for non-linux
-  // (pinned by its truth table), so a wrapper-level guard would be dead code
-  // with an equivalent mutant. Single delegation keeps one testable owner.
-  return detectMusl(
-    process.platform,
-    readGlibcVersion(),
-    hasAlpineRelease(),
-  );
+  // A positive, non-empty process.report glibc version is authoritative. Any
+  // other Linux result selects the static musl package, including minimal or
+  // non-Alpine systems where libc helper files are unavailable.
+  return detectMusl(process.platform, readGlibcVersion());
 }
 
 // Platform -> optional-dependency table: [platform, arch, musl-or-null, pkg].

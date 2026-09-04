@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRetryableNpmPackError } from "../scripts/npm-pack-retry.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -16,6 +17,7 @@ const packageScript = read("scripts/release-package.mjs");
 const checksumScript = read("scripts/release-checksums.mjs");
 const verifier = read("scripts/release-verify.mjs");
 const npmPublication = read("scripts/verify-npm-publication.mjs");
+const npmPackRetry = read("scripts/npm-pack-retry.mjs");
 const launcher = read("npm/hardgate/bin/hardgate.js");
 const sbomScript = read("scripts/release-sbom.mjs");
 const sbomVerifier = read("scripts/release-sbom-verify.mjs");
@@ -88,6 +90,7 @@ includesAll(ci, [
   "node tests/npm-wrapper.test.mjs",
   "node tests/npm-wrapper-regression.test.mjs",
   "node tests/release_contract.install.test.mjs",
+  "node tests/release_contract.package.test.mjs",
   "node scripts/check-consumer-matrix.mjs",
   "HARDGATE_BINARY: target/release/hardgate",
 ], "CI");
@@ -141,6 +144,7 @@ includesAll(release, [
   "crate_version()",
   "npm_registry_probe()",
   "wait_for_registry_version()",
+  "wait_for_crate_version()",
   'publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"',
   'unset NODE_AUTH_TOKEN',
   'NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public',
@@ -150,8 +154,8 @@ includesAll(release, [
   "npm registry version probe failed",
   "gh release download",
   "cmp --",
-  "retry_npm_view",
-  "retry_crate_view",
+  "wait_for_registry_version 1",
+  "wait_for_crate_version 1",
   "cargo install hardgate --version \"=$RELEASE_VERSION\"",
   "npm install --ignore-scripts",
   "--package \"$pkg\"",
@@ -161,11 +165,43 @@ includesAll(release, [
   "yarn add",
   "bun add",
   "HARDGATE_INSTALL_DIR=\"$install_root\" sh scripts/install.sh",
+  "HARDGATE_CURL_CONNECT_TIMEOUT: 10",
+  "HARDGATE_CURL_MAX_TIME: 20",
+  "HARDGATE_REGISTRY_ATTEMPTS: 10",
+  "HARDGATE_REGISTRY_DELAY: 10",
+  "release_error=$(mktemp)",
+  "release_exists=0",
+  "unable to determine whether GitHub release",
 ], "release");
 assert.doesNotMatch(release, /--clobber/, "immutable release assets must never be overwritten in place");
+assert.doesNotMatch(release, /npm view/, "final registry verification must use status-aware probes");
+assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");
+assert.doesNotMatch(release, /^[ \t]*registry_version\(\)/m, "registry waits must not multiply nested retry loops");
+includesAll(release, ["retry_absent", "return 3", "release_error=$(mktemp)", "release_exists=0", "refusing to create or mutate it"], "status-aware release waits");
+const registryAttempts = Number(release.match(/HARDGATE_REGISTRY_ATTEMPTS:\s*(\d+)/)?.[1]);
+const registryDelay = Number(release.match(/HARDGATE_REGISTRY_DELAY:\s*(\d+)/)?.[1]);
+const curlMaxTime = Number(release.match(/HARDGATE_CURL_MAX_TIME:\s*(\d+)/)?.[1]);
+assert.ok(Number.isInteger(registryAttempts) && Number.isInteger(registryDelay) && Number.isInteger(curlMaxTime));
+assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDelay <= 300, "each registry wait must fit within five minutes");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
-assert.doesNotMatch(launcher, /win32|windows|\.exe|MZ|windowsHide|homebrew|brew/i, "published launcher must be Unix-only and avoid unsupported channels");
-includesAll(launcher, ["res.status ?? 1", "signal leaves spawnSync.status null"], "launcher signal handling");
+assert.doesNotMatch(
+  launcher,
+  /\["win32"\s*,|hardgate-win32|\.exe\b|\bMZ\b|homebrew|\bbrew\b/i,
+  "published launcher must not advertise or package unsupported Windows or Homebrew channels",
+);
+includesAll(launcher, ["function detectMusl", "glibcVersionRuntime", "trim().length", "static musl package"], "generic Linux libc detection");
+assert.doesNotMatch(launcher, /hasAlpineRelease|alpineReleaseExists/, "Linux libc detection must not depend on an Alpine-only marker");
+includesAll(
+  launcher,
+  [
+    "function exitFromSpawn",
+    "result.status ?? 1",
+    'process.platform !== "win32"',
+    "process.kill(process.pid, result.signal)",
+    "process.exit(1)",
+  ],
+  "launcher signal handling",
+);
 assert.match(release, /permissions:\s*\n\s+contents: read/, "release workflow default token must be read-only");
 assert.match(release, /package:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only packaging may attest artifacts");
 assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
@@ -179,11 +215,26 @@ for (const job of ["version-check", "package", "github-release", "publish-crates
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");
 assert.equal((release.match(/actions\/checkout@/g) ?? []).length, (release.match(/persist-credentials: false/g) ?? []).length, "release checkouts must not persist GitHub credentials");
-includesAll(packageScript, ["--sort=name", "--mtime=@0", "gzip", "-n", "SHA256SUMS", "chmodSync(destination, 0o755)", "full hexadecimal source identity"], "archive helper");
+includesAll(packageScript, ["--sort=name", "--mtime=@0", "gzip", "-n", "SHA256SUMS", "chmodSync(packageRoot, 0o755)", "chmodSync(destination, 0o755)", "metadataPath", "chmodSync(metadataPath, 0o644)", "full hexadecimal source identity"], "archive helper");
 includesAll(checksumScript, ["SHA256SUMS", "hardgate-${version}.sbom.cdx.json", "lines.length", "sha256"], "payload checksum helper");
 includesAll(syncScript, ["syncJson(path.join(root, \"package.json\")", "--check", "Cargo.toml"], "version synchronization");
 includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "ld-musl", "ld-linux", "static(?:-pie)?", "muslInterpreter"], "archive verifier");
-includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS"], "npm publication verifier");
+includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS", "isRetryableNpmPackError", "failed without retry"], "npm publication verifier");
+includesAll(npmPackRetry, ["isRetryableNpmPackError", "E404", "EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED"], "npm pack retry classifier");
+for (const error of [
+  { code: "E404" },
+  { message: "npm ERR! HTTP 404" },
+  { code: "EAI_AGAIN" },
+  { code: "ECONNRESET" },
+  { code: "ETIMEDOUT" },
+  { code: "ECONNREFUSED" },
+]) assert.equal(isRetryableNpmPackError(error), true, `expected retryable npm pack error: ${JSON.stringify(error)}`);
+for (const error of [
+  { code: "E401" },
+  { code: "E403" },
+  { message: "npm pack produced 0 tarballs" },
+  { message: "npm pack exited with status 1" },
+]) assert.equal(isRetryableNpmPackError(error), false, `expected fatal npm pack error: ${JSON.stringify(error)}`);
 assert.doesNotMatch(verifier, /startsWith\(`hardgate \$\{version\}/, "host smoke must compare the complete identity");
 assert.match(sbomScript, /expression: licenseText/, "CycloneDX must encode compound SPDX values as expressions");
 assert.match(sbomScript, /id: licenseText/, "CycloneDX may encode a single SPDX identifier as an id");
@@ -239,6 +290,23 @@ includesAll(installer, [
   "mktemp -d \"$INSTALL_DIR/.hardgate.XXXXXX\"",
 ], "installer");
 assert.doesNotMatch(installer, /sha256sum --check|sha256sum --status/, "installer checksum verification must work with BusyBox");
+includesAll(installer, [
+  "HARDGATE_CURL_CONNECT_TIMEOUT",
+  "HARDGATE_CURL_MAX_TIME",
+  "--connect-timeout \"$CURL_CONNECT_TIMEOUT\"",
+  "--max-time \"$CURL_MAX_TIME\"",
+  "destination=\"$INSTALL_DIR/hardgate\"",
+  "destination ${destination} is a directory",
+], "installer safety and bounded downloads");
+const installerCurlInvocations = installer.match(/\bcurl\s+--/g) ?? [];
+assert.ok(installerCurlInvocations.length >= 2, "installer must have checksum and archive downloads");
+assert.equal((installer.match(/--connect-timeout/g) ?? []).length, installerCurlInvocations.length, "every installer curl must set connect timeout");
+assert.equal((installer.match(/--max-time/g) ?? []).length, installerCurlInvocations.length, "every installer curl must set max time");
+const releaseCurlInvocations = release.match(/\bcurl\s+--/g) ?? [];
+assert.ok(releaseCurlInvocations.length > 0, "release must probe registries with curl");
+assert.equal((release.match(/--connect-timeout/g) ?? []).length, releaseCurlInvocations.length, "every release curl must set connect timeout");
+assert.equal((release.match(/--max-time/g) ?? []).length, releaseCurlInvocations.length, "every release curl must set max time");
+includesAll(installerRuntime, ["regular-file replacement", "existing destination directory", "symlink-to-directory", "is a directory", "BusyBox"], "installer destination regression");
 includesAll(installerRuntime, ["BusyBox", "sha256sum", "HARDGATE_FIXTURE", "ldd", "EXTRA.txt", "hardgate-linux-x64-musl", "release_contract.install.test"], "installer runtime contract");
 includesAll(build, [
   "HARDGATE_BUILD_GIT_SHA",

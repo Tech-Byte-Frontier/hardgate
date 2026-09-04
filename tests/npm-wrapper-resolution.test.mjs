@@ -41,35 +41,35 @@ const launcher = loadLauncher(launcherFile);
   assert.deepEqual(launcher.fallbackPackages("hardgate-linux-x64"), [
     "hardgate-linux-x64-musl",
   ]);
-  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-x64-musl"), [
-    "hardgate-linux-x64",
-  ]);
+  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-x64-musl"), []);
   assert.deepEqual(launcher.fallbackPackages("hardgate-linux-arm64"), [
     "hardgate-linux-arm64-musl",
   ]);
+  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-arm64-musl"), []);
   assert.deepEqual(launcher.fallbackPackages("hardgate-darwin-arm64"), []);
   console.log("G: platform matrix + musl fallbacks pinned -- OK");
 }
 
-// H. glibc evidence wins; otherwise Alpine's release marker identifies musl.
+// H. A positive non-empty glibc report wins; otherwise generic Linux uses
+// the static musl package without relying on Alpine-specific marker files.
 {
   const cases = [
-    { platform: "linux", version: "2.39", alpine: false, expected: false },
-    { platform: "linux", version: "2.39", alpine: true, expected: false },
-    { platform: "linux", version: null, alpine: true, expected: true },
-    { platform: "linux", version: null, alpine: false, expected: false },
-    { platform: "linux", version: undefined, alpine: true, expected: true },
-    { platform: "darwin", version: null, alpine: false, expected: false },
-    { platform: "darwin", version: null, alpine: true, expected: false },
-    { platform: "win32", version: null, alpine: true, expected: false },
-    { platform: "freebsd", version: null, alpine: false, expected: false },
+    { platform: "linux", version: "2.39", expected: false },
+    { platform: "linux", version: " 2.39 ", expected: false },
+    { platform: "linux", version: "", expected: true },
+    { platform: "linux", version: "   ", expected: true },
+    { platform: "linux", version: null, expected: true },
+    { platform: "linux", version: undefined, expected: true },
+    { platform: "darwin", version: null, expected: false },
+    { platform: "win32", version: null, expected: false },
+    { platform: "freebsd", version: null, expected: false },
   ];
   for (const testCase of cases) {
-    const { platform, version, alpine, expected } = testCase;
+    const { platform, version, expected } = testCase;
     assert.equal(
-      launcher.detectMusl(platform, version, alpine),
+      launcher.detectMusl(platform, version),
       expected,
-      `detectMusl(${platform}, ${version}, ${alpine})`,
+      `detectMusl(${platform}, ${version})`,
     );
   }
   console.log("H: musl-detection truth table -- OK");

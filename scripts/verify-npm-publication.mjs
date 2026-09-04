@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { isRetryableNpmPackError } from "./npm-pack-retry.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packages = [
@@ -81,7 +82,12 @@ function packOnce(spec, directory) {
     maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
   });
-  if (result.status !== 0) throw new Error(result.error?.message ?? result.stderr ?? result.stdout);
+  if (result.status !== 0) {
+    const detail = [result.error?.code, result.error?.message, result.stderr, result.stdout]
+      .filter(Boolean)
+      .join("\n");
+    throw new Error(detail || `npm pack exited with status ${result.status}`);
+  }
   const archives = fs.readdirSync(directory).filter((name) => name.endsWith(".tgz"));
   if (archives.length !== 1) throw new Error(`npm pack ${spec} produced ${archives.length} tarballs`);
   return path.join(directory, archives[0]);
@@ -96,6 +102,9 @@ function packWithRetry(spec) {
     } catch (error) {
       lastError = error;
       fs.rmSync(directory, { recursive: true, force: true });
+      if (!isRetryableNpmPackError(error)) {
+        fail(`npm pack ${spec} failed without retry: ${error?.message ?? error}`);
+      }
       if (attempt < maxAttempts && retryDelay > 0) spawnSync("sleep", [String(retryDelay)]);
     }
   }

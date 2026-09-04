@@ -47,6 +47,9 @@ function locate(incoming, target) {
 function archiveBinary(binary, output, pkg, target, version, commit, staging) {
   const packageRoot = path.join(staging, pkg);
   fs.mkdirSync(packageRoot, { recursive: true });
+  // Explicit modes make the tar stream independent of the caller's umask.
+  // The package root and every archived member have a deliberate mode below.
+  fs.chmodSync(packageRoot, 0o755);
   const destination = path.join(packageRoot, "hardgate");
   fs.copyFileSync(binary, destination);
   fs.chmodSync(destination, 0o755);
@@ -57,7 +60,9 @@ function archiveBinary(binary, output, pkg, target, version, commit, staging) {
     package: pkg,
     commit,
   };
-  fs.writeFileSync(path.join(packageRoot, "BUILD-METADATA.json"), `${JSON.stringify(metadata)}\n`);
+  const metadataPath = path.join(packageRoot, "BUILD-METADATA.json");
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata)}\n`);
+  fs.chmodSync(metadataPath, 0o644);
 
   const tarPath = path.join(output, `${pkg}.tar`);
   const archivePath = path.join(output, `${pkg}.tar.gz`);

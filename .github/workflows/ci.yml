@@ -113,6 +113,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: node tests/release_contract.test.mjs
       - run: node tests/release_contract.install.test.mjs
+      - run: node tests/release_contract.package.test.mjs
 
   quality:
     name: CI quality aggregate

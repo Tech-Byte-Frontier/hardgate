@@ -77,6 +77,51 @@ try {
     throw new Error(`installed fixture identity mismatch: ${smoke.stdout}${smoke.stderr}`);
   }
 
+  // Replacing an existing regular file remains idempotent.
+  const replacement = runInstaller(installDir);
+  if (replacement.status !== 0 || replacement.stdout.includes("hardgate/hardgate")) {
+    throw new Error(`regular-file replacement unexpectedly failed or nested:
+${replacement.stdout}${replacement.stderr}`);
+  }
+  const replacementSmoke = spawnSync(installed, ["--version"], { encoding: "utf8" });
+  if (replacementSmoke.status !== 0 || replacementSmoke.stdout.trim() !== expected) {
+    throw new Error(`replaced fixture identity mismatch: ${replacementSmoke.stdout}${replacementSmoke.stderr}`);
+  }
+
+  // A pre-existing destination directory (including a symlink to one) must
+  // fail before mv rather than placing hardgate/hardgate inside it.
+  const directoryDestination = path.join(fixture, "existing-directory");
+  fs.mkdirSync(path.join(directoryDestination, "hardgate"), { recursive: true });
+  const directoryResult = runInstaller(directoryDestination);
+  if (
+    directoryResult.status === 0 ||
+    !directoryResult.stderr.includes("destination") ||
+    !directoryResult.stderr.includes("is a directory") ||
+    directoryResult.stdout.includes("installed to") ||
+    fs.existsSync(path.join(directoryDestination, "hardgate", "hardgate"))
+  ) {
+    throw new Error(`existing destination directory unexpectedly passed or nested:
+${directoryResult.stdout}${directoryResult.stderr}`);
+  }
+
+  const symlinkDestination = path.join(fixture, "symlink-directory");
+  const symlinkTarget = path.join(fixture, "symlink-target");
+  fs.mkdirSync(symlinkDestination, { recursive: true });
+  fs.mkdirSync(symlinkTarget, { recursive: true });
+  fs.symlinkSync(symlinkTarget, path.join(symlinkDestination, "hardgate"), "dir");
+  const symlinkResult = runInstaller(symlinkDestination);
+  if (
+    symlinkResult.status === 0 ||
+    !symlinkResult.stderr.includes("destination") ||
+    !symlinkResult.stderr.includes("is a directory") ||
+    symlinkResult.stdout.includes("installed to") ||
+    fs.existsSync(path.join(symlinkTarget, "hardgate")) ||
+    !fs.lstatSync(path.join(symlinkDestination, "hardgate")).isSymbolicLink()
+  ) {
+    throw new Error(`symlink-to-directory destination unexpectedly passed or nested:
+${symlinkResult.stdout}${symlinkResult.stderr}`);
+  }
+
   const goodArchive = fs.readFileSync(archive);
   const goodChecksums = fs.readFileSync(path.join(fixture, "SHA256SUMS"));
   const writeChecksum = (bytes) => {

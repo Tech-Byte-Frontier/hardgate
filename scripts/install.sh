@@ -5,10 +5,28 @@
 # HARDGATE_INSTALL_DIR overrides the default `$HOME/.cargo/bin` destination.
 # HARDGATE_LIBC=gnu|musl overrides Linux libc detection when a host is
 # intentionally minimal and neither `getconf` nor `ldd` can identify it.
+# HARDGATE_CURL_CONNECT_TIMEOUT and HARDGATE_CURL_MAX_TIME override the
+# positive, finite curl timeouts (in seconds) used for release downloads.
 set -eu
 
 REPO="Tech-Byte-Frontier/hardgate"
 REQUESTED_VERSION="${HARDGATE_VERSION:-latest}"
+CURL_CONNECT_TIMEOUT="${HARDGATE_CURL_CONNECT_TIMEOUT:-20}"
+CURL_MAX_TIME="${HARDGATE_CURL_MAX_TIME:-120}"
+case "$CURL_CONNECT_TIMEOUT" in
+  ''|*[!0-9]*) echo "hardgate: HARDGATE_CURL_CONNECT_TIMEOUT must be a positive integer" >&2; exit 1 ;;
+esac
+if [ "$CURL_CONNECT_TIMEOUT" -le 0 ]; then
+  echo "hardgate: HARDGATE_CURL_CONNECT_TIMEOUT must be a positive integer" >&2
+  exit 1
+fi
+case "$CURL_MAX_TIME" in
+  ''|*[!0-9]*) echo "hardgate: HARDGATE_CURL_MAX_TIME must be a positive integer" >&2; exit 1 ;;
+esac
+if [ "$CURL_MAX_TIME" -le 0 ]; then
+  echo "hardgate: HARDGATE_CURL_MAX_TIME must be a positive integer" >&2
+  exit 1
+fi
 if [ -n "${HARDGATE_INSTALL_DIR:-}" ]; then
   INSTALL_DIR="$HARDGATE_INSTALL_DIR"
 else
@@ -102,12 +120,16 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
-curl --fail --location --silent --show-error "$checksum_url" -o "$tmp/SHA256SUMS"
+curl --fail --location --silent --show-error \
+  --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+  "$checksum_url" -o "$tmp/SHA256SUMS"
 checksum_line=$(awk -v wanted="$archive_name" '$2 == wanted { line=$0; count++ } END { if (count != 1) exit 1; print line }' "$tmp/SHA256SUMS") || {
   echo "hardgate: SHA256SUMS has no unique entry for ${archive_name}" >&2
   exit 1
 }
-curl --fail --location --silent --show-error "$archive_url" -o "$tmp/$archive_name"
+curl --fail --location --silent --show-error \
+  --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+  "$archive_url" -o "$tmp/$archive_name"
 verify_checksum() {
   expected=$(printf '%s\n' "$checksum_line" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
   if command -v sha256sum >/dev/null 2>&1; then
@@ -193,7 +215,12 @@ if [ "$installed_version" != "hardgate ${metadata_version} (${metadata_commit})"
   echo "hardgate: installed binary returned an identity different from archive metadata" >&2
   exit 1
 fi
-mv -f "$staged" "$INSTALL_DIR/hardgate"
+destination="$INSTALL_DIR/hardgate"
+if [ -d "$destination" ]; then
+  echo "hardgate: destination ${destination} is a directory; refusing to replace it" >&2
+  exit 1
+fi
+mv -f "$staged" "$destination"
 staged=""
 rmdir "$staging_dir"
 staging_dir=""

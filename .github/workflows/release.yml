@@ -29,6 +29,12 @@ env:
   PNPM_VERSION: 11.25.0
   YARN_VERSION: 4.18.0
   BUN_VERSION: 1.4.0
+  HARDGATE_CURL_CONNECT_TIMEOUT: 10
+  HARDGATE_CURL_MAX_TIME: 20
+  # Ten attempts at most 20s each plus nine 10s delays keeps one registry
+  # wait below five minutes while allowing normal eventual-consistency lag.
+  HARDGATE_REGISTRY_ATTEMPTS: 10
+  HARDGATE_REGISTRY_DELAY: 10
 
 jobs:
   version-check:
@@ -115,6 +121,7 @@ jobs:
           HARDGATE_BINARY: target/release/hardgate
       - run: node tests/release_contract.test.mjs
       - run: node tests/release_contract.install.test.mjs
+      - run: node tests/release_contract.package.test.mjs
       - name: Hardgate complete configured self/orchestration/evidence gate
         run: scripts/self-gate.sh
 
@@ -281,7 +288,24 @@ jobs:
             SHA256SUMS
             "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
           )
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          release_error=$(mktemp)
+          if gh release view "$RELEASE_TAG" --json tagName >/dev/null 2>"$release_error"; then
+            release_exists=1
+          else
+            status=$?
+            # gh exits 1 for both a missing release and API failures, so only
+            # an explicit not-found response may take the create path.
+            if [ "$status" -eq 1 ] && grep -Eiq 'release[[:space:]]+not found|HTTP[[:space:]]+404|404[[:space:]]+Not Found' "$release_error"; then
+              release_exists=0
+            else
+              cat "$release_error" >&2
+              rm -f "$release_error"
+              echo "unable to determine whether GitHub release $RELEASE_TAG exists; refusing to create or mutate it" >&2
+              exit 1
+            fi
+          fi
+          rm -f "$release_error"
+          if [ "$release_exists" -eq 1 ]; then
             existing=$(mktemp -d)
             trap 'rm -rf "$existing"' EXIT
             asset_names=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
@@ -299,10 +323,13 @@ jobs:
                 gh release upload "$RELEASE_TAG" "dist/$asset"
               fi
             done
-          else
+          elif [ "$release_exists" -eq 0 ]; then
             paths=()
             for asset in "${assets[@]}"; do paths+=("dist/$asset"); done
             gh release create "$RELEASE_TAG" "${paths[@]}" --verify-tag --generate-notes
+          else
+            echo "unknown GitHub release existence state; refusing to publish" >&2
+            exit 1
           fi
 
   publish-crates:
@@ -327,7 +354,7 @@ jobs:
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
           crate_probe() {
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "$api") || {
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
               rm -f "$body"
               return 2
             }
@@ -335,31 +362,38 @@ jobs:
               200)
                 actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
                   rm -f "$body"
-                  return 2
+                  return 3
                 }
                 rm -f "$body"
                 printf '%s\n' "$actual"
                 return 0
                 ;;
               404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 2 ;;
+              *) rm -f "$body"; return 3 ;;
             esac
           }
           crate_version() {
-            for attempt in $(seq 1 20); do
+            retry_absent="$1"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
               if actual=$(crate_probe); then
                 printf '%s\n' "$actual"
                 return 0
               else
                 status=$?
-                if [ "$status" -eq 1 ]; then return 1; fi
-                [ "$attempt" -lt 20 ] && sleep 10
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
               fi
             done
-            return 2
+            return "$status"
           }
           already_published=0
-          if current=$(crate_version); then
+          if current=$(crate_version 0); then
             test "$current" = "$RELEASE_VERSION"
             already_published=1
             echo "hardgate@$current already verified on crates.io"
@@ -382,7 +416,7 @@ jobs:
           api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
           crate_probe() {
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "$api") || {
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
               rm -f "$body"
               return 2
             }
@@ -390,48 +424,51 @@ jobs:
               200)
                 actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
                   rm -f "$body"
-                  return 2
+                  return 3
                 }
                 rm -f "$body"
                 printf '%s\n' "$actual"
                 return 0
                 ;;
               404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 2 ;;
+              *) rm -f "$body"; return 3 ;;
             esac
           }
           crate_version() {
-            for attempt in $(seq 1 20); do
+            retry_absent="$1"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
               if actual=$(crate_probe); then
                 printf '%s\n' "$actual"
                 return 0
               else
                 status=$?
-                if [ "$status" -eq 1 ]; then return 1; fi
-                [ "$attempt" -lt 20 ] && sleep 10
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
               fi
             done
-            return 2
+            return "$status"
           }
-          verified=0
-          for attempt in $(seq 1 20); do
-            if actual=$(crate_version); then
-              test "$actual" = "$RELEASE_VERSION"
-              echo "hardgate@$actual verified on crates.io"
-              verified=1
-              break
-            fi
-            [ "$attempt" -lt 20 ] && sleep 10
-          done
-          test "$verified" -eq 1
+          actual=$(crate_version 1) || {
+            status=$?
+            echo "crates.io exact-version verification failed with status $status" >&2
+            exit "$status"
+          }
+          test "$actual" = "$RELEASE_VERSION"
+          echo "hardgate@$actual verified on crates.io"
           crate_root=$(mktemp -d)
           crate_installed=0
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
             if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
               crate_installed=1
               break
             fi
-            [ "$attempt" -lt 20 ] && sleep 10
+            [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
           done
           test "$crate_installed" -eq 1
           test -x "$crate_root/bin/hardgate"
@@ -493,7 +530,7 @@ jobs:
             wanted="$2"
             encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
               rm -f "$body"
               return 2
             }
@@ -501,47 +538,44 @@ jobs:
               200)
                 actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
                   rm -f "$body"
-                  return 2
+                  return 3
                 }
                 rm -f "$body"
                 printf '%s\n' "$actual"
                 return 0
                 ;;
               404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 2 ;;
+              *) rm -f "$body"; return 3 ;;
             esac
           }
-          registry_version() {
-            for attempt in $(seq 1 20); do
-              if actual=$(npm_registry_probe "$1" "$2"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                if [ "$status" -eq 1 ]; then return 1; fi
-                [ "$attempt" -lt 20 ] && sleep 10
-              fi
-            done
-            return 2
-          }
           wait_for_registry_version() {
-            for attempt in $(seq 1 20); do
-              if actual=$(registry_version "$1" "$2"); then
+            retry_absent="$1"
+            shift
+            name="$1"
+            wanted="$2"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+              if actual=$(npm_registry_probe "$name" "$wanted"); then
                 printf '%s\n' "$actual"
                 return 0
               else
                 status=$?
-                if [ "$status" -eq 2 ]; then return 2; fi
-                [ "$attempt" -lt 20 ] && sleep 10
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
               fi
             done
-            return 2
+            return "$status"
           }
           publish_platform() {
             pkg="$1"
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
             current=""
-            if current=$(registry_version "$pkg" "$wanted"); then
+            if current=$(wait_for_registry_version 0 "$pkg" "$wanted"); then
               test "$current" = "$wanted"
               echo "$pkg@$wanted already verified on npm"
             else
@@ -551,7 +585,7 @@ jobs:
                 return "$status"
               fi
               NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public "./npm/$pkg"
-              current=$(wait_for_registry_version "$pkg" "$wanted")
+              current=$(wait_for_registry_version 1 "$pkg" "$wanted")
               test "$current" = "$wanted"
               echo "$pkg@$wanted published and exact-version verified"
             fi
@@ -562,7 +596,7 @@ jobs:
           done
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
-            test "$(registry_version "$pkg" "$wanted")" = "$wanted"
+            test "$(wait_for_registry_version 0 "$pkg" "$wanted")" = "$wanted"
           done
           env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
           unset publish_token
@@ -579,7 +613,7 @@ jobs:
           npm_registry_probe() {
             encoded_name=$(printf '%s' "$1" | sed 's|/|%2f|g')
             body=$(mktemp)
-            status=$(curl --location --silent --show-error --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/$2") || {
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/$2") || {
               rm -f "$body"
               return 2
             }
@@ -587,43 +621,40 @@ jobs:
               200)
                 actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
                   rm -f "$body"
-                  return 2
+                  return 3
                 }
                 rm -f "$body"
                 printf '%s\n' "$actual"
                 return 0
                 ;;
               404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 2 ;;
+              *) rm -f "$body"; return 3 ;;
             esac
           }
-          registry_version() {
-            for attempt in $(seq 1 20); do
-              if actual=$(npm_registry_probe "$1" "$2"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                if [ "$status" -eq 1 ]; then return 1; fi
-                [ "$attempt" -lt 20 ] && sleep 10
-              fi
-            done
-            return 2
-          }
           wait_for_registry_version() {
-            for attempt in $(seq 1 20); do
-              if actual=$(registry_version "$1" "$2"); then
+            retry_absent="$1"
+            shift
+            name="$1"
+            wanted="$2"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+              if actual=$(npm_registry_probe "$name" "$wanted"); then
                 printf '%s\n' "$actual"
                 return 0
               else
                 status=$?
-                if [ "$status" -eq 2 ]; then return 2; fi
-                [ "$attempt" -lt 20 ] && sleep 10
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
               fi
             done
-            return 2
+            return "$status"
           }
-          if current=$(registry_version "@tech-byte-frontier/hardgate" "$wanted"); then
+          if current=$(wait_for_registry_version 0 "@tech-byte-frontier/hardgate" "$wanted"); then
             test "$current" = "$wanted"
           else
             status=$?
@@ -633,7 +664,7 @@ jobs:
             fi
             NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
           fi
-          test "$(wait_for_registry_version "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
+          test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
           env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
           unset publish_token
           echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
@@ -702,44 +733,106 @@ jobs:
         run: |
           set -euo pipefail
           expected="hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
-          retry_npm_view() {
-            spec="$1"
-            for attempt in $(seq 1 20); do
-              if version=$(npm view "$spec" version 2>/dev/null); then
-                printf '%s\n' "$version"
+          npm_registry_probe() {
+            name="$1"
+            wanted="$2"
+            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
+                  rm -f "$body"
+                  return 3
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
                 return 0
-              fi
-              [ "$attempt" -lt 20 ] && sleep 10
-            done
-            echo "npm did not expose $spec after bounded retries" >&2
-            return 1
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 3 ;;
+            esac
           }
-          retry_crate_view() {
+          wait_for_registry_version() {
+            retry_absent="$1"
+            name="$2"
+            wanted="$3"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+              if actual=$(npm_registry_probe "$name" "$wanted"); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+              fi
+            done
+            return "$status"
+          }
+          crate_probe() {
             api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
-            for attempt in $(seq 1 20); do
-              if body=$(curl --fail --location --silent --show-error "$api"); then
-                printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])'
+            body=$(mktemp)
+            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
+              rm -f "$body"
+              return 2
+            }
+            case "$status" in
+              200)
+                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
+                  rm -f "$body"
+                  return 3
+                }
+                rm -f "$body"
+                printf '%s\n' "$actual"
                 return 0
-              fi
-              [ "$attempt" -lt 20 ] && sleep 10
-            done
-            echo "crates.io did not expose hardgate@$RELEASE_VERSION after bounded retries" >&2
-            return 1
+                ;;
+              404) rm -f "$body"; return 1 ;;
+              *) rm -f "$body"; return 3 ;;
+            esac
           }
-          test "$(retry_crate_view)" = "$RELEASE_VERSION"
+          wait_for_crate_version() {
+            retry_absent="$1"
+            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
+              if actual=$(crate_probe); then
+                printf '%s\n' "$actual"
+                return 0
+              else
+                status=$?
+                case "$status" in
+                  1)
+                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
+                    ;;
+                  2) ;;
+                  *) return "$status" ;;
+                esac
+                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
+              fi
+            done
+            return "$status"
+          }
+          test "$(wait_for_crate_version 1)" = "$RELEASE_VERSION"
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            test "$(retry_npm_view "$pkg@$RELEASE_VERSION")" = "$RELEASE_VERSION"
+            test "$(wait_for_registry_version 1 "$pkg" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
           done
-          test "$(retry_npm_view "@tech-byte-frontier/hardgate@$RELEASE_VERSION")" = "$RELEASE_VERSION"
+          test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
 
           crate_root=$(mktemp -d)
           crate_installed=0
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
             if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
               crate_installed=1
               break
             fi
-            [ "$attempt" -lt 20 ] && sleep 10
+            [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
           done
           test "$crate_installed" -eq 1
           test -x "$crate_root/bin/hardgate"
@@ -748,12 +841,12 @@ jobs:
           npm_root=$(mktemp -d)
           npm init --yes --prefix "$npm_root" >/dev/null
           npm_installed=0
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
             if npm install --ignore-scripts --no-audit --no-fund --prefix "$npm_root" "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"; then
               npm_installed=1
               break
             fi
-            [ "$attempt" -lt 20 ] && sleep 10
+            [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
           done
           test "$npm_installed" -eq 1
           npm_binary="$npm_root/node_modules/.bin/hardgate"
