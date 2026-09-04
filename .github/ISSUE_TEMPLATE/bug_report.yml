@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible problem in Hardgate
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and why it is a problem.
+      placeholder: A short description of the failure...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Give the smallest fixture or steps that reproduce the issue.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+      description: State what should happen and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include commit or release, OS and architecture, toolchain versions, and the exact command.
+      placeholder: |
+        Hardgate:
+        Commit:
+        OS/arch:
+        Rust/Node:
+        Command:
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or configuration
+      description: Paste relevant output or configuration. Remove credentials and unrelated private data.
+      render: text
