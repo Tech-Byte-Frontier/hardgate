@@ -123,21 +123,19 @@ crate_version()
 npm_registry_probe()
 wait_for_registry_version()
 wait_for_crate_version()
-publish_token="\${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
 unset NODE_AUTH_TOKEN
-NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public
+node release-tooling/scripts/publish-npm-package.mjs
 return 2
 404)
 crates.io version probe failed; refusing to publish
-npm registry version probe failed
 gh release download
 cmp --
 wait_for_registry_version 1
 wait_for_crate_version 1
 cargo install hardgate --version "=$RELEASE_VERSION"
 npm install --ignore-scripts
---package "$pkg"
-env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs
+--package-dir "./npm/$pkg"
+node release-tooling/scripts/verify-npm-publication.mjs
 Verify clean npm, pnpm, Yarn, and Bun consumers
 pnpm add --ignore-scripts
 yarn add
@@ -248,9 +246,9 @@ assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDela
 const npmVisibilityTimeout = Number(release.match(/HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS:\s*(\d+)/)?.[1]);
 assert.equal(npmVisibilityTimeout, 580, "npm visibility deadline must reserve one final HTTP probe inside ten minutes");
 assert.ok(npmVisibilityTimeout + curlMaxTime <= 600, "npm post-publish visibility must remain bounded by ten minutes");
-assert.equal((release.match(/deadline=\$\(\(SECONDS \+ HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS\)\)/g) ?? []).length, 4, "every npm version/latest wait must use the elapsed-time deadline");
-assert.equal((release.match(/remaining=\$\(\(deadline - SECONDS\)\)/g) ?? []).length, 4, "npm retry sleeps must stay within the elapsed-time deadline");
-assert.equal((release.match(/npm registry version \$name@\$wanted remained unavailable/g) ?? []).length, 3, "each npm visibility timeout must explain the unavailable package");
+assert.equal((release.match(/deadline=\$\(\(SECONDS \+ HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS\)\)/g) ?? []).length, 2, "remaining shell npm version/latest waits must use the elapsed-time deadline");
+assert.equal((release.match(/remaining=\$\(\(deadline - SECONDS\)\)/g) ?? []).length, 2, "remaining shell npm retry sleeps must stay within the elapsed-time deadline");
+assert.equal((release.match(/npm registry version \$name@\$wanted remained unavailable/g) ?? []).length, 1, "remaining shell npm visibility timeout must explain the unavailable package");
 assert.equal((release.match(/npm dist-tags\.latest for \$name did not settle on \$wanted/g) ?? []).length, 1, "latest-tag timeout must explain the unsettled npm channel");
 assert.match(release, /explicit gap before the identity probe[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
@@ -346,5 +344,5 @@ assert.equal((release.match(/actions\/checkout@/g) ?? []).length, (release.match
 assert.equal((release.match(/name: Check out CI-validated release tooling/g) ?? []).length, 2, "npm publication and final verification must use CI-validated recovery tooling");
 assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}[\s\S]{0,120}path: release-tooling/g) ?? []).length, 2, "recovery tooling must come from the exact workflow commit");
 assert.equal((release.match(/cmp -- npm\/hardgate\/bin\/hardgate\.js release-tooling\/npm\/hardgate\/bin\/hardgate\.js/g) ?? []).length, 2, "recovery tooling launcher must match the signed release payload");
-assert.equal((release.match(/node release-tooling\/scripts\/verify-npm-publication\.mjs/g) ?? []).length, 4, "every live npm publication verifier call must use CI-validated recovery tooling");
+assert.equal((release.match(/node release-tooling\/scripts\/verify-npm-publication\.mjs/g) ?? []).length, 3, "every live npm publication verifier call must use CI-validated recovery tooling");
 assert.doesNotMatch(release, /node scripts\/verify-npm-publication\.mjs/, "signed release payload must not shadow a reviewed npm verifier recovery fix");

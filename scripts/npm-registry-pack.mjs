@@ -8,13 +8,11 @@ import { isRetryableNpmPackError, npmErrorText, retryAfterMs } from "./npm-pack-
 import { childTimeoutMs, remainingMs } from "./npm-verification-policy.mjs";
 import { runReleaseProcess } from "./release-process.mjs";
 import { projectRoot } from "./release-support.mjs";
+import { waitForNpmVersion } from "./npm-registry-state.mjs";
 
 async function exactVersionObserved(name, version, policy) {
-  const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${version}`;
-  const text = await runReleaseProcess("curl", ["--silent", "--show-error", "--fail-with-body", "--connect-timeout", "10", url], { timeoutMs: childTimeoutMs(policy) });
-  const metadata = JSON.parse(text);
-  if (metadata.name !== name || metadata.version !== version) throw new Error("npm exact-version metadata identity mismatch");
-  return true;
+  const observed = await waitForNpmVersion({ name, version, policy });
+  return observed.state === "present";
 }
 
 async function packOnce(spec, directory, policy) {

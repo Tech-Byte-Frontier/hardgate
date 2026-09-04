@@ -50,6 +50,7 @@ jobs:
   version-check:
     name: Validate tag and every version source
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -307,6 +308,7 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -376,6 +378,7 @@ jobs:
         )
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       bundle_artifact_id: ${{ steps.upload_bundle.outputs.artifact-id }}
     steps:
@@ -468,6 +471,7 @@ jobs:
         needs.package.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
@@ -515,6 +519,7 @@ jobs:
     name: Validate publication prerequisites
     needs: [version-check]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -621,6 +626,7 @@ jobs:
         needs.publication-preflight.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
       actions: read
@@ -731,6 +737,7 @@ jobs:
         needs.github-release.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -908,6 +915,7 @@ jobs:
         needs.publish-crates.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
@@ -972,168 +980,20 @@ jobs:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
-          # Keep the token out of probes, package verification, and helper
-          # processes. It is reintroduced only for the single npm publish
-          # process that needs it.
+          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
+            node release-tooling/scripts/publish-npm-package.mjs --package-dir "./npm/$pkg" --version "$RELEASE_VERSION" --dist dist
+          done
           unset NODE_AUTH_TOKEN
-          npm_registry_probe() {
-            name="$1"
-            wanted="$2"
-            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_registry_version() {
-            retry_absent="$1"
-            shift
-            name="$1"
-            wanted="$2"
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_registry_probe "$name" "$wanted"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                  return "$status"
-                fi
-                remaining=$((deadline - SECONDS))
-                delay="$HARDGATE_REGISTRY_DELAY"
-                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-                [ "$delay" -gt 0 ] && sleep "$delay"
-              fi
-            done
-          }
-          publish_platform() {
-            pkg="$1"
-            wanted=$(node -p "require('./npm/$pkg/package.json').version")
-            current=""
-            if current=$(wait_for_registry_version 0 "$pkg" "$wanted"); then
-              test "$current" = "$wanted"
-              echo "$pkg@$wanted already verified on npm"
-            else
-              status=$?
-              if [ "$status" -ne 1 ]; then
-                echo "npm registry version probe failed for $pkg@$wanted; refusing to publish" >&2
-                return "$status"
-              fi
-              NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public "./npm/$pkg"
-              current=$(wait_for_registry_version 1 "$pkg" "$wanted")
-              test "$current" = "$wanted"
-              echo "$pkg@$wanted published and exact-version verified"
-            fi
-          }
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            publish_platform "$pkg"
-            env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only --package "$pkg"
-          done
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            wanted=$(node -p "require('./npm/$pkg/package.json').version")
-            test "$(wait_for_registry_version 0 "$pkg" "$wanted")" = "$wanted"
-          done
-          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
-          unset publish_token
+          node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
       - name: Publish wrapper only after all platforms are verified
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
+          node release-tooling/scripts/publish-npm-package.mjs --package-dir ./npm/hardgate --version "$RELEASE_VERSION" --dist dist
           unset NODE_AUTH_TOKEN
-          wanted=$(node -p "require('./npm/hardgate/package.json').version")
-          current=""
-          npm_registry_probe() {
-            encoded_name=$(printf '%s' "$1" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/$2") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_registry_version() {
-            retry_absent="$1"
-            shift
-            name="$1"
-            wanted="$2"
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_registry_probe "$name" "$wanted"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                  return "$status"
-                fi
-                remaining=$((deadline - SECONDS))
-                delay="$HARDGATE_REGISTRY_DELAY"
-                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-                [ "$delay" -gt 0 ] && sleep "$delay"
-              fi
-            done
-          }
-          if current=$(wait_for_registry_version 0 "@tech-byte-frontier/hardgate" "$wanted"); then
-            test "$current" = "$wanted"
-          else
-            status=$?
-            if [ "$status" -ne 1 ]; then
-              echo "npm registry version probe failed for @tech-byte-frontier/hardgate@$wanted; refusing to publish" >&2
-              exit "$status"
-            fi
-            NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
-          fi
-          test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
-          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
-          unset publish_token
-          echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
+          node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
 
   verify-channels:
     name: Verify all published channels
@@ -1147,6 +1007,7 @@ jobs:
         needs.publish-npm.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1486,6 +1347,7 @@ jobs:
     if: ${{ always() }}
     needs: [version-check, package, attest, publication-preflight, github-release, publish-crates, publish-npm, verify-channels]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Require every publication and verification job to pass
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}

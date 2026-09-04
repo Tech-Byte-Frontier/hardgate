@@ -29,10 +29,10 @@ if (mode === 'stall') {
 `;
 const fakeCurl = `
 const mode = process.env.FIXTURE_METADATA;
-if (mode === 'missing') { console.error('curl: HTTP 404'); process.exitCode = 22; }
-else if (mode === 'auth') { console.error('curl: HTTP 403'); process.exitCode = 22; }
-else if (mode === 'malformed') console.log('invalid json');
-else console.log(JSON.stringify({name: mode === 'wrong' ? 'unexpected' : 'hardgate-linux-x64', version: '0.5.0'}));
+if (mode === 'missing') console.log('{}\\n404');
+else if (mode === 'auth') console.log('{}\\n403');
+else if (mode === 'malformed') console.log('invalid json\\n200');
+else console.log(JSON.stringify({name: mode === 'wrong' ? 'unexpected' : 'hardgate-linux-x64', version: '0.5.0'}) + '\\n200');
 `;
 
 function archive(directory, output, member) {

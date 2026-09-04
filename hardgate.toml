@@ -59,6 +59,7 @@ entry_points = [
   "scripts/check-consumer-matrix.mjs",
   "scripts/check-npm-quality.mjs",
   "scripts/consumer-process-launcher.mjs",
+  "scripts/publish-npm-package.mjs",
   "scripts/release-checksums.mjs",
   "scripts/release-package.mjs",
   "scripts/release-order.mjs",

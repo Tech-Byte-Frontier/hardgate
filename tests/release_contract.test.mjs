@@ -6,7 +6,10 @@ import "./release_contract.workflow.mjs";
 import "./release_contract.authorization.mjs";
 import "./release_contract.artifacts.mjs";
 import "./release_order.test.mjs";
-import "./npm_publication.test.mjs";
-import "./release_process.test.mjs";
+await import("./npm_publication.test.mjs");
+await import("./release_process.test.mjs");
+await import("./npm_publication_state.test.mjs");
+await import("./release_aggregate.test.mjs");
+await import("./npm_publish_cli.test.mjs");
 
 console.log("release_contract.test: OK");
