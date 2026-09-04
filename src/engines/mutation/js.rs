@@ -2,11 +2,11 @@ use super::js_command::{
     JsCommandInput, build_js_command, framework_from_command, is_exact_bun_test_command,
 };
 use super::js_manifest::{
-    PackageMetadata, detect_manager, find_workspace_root, load_packages, manager_for_package,
-    workspace_test_script,
+    PackageMetadata, detect_manager, existing_metadata, find_workspace_root, load_packages,
+    manager_for_package, workspace_test_script,
 };
 use super::js_tests::find_relevant_test;
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,13 +106,34 @@ struct FrameworkConfigSearch {
     ambiguous: bool,
 }
 pub(crate) fn resolve_js_test_plan(file: &Path, root: &Path) -> Result<ResolvedTestPlan> {
-    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let source = absolute_source_path(file, &canonical_root);
+    let canonical_root = fs::canonicalize(root).with_context(|| {
+        format!(
+            "failed to canonicalize JavaScript repository root `{}`",
+            root.display()
+        )
+    })?;
+    if !canonical_root.is_dir() {
+        bail!(
+            "JavaScript repository root `{}` is not a directory",
+            root.display()
+        );
+    }
+    let source = absolute_source_path(file, &canonical_root)?;
+    if !source.starts_with(&canonical_root) {
+        bail!(
+            "JavaScript source `{}` resolves outside repository root `{}`",
+            file.display(),
+            canonical_root.display()
+        );
+    }
+    if !source.is_file() {
+        bail!("JavaScript source `{}` is not a file", file.display());
+    }
     let dirs = ancestor_dirs(source.parent().unwrap_or(&source), &canonical_root);
     let packages = load_packages(&dirs)?;
     let package = packages.first();
-    let workspace_root = find_workspace_root(&dirs, &packages, &canonical_root);
-    let config = find_framework_config(&dirs);
+    let workspace_root = find_workspace_root(&dirs, &packages, &canonical_root)?;
+    let config = find_framework_config(&dirs)?;
     let (script_package, script, workspace_fallback) =
         resolve_script_plan(package, &packages, &workspace_root, &config)?;
     let manager = workspace_fallback
@@ -199,18 +220,22 @@ fn script_framework(
         .map(|(_, command)| framework_from_command(command))
         .unwrap_or_else(|| framework_without_script(package, config))
 }
-fn absolute_source_path(file: &Path, root: &Path) -> PathBuf {
+fn absolute_source_path(file: &Path, root: &Path) -> Result<PathBuf> {
     let path = if file.is_absolute() {
         file.to_path_buf()
     } else {
         root.join(file)
     };
-    fs::canonicalize(&path).unwrap_or(path)
+    fs::canonicalize(&path).with_context(|| {
+        format!(
+            "failed to canonicalize JavaScript source `{}`",
+            path.display()
+        )
+    })
 }
 fn ancestor_dirs(start: &Path, root: &Path) -> Vec<PathBuf> {
-    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut dirs = Vec::new();
-    let mut current = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let mut current = start.to_path_buf();
     loop {
         dirs.push(current.clone());
         if current == root {
@@ -219,55 +244,63 @@ fn ancestor_dirs(start: &Path, root: &Path) -> Vec<PathBuf> {
         let Some(parent) = current.parent() else {
             break;
         };
-        if parent == current || !parent.starts_with(&root) {
-            if !dirs.iter().any(|item| item == &root) {
-                dirs.push(root.clone());
-            }
+        if parent == current || !parent.starts_with(root) {
             break;
         }
         current = parent.to_path_buf();
     }
     dirs
 }
-fn find_framework_config(dirs: &[PathBuf]) -> FrameworkConfigSearch {
+fn find_framework_config(dirs: &[PathBuf]) -> Result<FrameworkConfigSearch> {
     for dir in dirs {
-        let configs = framework_configs_in(dir);
+        let configs = framework_configs_in(dir)?;
         if configs.is_empty() {
             continue;
         }
         if configs.len() == 1 {
-            return FrameworkConfigSearch {
+            return Ok(FrameworkConfigSearch {
                 selected: configs.into_iter().next(),
                 ambiguous: false,
-            };
+            });
         }
-        return FrameworkConfigSearch {
+        return Ok(FrameworkConfigSearch {
             selected: None,
             ambiguous: true,
-        };
+        });
     }
-    FrameworkConfigSearch::default()
+    Ok(FrameworkConfigSearch::default())
 }
-fn framework_configs_in(dir: &Path) -> Vec<FrameworkConfig> {
-    [
+fn framework_configs_in(dir: &Path) -> Result<Vec<FrameworkConfig>> {
+    let mut configs = Vec::new();
+    for (prefix, framework) in [
         ("jest", TestFramework::Jest),
         ("vitest", TestFramework::Vitest),
         ("playwright", TestFramework::Playwright),
-    ]
-    .into_iter()
-    .flat_map(|(prefix, framework)| {
-        ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "json"]
-            .into_iter()
-            .map(move |extension| (prefix, framework, extension))
-    })
-    .filter_map(|(prefix, framework, extension)| {
-        let path = dir.join(format!("{prefix}.config.{extension}"));
-        path.is_file().then_some(FrameworkConfig {
-            framework,
-            root: dir.to_path_buf(),
-        })
-    })
-    .collect()
+    ] {
+        for extension in ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "json"] {
+            let path = dir.join(format!("{prefix}.config.{extension}"));
+            if let Some(config) = framework_config_at(&path, framework, dir)? {
+                configs.push(config);
+            }
+        }
+    }
+    Ok(configs)
+}
+fn framework_config_at(
+    path: &Path,
+    framework: TestFramework,
+    root: &Path,
+) -> Result<Option<FrameworkConfig>> {
+    let Some(metadata) = existing_metadata(path, "framework config")? else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink() {
+        bail!("framework config `{}` is a symlink", path.display());
+    }
+    Ok(metadata.file_type().is_file().then(|| FrameworkConfig {
+        framework,
+        root: root.to_path_buf(),
+    }))
 }
 fn framework_without_script(
     package: Option<&PackageMetadata>,
@@ -314,3 +347,7 @@ pub(crate) fn is_javascript_path(file: &Path) -> bool {
             )
         })
 }
+
+#[cfg(test)]
+#[path = "js_resolver_tests.rs"]
+mod tests;

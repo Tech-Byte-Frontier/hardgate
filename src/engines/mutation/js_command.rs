@@ -161,6 +161,9 @@ fn first_executable_after_options(tokens: &[String]) -> Option<&str> {
     let mut skip_value = false;
     for (index, token) in tokens.iter().enumerate() {
         if skip_value {
+            if token == "--" || token.starts_with('-') {
+                return None;
+            }
             skip_value = false;
             continue;
         }
@@ -356,8 +359,10 @@ mod tests {
         for command in [
             "npx --package jest helper",
             "npx --package=jest helper",
+            "npx --package -- jest",
             "npx --unknown jest",
             "npm exec --package jest node",
+            "npm exec --package -- jest",
             "bunx --package vitest helper",
             "yarn jest",
             "FOO=bar bun test",

@@ -146,9 +146,12 @@ fn is_nested_package(path: &Path, package_root: &Path) -> bool {
     path != package_root && fs::symlink_metadata(path.join("package.json")).is_ok()
 }
 fn within_package_root(path: &Path, package_root: &Path) -> bool {
-    let canonical_root =
-        fs::canonicalize(package_root).unwrap_or_else(|_| package_root.to_path_buf());
-    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(canonical_root) = fs::canonicalize(package_root) else {
+        return false;
+    };
+    let Ok(canonical_path) = fs::canonicalize(path) else {
+        return false;
+    };
     canonical_path.starts_with(canonical_root)
 }
 fn is_pruned_test_dir(path: &Path) -> bool {

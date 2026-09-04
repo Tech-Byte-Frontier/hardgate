@@ -483,3 +483,6 @@ fn directory_max_mutants_keeps_selected_full_suite_guard() {
     assert_full_suite_rejected(&root, "src");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[path = "js_resolver_containment.rs"]
+mod js_resolver_containment;
