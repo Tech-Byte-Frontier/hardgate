@@ -120,3 +120,89 @@ fn cargo_build_scripts_and_path_modules_are_reachable() {
 
     assert_eq!(unreferenced_files, vec![PathBuf::from("src/orphan.rs")]);
 }
+
+#[test]
+fn custom_globs_preserve_generated_entries_and_vendor_exclusions() {
+    let analyzer = hardgate::engines::DeadCodeAnalyzer::new(&hardgate::config::DeadCodeConfig {
+        enabled: true,
+        entry_points: vec!["src/generated/**".to_string()],
+        exclude: vec!["src/vendor/**".to_string()],
+    });
+    assert!(analyzer.is_enabled());
+
+    let files = vec![
+        PathBuf::from("src/main.ts"),
+        PathBuf::from("src/generated/entry.ts"),
+        PathBuf::from("src/vendor/legacy.ts"),
+        PathBuf::from("src/feature.ts"),
+    ];
+    let contents = files
+        .iter()
+        .map(|path| (path.clone(), String::new()))
+        .collect::<Vec<_>>();
+
+    let violations = analyzer.analyze(&files, &contents, Path::new("."));
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].file, Path::new("src/feature.ts"));
+    assert_eq!(violations[0].violation_type, "Unreferenced File");
+}
+
+#[test]
+fn import_and_rust_graph_edges_keep_reachable_exports() {
+    let files = vec![
+        PathBuf::from("src/main.ts"),
+        PathBuf::from("src/lib.rs"),
+        PathBuf::from("src/feature.ts"),
+        PathBuf::from("src/component.tsx"),
+        PathBuf::from("src/plugin.js"),
+        PathBuf::from("src/rust_mod.rs"),
+        PathBuf::from("src/helper.rs"),
+        PathBuf::from("src/shared.rs"),
+        PathBuf::from("src/nested.rs"),
+        PathBuf::from("src/orphan.rs"),
+    ];
+    let contents = vec![
+        entry(
+            "src/main.ts",
+            "import { feature } from './feature.ts';\nimport Component from './component.tsx';\nconst plugin = require('./plugin.js');\nfeature(); void Component; void plugin;",
+        ),
+        entry("src/lib.rs", "mod rust_mod;"),
+        entry(
+            "src/feature.ts",
+            "export function feature() { return 1; }\nexport function _private() { return 0; }\nexport const stale = 2;",
+        ),
+        entry(
+            "src/component.tsx",
+            "export default function Component() {}",
+        ),
+        entry("src/plugin.js", "module.exports = {};"),
+        entry(
+            "src/rust_mod.rs",
+            "mod helper;\nuse crate::shared;\nuse super::shared;\n#[path = \"nested.rs\"] mod nested;",
+        ),
+        entry("src/helper.rs", "pub fn helper() {}"),
+        entry("src/shared.rs", "pub fn shared() {}"),
+        entry("src/nested.rs", "pub fn nested() {}"),
+        entry("src/orphan.rs", "fn orphan() {}"),
+    ];
+
+    let violations = find_dead_code(files, contents);
+    let unreferenced_files = violations
+        .iter()
+        .filter(|violation| violation.violation_type == "Unreferenced File")
+        .map(|violation| violation.file.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(unreferenced_files, vec![PathBuf::from("src/orphan.rs")]);
+
+    let stale = violations
+        .iter()
+        .find(|violation| violation.symbol.as_deref() == Some("stale"))
+        .expect("unreferenced exports should be reported");
+    assert_eq!(stale.file, Path::new("src/feature.ts"));
+    assert_eq!(stale.line_number, Some(3));
+    assert!(
+        !violations
+            .iter()
+            .any(|violation| violation.symbol.as_deref() == Some("_private"))
+    );
+}
