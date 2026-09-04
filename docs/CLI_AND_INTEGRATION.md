@@ -67,7 +67,8 @@ An absent command is skipped because it was not configured; a configured command
 
 ## `hardgate verify`
 
-`verify` is the full-tree evidence gate:
+`verify` is the full-tree evidence gate by default; optional path arguments
+scope the static/evidence pass when a narrower selection is requested:
 
 ```sh
 hardgate verify
@@ -78,7 +79,12 @@ hardgate verify --format json --summary
 hardgate verify packages/backend
 ```
 
-It runs full static analysis, enabled coverage/mutation reports, generated freshness, and the configured legacy static/dead-code ratchet. It does not run formatter/linter/test orchestration, Stryker, cargo-mutants, or native AST mutation. Explicitly enabled report/freshness/reference failures are blocking regardless of `gate.strict`; that flag controls static/classification evidence fallback. Empty reports and reports with no recognized outcomes fail closed.
+It runs static analysis, enabled coverage/mutation reports, generated freshness,
+and the configured legacy static/dead-code ratchet. It does not run
+formatter/linter/test orchestration, Stryker, cargo-mutants, or native AST
+mutation. Explicitly enabled report/freshness/reference failures are blocking
+regardless of `gate.strict`; that flag controls static/classification evidence
+fallback. Empty reports and reports with no recognized outcomes fail closed.
 
 Accepted report inputs are LCOV for coverage and Stryker-shaped, cargo-mutants-shaped, or generic outcome-count JSON for mutation. Mutation scores count killed versus survived; timeout, compile-error, runner-error, and unviable outcomes are integrity findings.
 
@@ -104,6 +110,16 @@ The native runner:
 6. restores and verifies original bytes after every mutant.
 
 A scope with no viable mutation points fails. Native mutation is independent of mutation-report ingestion and does not invoke Stryker or cargo-mutants.
+
+For `mutate --diff`, a valid diff with no changed production targets is an
+explicitly reported no-op. An unrestricted invocation or an explicit scope
+with no eligible source-role target fails before mutation execution.
+
+Native mutation is Unix-only in the v0.5.0 contract. On non-Unix builds,
+`mutate` fails closed before running commands because the required
+process-group cleanup and atomic source-restoration guarantees are
+unavailable. Static `check` and `scan` are separate commands; no Windows
+release artifact is specified.
 
 ### JavaScript/TypeScript command resolution
 

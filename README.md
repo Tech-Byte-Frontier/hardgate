@@ -16,7 +16,7 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 - **Architectural boundaries.** Declarative path-scoped rules inspect import strings, call names, and tokens. This is a local rule scanner, not module resolution or type checking.
 - **Clone debt.** Bounded token windows compare eligible files using verified normalized token sequences. Current clone findings carry a stable content fingerprint that does not include path or line numbers, so rename lineage can be matched during legacy adoption.
 - **Evidence.** Enabled LCOV coverage and JSON mutation reports are required inputs. Empty, missing, unreadable, or malformed required evidence is a blocking finding. Disabled engines do not consume stale report files. Generated-artifact freshness is a separate required check when enabled.
-- **Native mutation.** `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. It is separate from report ingestion.
+- **Native mutation.** `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. It is separate from report ingestion and is Unix-only in the v0.5.0 contract; non-Unix builds fail closed before execution because process-group cleanup and atomic restoration are unavailable there.
 - **Orchestration.** `check --all` runs only formatter, linter, and test commands configured by the repository. Hardgate never invents a command or treats an unconfigured test suite as evidence.
 
 Invariant checking is enabled by default; with no configured rules it has nothing to report. Set `[invariants].enforce = false` to disable it explicitly.
@@ -35,6 +35,23 @@ Tree-sitter parsing covers:
 | Go | `.go` |
 
 The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats remain visible to classification and applicable safety rules but do not receive function metrics. Markdown (`.md`) is not a built-in inventory extension.
+
+### Node and Supabase conventions
+
+Source and test files with the JavaScript-family extensions above receive
+Tree-sitter metrics; `.mjs`, `.cjs`, `.mts`, and `.cts` are included. Built-in
+classification marks `supabase/database.types.ts` and
+`supabase/schema.gen.ts` as generated, while `supabase/functions/**/*.ts` is
+source. `supabase/migrations/**/*.sql`, `supabase/seed.sql`, and
+`*.migration.sql`/`*.seed.sql` are migration files without an AST parser;
+`supabase/seed.ts` is also migration-role but has TypeScript parser support.
+Migrations receive safety policy rather than ordinary source/test complexity
+or native mutation. Under the default strict migration policy, only the
+parser-unsupported migration files produce a blocking `unsupported-source`
+finding. A custom classification rule may assign another role, but it does not
+add a SQL parser. Other
+Supabase configuration/data files (for example `supabase/config.toml`) are
+inventoried as configuration and likewise have no function metrics.
 
 ## Install
 
@@ -56,7 +73,7 @@ bun add -d @tech-byte-frontier/hardgate
 bunx --no-install hardgate scan src/index.ts
 ```
 
-The wrapper publishes exactly six Unix optional packages and selects one by operating system, architecture, and (on Linux) libc:
+The v0.5.0 release contract defines exactly six Unix optional packages and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
 
 | Target | Package |
 | --- | --- |
@@ -67,7 +84,12 @@ The wrapper publishes exactly six Unix optional packages and selects one by oper
 | macOS x64 | `hardgate-darwin-x64` |
 | macOS arm64 | `hardgate-darwin-arm64` |
 
-If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it checks the platform package selected by the matrix. On Linux it can fall back between the glibc and musl package when the first candidate is not usable, then to a development binary or `hardgate` on `PATH`. It never downloads a binary at runtime. Unsupported platforms fail closed.
+If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it
+checks the platform package selected by the matrix. On glibc Linux it can
+fall back to the musl package when the glibc candidate is unavailable; it
+never selects a glibc binary on a musl host. It then tries a development
+binary or `hardgate` on `PATH`. It never downloads a binary at runtime.
+Unsupported platforms fail closed.
 
 ### Cargo and source
 
@@ -81,7 +103,7 @@ cargo install --path . --locked
 
 ### Shell installer
 
-The release installer supports the same six Unix targets. It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
+The v0.5.0 release installer contract supports the same six Unix targets. It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` overrides libc detection when the host cannot be identified automatically. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
@@ -100,7 +122,7 @@ hardgate init --preset balanced
 hardgate init --preset legacy-migration
 ```
 
-With no `hardgate.toml`, Hardgate loads the `strict-agent` default bundle. That object is the same bundle rendered by `hardgate init --preset strict-agent`; in particular, coverage and mutation report policies are enabled with their configured floors (coverage also has its default `coverage/lcov.info` path), and the configured orchestration commands are present. A generated strict template therefore requires the project to provide a valid coverage report and mutation report path in TOML before `check` can pass; `verify --mutation-report <path>` can supply the mutation path for that command. If a project wants a structural-only starting point, it must explicitly set those sections to `enabled = false` (or choose `balanced`).
+With no `hardgate.toml`, Hardgate loads the `strict-agent` default bundle. That object is the same bundle rendered by `hardgate init --preset strict-agent`; in particular, coverage and mutation report policies are enabled with their configured floors (coverage also has its default `coverage/lcov.info` path), and formatter/linter orchestration defaults are present. No test command is inferred. A generated strict template therefore requires the project to provide a valid coverage report and mutation report path in TOML before `check` can pass; `verify --mutation-report <path>` can supply the mutation path for that command. If a project wants a structural-only starting point, it must explicitly set those sections to `enabled = false` (or choose `balanced`).
 
 Preset behavior is deliberate:
 
@@ -146,10 +168,15 @@ The command contract is:
 | `check` | Static engines, enabled coverage/mutation reports, enabled generated freshness; optional configured dead code | Formatter/linter/test orchestration unless `--all`; native mutation |
 | `check --diff` | Changed/staged static files, full clone index filtered to changed matches, changed executable LCOV, and (when enabled) full-tree legacy static ratchet | Native mutation; orchestration unless `--all` |
 | `check --all` | Everything in `check` plus configured orchestration steps | Native mutation |
-| `verify` | Full-tree static engines, enabled reports/freshness, and legacy static/dead-code ratchet | Orchestration and native mutation |
+| `verify` | Full-tree static engines by default (or the requested path filters), enabled reports/freshness, and legacy static/dead-code ratchet | Orchestration and native mutation |
 | `mutate` | Native unmutated baseline and bounded mutants | Coverage/mutation report ingestion |
 
-Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or empty Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path. Disabled evidence engines do not inspect old report files. See [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
+Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
+
+Native mutation requires a source-role target and at least one viable mutant. In
+`mutate --diff`, a valid diff with no changed production targets is an
+explicitly reported no-op; an unrestricted or scoped run with no eligible
+target fails.
 
 ## Roles, legacy adoption, and clones
 
@@ -175,6 +202,15 @@ The other tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, s
   }
 }
 ```
+
+## Build identity
+
+Release archives carry `BUILD-METADATA.json` with the binary name, numeric
+version, Cargo target triple, npm package name, and full source commit. Each
+binary embeds `hardgate-target:<target>` and reports exactly
+`hardgate VERSION (COMMIT)` for `--version`; release verification checks the
+checksum, metadata, target marker, and identity, while the installer checks
+the archive metadata and binary version/commit before installation.
 
 ## Documentation
 

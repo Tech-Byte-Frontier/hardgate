@@ -41,6 +41,24 @@ The first-class policy roles are source, test, generated, fixture, and migration
 
 Configuration and documentation files remain inventoried for applicable policy, vendor files are pruned, and unknown files can fail when `gate.enforce_classified_sources` is enabled. A role severity of `error`, `warning`, or `ignore` determines whether a role finding blocks, becomes an advisory, or is omitted. Static evidence without a role override falls back to `gate.strict`.
 
+### Node and Supabase boundaries
+
+The JavaScript-family parser set includes `.js`, `.jsx`, `.mjs`, `.cjs`,
+`.ts`, `.tsx`, `.mts`, and `.cts` for source and test roles. Built-in
+classification treats `supabase/database.types.ts` and
+`supabase/schema.gen.ts` as generated, `supabase/functions/**/*.ts` as source,
+and Supabase migrations/seeds (`supabase/migrations/**/*.sql`,
+`supabase/seed.sql`, `supabase/seed.ts`, and `*.migration.sql`/`*.seed.sql`)
+as migration. SQL migration/seed files are inventoried and receive applicable
+safety checks but have no AST parser; `supabase/seed.ts` is migration-role and
+has TypeScript parser support, while migration policy still does not apply
+ordinary source/test complexity or native mutation. Under the default strict
+migration policy, parser-unsupported migration files produce a blocking
+`unsupported-source` finding. A custom classification rule may assign a
+different role, but it does not add a SQL parser. TOML/JSON
+configuration such as `supabase/config.toml` remains configuration inventory,
+not executable source.
+
 ## Static engines
 
 ### Safety and budgets
@@ -84,7 +102,7 @@ With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference a
 - `check`: static engines, enabled reports, freshness, and optional configured dead code.
 - `check --diff`: changed/staged static scope, full-index clone matching, changed executable LCOV, and full-tree legacy static ratchet when enabled.
 - `check --all`: `check` plus configured formatter/linter/test orchestration.
-- `verify`: full static tree plus enabled reports, freshness, and legacy static/dead-code ratchet; no orchestration or native mutation.
+- `verify`: full static tree by default (or requested path filters) plus enabled reports, freshness, and legacy static/dead-code ratchet; no orchestration or native mutation.
 - `mutate`: native unmutated baseline and AST mutants; no report ingestion.
 
 Orchestration commands run sequentially from the repository root; a local `node_modules/.bin` is prepended to `PATH`. An unconfigured command is not inferred. A configured command that is empty, unavailable, times out, or exits non-zero yields an orchestration finding.
@@ -100,3 +118,11 @@ For JS/TS files, the resolver walks ancestor directories, chooses the nearest `p
 The report aggregator records scan/function counts, violations, advisories, and duration, then renders terminal, agent Markdown, JSON, compact, or summary output. CLI empty discovery is an advisory while enabled evidence still runs; malformed or missing required evidence remains blocking. The MCP check surface rejects empty discovery before producing a report.
 
 The MCP server uses newline-delimited or `Content-Length`-framed JSON-RPC over stdio. Its tools are `hardgate_check(paths?, diff?)`, `hardgate_scan_file(path)`, and `hardgate_get_metrics(path, symbol)`. `hardgate_check` routes through the static gate only, accepts optional paths and `diff`, and fails closed on invalid config/arguments, empty scopes, unreadable or unparsable files, Git failures, and empty discovery. MCP does not run coverage, mutation, freshness, dead code, orchestration, or native mutation.
+
+## Build identity
+
+Release packaging writes `BUILD-METADATA.json` with the binary name, numeric
+version, Cargo target triple, npm package, and full source commit. Binaries
+embed `hardgate-target:<target>` and `--version` emits exactly
+`hardgate VERSION (COMMIT)`; checksum, metadata, target, and identity checks
+are part of the release/archive verification contract.

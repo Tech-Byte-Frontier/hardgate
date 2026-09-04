@@ -42,7 +42,7 @@ The anti-gaming scanner recognizes common compiler, linter, type-checker, and co
 
 Coverage and mutation report policies are optional only when disabled explicitly. When enabled, coverage requires a non-empty, parseable LCOV report; mutation requires a non-empty, recognized JSON report with outcomes. Missing source records, empty reports, malformed records, and integrity outcomes are blocking regardless of `gate.strict`. A disabled policy ignores stale files.
 
-`check` evaluates static engines plus enabled reports and generated freshness. `check --diff` scopes static findings to changed/staged files, uses a full clone index, and evaluates changed executable LCOV lines; with a legacy ratchet it runs a full-tree static comparison. `check --all` adds only configured formatter/linter/test commands. `verify` is full static + enabled reports/freshness/legacy static ratchet, without orchestration or native mutation. `mutate` runs a native unmutated baseline and AST mutants.
+`check` evaluates static engines plus enabled reports and generated freshness. `check --diff` scopes static findings to changed/staged files, uses a full clone index, and evaluates changed executable LCOV lines; with a legacy ratchet it runs a full-tree static comparison. `check --all` adds only configured formatter/linter/test commands. `verify` is full static by default (or requested path filters) + enabled reports/freshness/legacy static ratchet, without orchestration or native mutation. `mutate` runs a native unmutated baseline and AST mutants; a valid `--diff` with no changed production target is an explicit no-op, while an unrestricted or scoped run with no eligible target fails.
 
 ### Legacy adoption without a freeze
 

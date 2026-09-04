@@ -57,6 +57,23 @@ Built-in role behavior:
 
 Tree-sitter targets are `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, and `.go`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
 
+### Node and Supabase conventions
+
+The JavaScript-family extensions (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`,
+`.tsx`, `.mts`, and `.cts`) are parser-supported when the classified role is
+source or test. Built-in Supabase conventions classify
+`supabase/database.types.ts` and `supabase/schema.gen.ts` as generated and
+`supabase/functions/**/*.ts` as source. `supabase/migrations/**/*.sql`,
+`supabase/seed.sql`, and `*.migration.sql`/`*.seed.sql` are migration files
+without an AST parser; `supabase/seed.ts` is also migration-role but has
+TypeScript parser support. Migrations remain inventoried and receive migration
+safety checks rather than ordinary source/test complexity or native mutation.
+With the default strict migration policy, parser-unsupported migration files
+produce a blocking `unsupported-source` finding. A custom rule may assign
+another role, but classification does not add SQL metrics. Supabase
+configuration/data such as `supabase/config.toml` is configuration inventory
+and has no function metrics.
+
 Ordered custom rules run before built-ins, except that vendor/build pruning remains authoritative:
 
 ```toml
@@ -235,6 +252,12 @@ reports = ["reports/stryker-mutation.json"]
 `check` and `verify` evaluate Stryker-shaped (`files`), cargo-mutants-shaped (`outcomes`), or generic outcome-count JSON. Empty reports, empty outcome arrays, missing reports, parse errors, and reports with no viable outcomes are blocking when mutation is enabled. Scores use killed divided by killed plus survived. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings and remain blocking; mutation timeout handling is not a user-weakenable exception.
 
 `hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool.
+
+Native mutation is Unix-only in the v0.5.0 contract. Non-Unix builds fail
+closed before executing `mutate`, because robust process-group cleanup and
+atomic source restoration are not available there. This limitation applies to
+native mutation; static `check` and `scan` remain separate capabilities, and
+no Windows release artifact is specified.
 
 ## Orchestration and dead code
 

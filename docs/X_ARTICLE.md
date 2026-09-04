@@ -28,4 +28,9 @@ Agents can consume `--format agent` or JSON. MCP is stdio-only and intentionally
 
 Hardgate complements language linters, formatters, coverage providers, mutation runners, clone tools, and hosted products such as Qlty Cloud. Those tools own their language semantics, execution, or history. Hardgate owns the repository's local policy and the evidence boundary that says what was actually checked.
 
-Install from Cargo, the npm wrapper, or the shell installer. The release contract contains six Unix artifacts, verifies `SHA256SUMS` and `BUILD-METADATA.json`, and checks the binary's exact version and full source commit. The supported installer surface is Unix; Windows and Homebrew are not part of this contract.
+For the v0.5.0 release contract, the channel contract covers Cargo, the npm
+wrapper, and the shell installer. It specifies six Unix artifacts, verifies
+`SHA256SUMS` and `BUILD-METADATA.json`, and checks the binary's exact version,
+target marker, and full source commit; this describes intended release
+behavior, not publication already completed. The supported installer surface
+is Unix; Windows and Homebrew are not part of this contract.

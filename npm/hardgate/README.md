@@ -21,7 +21,9 @@ bunx --no-install hardgate scan src/index.ts
 
 ## Platform packages and fallback
 
-The wrapper publishes exactly six Unix optional dependencies:
+The v0.5.0 release contract defines exactly six Unix optional
+dependencies; this matrix describes intended channel behavior and does not
+claim that publication has already occurred:
 
 - `hardgate-linux-x64` (glibc)
 - `hardgate-linux-x64-musl`
@@ -30,7 +32,14 @@ The wrapper publishes exactly six Unix optional dependencies:
 - `hardgate-darwin-x64`
 - `hardgate-darwin-arm64`
 
-If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it resolves the package for the current OS/architecture and Linux libc. If a Linux optional package is unavailable, the other Linux libc package is tried. The launcher then permits a development Cargo binary or a real `hardgate` executable on `PATH`. It checks candidate file types so wrapper scripts do not recurse, and it never downloads a binary at runtime. Normal installs on unsupported platforms fail closed.
+If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise
+it resolves the package for the current OS/architecture and Linux libc. On
+glibc Linux, the musl package is a fallback when the glibc optional package is
+unavailable; a glibc binary is never selected on a musl host. The launcher
+then permits a development Cargo binary or a real `hardgate` executable on
+`PATH`. It checks candidate file types so wrapper scripts do not recurse, and
+it never downloads a binary at runtime. Normal installs on unsupported
+platforms fail closed.
 
 Use `HARDGATE_BINARY=/absolute/path/to/hardgate` when the project supplies its own binary. Optional dependencies must not be omitted when the prebuilt package is expected; if they are omitted, use the explicit or Cargo/PATH fallback.
 
@@ -49,6 +58,12 @@ npx hardgate init --preset strict-agent
 
 No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation.
 
+Native `mutate` is Unix-only in the v0.5.0 contract and fails closed on
+non-Unix builds before running commands, because robust process-group cleanup
+and atomic source restoration are unavailable there. Static `check` and `scan`
+remain separate commands; the six-package release matrix does not include a
+Windows artifact.
+
 For JavaScript/TypeScript mutation targets, Hardgate resolves npm, pnpm, Yarn, or Bun from the nearest package/workspace markers and infers Jest, Vitest, or Playwright from scripts, package metadata, or config files. It selects a matching test file where possible and otherwise runs the full suite. `--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
 
 ## MCP
@@ -57,6 +72,15 @@ The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is 
 
 ## Release identity
 
-The shell installer and release archives support the same six Unix artifacts. Archives are listed in `SHA256SUMS`; `BUILD-METADATA.json` records target, package, version, and full source commit. Installation verifies the unique checksum entry before extraction and requires the binary's exact `hardgate VERSION (COMMIT)` identity. `HARDGATE_VERSION` accepts `latest`, `vX.Y.Z`, or `X.Y.Z`; `HARDGATE_INSTALL_DIR` chooses the destination. Windows and Homebrew are not supported by this package contract.
+The v0.5.0 shell-installer and release-archive contract supports the same six
+Unix artifacts. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` overrides libc
+detection when needed. Archives are listed in `SHA256SUMS`;
+`BUILD-METADATA.json` records target, package, version, and full source commit.
+Installation verifies the unique checksum entry before extraction and
+requires the binary's exact `hardgate VERSION (COMMIT)` identity. The binary
+also embeds `hardgate-target:<target>`, which release verification checks.
+`HARDGATE_VERSION` accepts `latest`, `vX.Y.Z`, or `X.Y.Z`;
+`HARDGATE_INSTALL_DIR` chooses the destination. Windows and Homebrew are not
+supported by this package contract.
 
 Full documentation lives in the repository's [README](https://github.com/Tech-Byte-Frontier/hardgate) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/main/docs).

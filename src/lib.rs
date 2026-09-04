@@ -29,7 +29,7 @@
 //! * **[`engines::generated`]** runs an enabled generated-artifact freshness
 //!   command independently of file-budget exclusions.
 //! * **[`engines::orchestration`]** runs explicitly configured formatter,
-//!   linter, test, and freshness commands with bounded process handling.
+//!   linter, and test commands with bounded process handling.
 //!
 //! ## Roles and evidence
 //!
@@ -42,6 +42,18 @@
 //! grandfather non-worsened static and configured dead-code debt, while
 //! current evidence engines remain outside the ratchet.
 //!
+//! The JavaScript-family parser set includes `.js`, `.jsx`, `.mjs`, `.cjs`,
+//! `.ts`, `.tsx`, `.mts`, and `.cts`. Built-in Supabase conventions classify
+//! `supabase/database.types.ts` and `supabase/schema.gen.ts` as generated,
+//! `supabase/functions/**/*.ts` as source, and migration/seed SQL as
+//! migration. SQL migration/seed files remain inventoried for applicable
+//! safety policy but have no AST parser; `supabase/seed.ts` is migration-role
+//! and has TypeScript parser support, while migration policy does not apply
+//! ordinary source/test complexity or native mutation. Under the default
+//! strict migration policy, parser-unsupported migration files produce a
+//! blocking `unsupported-source` finding. A custom classification rule may
+//! assign another role, but it does not add a SQL parser.
+//!
 //! ## Command boundaries
 //!
 //! `check` runs static engines plus enabled report and freshness evaluators.
@@ -49,10 +61,10 @@
 //! clones against a full repository index, and evaluates changed executable
 //! LCOV lines; an enabled legacy ratchet performs a full-tree static comparison
 //! with changed-hunk attribution. `check --all` additionally runs configured
-//! formatter, linter, and test commands. `verify` runs full static analysis,
-//! enabled reports/freshness, and the legacy static ratchet without
-//! orchestration or native mutation. `mutate` runs the native unmutated
-//! baseline and AST mutants.
+//! formatter, linter, and test commands. `verify` runs full static analysis by
+//! default (or requested path filters), enabled reports/freshness, and the
+//! legacy static ratchet without orchestration or native mutation. `mutate`
+//! runs the native unmutated baseline and AST mutants.
 //!
 //! ## Example: loading configuration and discovering files
 //!
@@ -80,6 +92,14 @@
 //! scopes/discovery, unreadable or unparsable files, and Git failures. It does
 //! not run coverage, mutation, freshness, dead-code, orchestration, or native
 //! mutation.
+//!
+//! ## Build identity
+//!
+//! Release metadata binds the binary name, numeric version, Cargo target
+//! triple, npm package, and full source commit in `BUILD-METADATA.json`.
+//! Binaries embed `hardgate-target:<target>` and report exactly
+//! `hardgate VERSION (COMMIT)` for `--version`; release verification checks
+//! the checksum, metadata, target marker, and version/commit identity together.
 
 pub mod adoption;
 pub mod commands;

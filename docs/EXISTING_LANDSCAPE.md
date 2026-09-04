@@ -16,7 +16,11 @@ Hardgate sits between language tools and a repository's acceptance policy. It ca
 | Oxlint | JavaScript/TypeScript linting | Hardgate can orchestrate Oxlint; Oxlint owns language diagnostics |
 | Trunk / Lefthook / pre-commit | Hook scheduling and command orchestration | Useful invocation layers; Hardgate supplies the policy report they invoke |
 
-Qlty should not be described as a drop-in Hardgate implementation. Qlty Cloud is a hosted code-health product, and the Qlty CLI can run local analysis and publish coverage. Hardgate does not upload data or provide a hosted dashboard; it decides a local gate from the repository's configured engines and evidence. Use both when a project wants local acceptance plus hosted trends.
+Qlty has a different scope from Hardgate: Qlty Cloud is a hosted code-health
+product, and the Qlty CLI can run local analysis and publish coverage. Hardgate
+does not upload data or provide a hosted dashboard; it decides a local gate
+from the repository's configured engines and evidence. Use both when a project
+wants local acceptance plus hosted trends.
 
 ## Comparison by concern
 
@@ -49,4 +53,9 @@ A project can use all of these tools and still have an ambiguous acceptance rule
 
 Hardgate parses Rust, JavaScript, TypeScript/TSX, Python, and Go with Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates several mutation JSON shapes; and speaks MCP over stdio. It does not claim global module resolution, compiler/type analysis, a broader parser matrix, another MCP transport, or a hosted quality dashboard.
 
-The npm wrapper and shell installer publish/select six Unix artifacts (Linux x64/arm64 glibc and musl, macOS x64/arm64). Release archives are checked with `SHA256SUMS`, build metadata, and exact version/commit identity. There is no Windows or Homebrew installer in this contract.
+For the v0.5.0 release contract, the npm wrapper and shell installer are
+specified to select six Unix artifacts (Linux x64/arm64 glibc and musl, macOS
+x64/arm64). The channel specification does not assert that publication has
+already occurred. Release archives are checked with `SHA256SUMS`,
+`BUILD-METADATA.json`, the target marker, and exact version/commit identity.
+There is no Windows or Homebrew installer in this contract.
