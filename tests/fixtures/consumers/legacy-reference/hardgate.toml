@@ -4,6 +4,10 @@ preset = "legacy-migration"
 strict = false
 enforce_classified_sources = true
 
+[legacy]
+reference_branch = "main"
+ratchet = true
+
 [budgets.functions]
 max_parameters = 1
 
