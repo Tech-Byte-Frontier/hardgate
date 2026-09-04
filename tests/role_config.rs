@@ -249,10 +249,6 @@ fn invalid_role_config_fails_during_load() {
         ("[generated]\nenabled = true", "freshness_command"),
         ("[orchestration]\ntimeout_secs = 0", "timeout_secs"),
         (
-            "[mutation]\nenabled = true\nreject_timeouts = false",
-            "reject_timeouts",
-        ),
-        (
             "[classification]\n[[classification.rules]]\nglob = \"[bad\"\nrole = \"source\"",
             "glob",
         ),
@@ -348,10 +344,6 @@ enabled = true
 
     assert!(config.mutation.enabled);
     assert_eq!(config.mutation.min_score, Some(72.0));
-    assert_eq!(
-        config.mutation.reject_timeouts,
-        expected.mutation.reject_timeouts
-    );
     assert_eq!(config.mutation.reports, expected.mutation.reports);
     assert_eq!(config.mutation.test_cmd, expected.mutation.test_cmd);
     assert_eq!(config.mutation.timeout_secs, expected.mutation.timeout_secs);
@@ -385,7 +377,6 @@ critical_paths = []
 
 [mutation]
 enabled = false
-reject_timeouts = false
 reports = []
 test_cmd = ""
 
@@ -413,7 +404,6 @@ exclude = []
     );
 
     assert!(!config.mutation.enabled);
-    assert!(!config.mutation.reject_timeouts);
     assert_eq!(config.mutation.reports, Some(Vec::new()));
     assert_eq!(config.mutation.test_cmd.as_deref(), Some(""));
     assert_eq!(config.mutation.min_score, expected.mutation.min_score);
@@ -470,22 +460,22 @@ fn generated_presets_and_runtime_defaults_have_matching_semantics() {
 }
 
 #[test]
-fn mutation_timeout_defaults_are_consistent_for_custom_configs() {
-    assert!(Preset::Custom.to_default_config().mutation.reject_timeouts);
+fn removed_timeout_knob_cannot_weaken_mutation_evidence() {
+    assert!(!HardgateConfig::generate_toml_template(Preset::Custom).contains("reject_timeouts"));
     let root = fs::tempdir("custom-mutation-default");
     let path = root.join("hardgate.toml");
-    let load = |content: &str| {
-        std::fs::write(&path, content).unwrap();
-        HardgateConfig::load_or_default(Some(&path)).unwrap()
-    };
-    let generated = load(&HardgateConfig::generate_toml_template(Preset::Custom));
-    assert!(generated.mutation.reject_timeouts);
-    let minimal = load("[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\n");
-    assert!(minimal.mutation.enabled);
-    assert!(minimal.mutation.reject_timeouts);
-    let explicit = load(
-        "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = false\nreject_timeouts = false\n",
-    );
-    assert!(!explicit.mutation.reject_timeouts);
+    std::fs::write(
+        &path,
+        "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\nreject_timeouts = false\n",
+    )
+    .unwrap();
+    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    assert!(config.mutation.enabled);
+    let report = root.join("timeout.json");
+    std::fs::write(&report, r#"{"killed":1,"timeout":1}"#).unwrap();
+    let violations = hardgate::engines::MutationGatekeeper::new(&config.mutation)
+        .evaluate_report(&report)
+        .unwrap();
+    assert!(violations.iter().any(|v| v.metric == "Mutation Timeouts"));
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -35,7 +35,7 @@ impl Preset {
         config.anti_gaming.disallow_suppressions = true;
         config.clones = make_clones(b.clones.0, b.clones.1);
         config.coverage = make_coverage(b.coverage.0, b.coverage.1, b.coverage.2);
-        config.mutation = make_mutation(b.mutation.0, b.mutation.1, b.mutation.2);
+        config.mutation = make_mutation(b.mutation.0, b.mutation.1);
         config.gate.strict = *self != Preset::LegacyMigration;
         config.gate.enforce_classified_sources = false;
         config.roles = RolePoliciesConfig::for_preset(strict);
@@ -135,11 +135,10 @@ fn make_coverage(enabled: bool, line_pct: f64, max_crap: f64) -> CoverageConfig 
     }
 }
 
-fn make_mutation(enabled: bool, score: f64, reject_timeouts: bool) -> MutationConfig {
+fn make_mutation(enabled: bool, score: f64) -> MutationConfig {
     MutationConfig {
         enabled,
         min_score: Some(score),
-        reject_timeouts,
         reports: None,
         test_cmd: None,
         timeout_secs: Some(10),
@@ -175,7 +174,7 @@ struct PresetBundle {
     thresholds: FuncThresholds,
     clones: (usize, usize),
     coverage: (bool, f64, f64),
-    mutation: (bool, f64, bool),
+    mutation: (bool, f64),
 }
 
 fn get_preset_bundle(strict: bool) -> PresetBundle {
@@ -201,10 +200,6 @@ fn get_preset_bundle(strict: bool) -> PresetBundle {
         } else {
             (false, 80.0, 30.0)
         },
-        mutation: if strict {
-            (true, 85.0, true)
-        } else {
-            (false, 75.0, false)
-        },
+        mutation: if strict { (true, 85.0) } else { (false, 75.0) },
     }
 }

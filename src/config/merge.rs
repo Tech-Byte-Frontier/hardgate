@@ -109,7 +109,6 @@ fn merge_coverage(base: &mut CoverageConfig, user: &CoverageConfig, raw: &toml::
 fn merge_mutation(base: &mut MutationConfig, user: &MutationConfig, raw: &toml::Table) {
     with_section(raw, &["mutation"], |table| {
         set!(table, min_score, base, user);
-        set!(table, reject_timeouts, base, user);
         set!(table, reports, base, user);
         set!(table, test_cmd, base, user);
         set!(table, timeout_secs, base, user);

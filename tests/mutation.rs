@@ -18,7 +18,6 @@ fn gatekeeper_with_floor(min_score: f64) -> MutationGatekeeper {
     MutationGatekeeper::new(&MutationConfig {
         enabled: true,
         min_score: Some(min_score),
-        reject_timeouts: false,
         reports: None,
         test_cmd: None,
         timeout_secs: Some(10),
@@ -180,7 +179,7 @@ fn test_mutation_report_integrity_outcomes_are_blocking() {
 }
 
 #[test]
-fn test_timeout_is_blocking_even_when_legacy_flag_is_false() {
+fn test_timeout_is_always_blocking() {
     let tmp = tempdir("mut-timeout");
     let keeper = gatekeeper();
     let report = write_report(&tmp, "timeout.json", r#"{"killed": 1, "timeout": 1}"#);

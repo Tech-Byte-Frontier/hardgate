@@ -222,31 +222,15 @@ pub struct CoverageConfig {
 }
 
 /// Mutation testing policy: kill-rate floor, timeout handling, and runner tuning.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MutationConfig {
     #[serde(default)]
     pub enabled: bool,
     pub min_score: Option<f64>,
-    #[serde(default = "default_true")]
-    pub reject_timeouts: bool,
     pub reports: Option<Vec<String>>,
     pub test_cmd: Option<String>,
     pub timeout_secs: Option<u64>,
     pub max_mutants: Option<usize>,
-}
-
-impl Default for MutationConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            min_score: None,
-            reject_timeouts: true,
-            reports: None,
-            test_cmd: None,
-            timeout_secs: None,
-            max_mutants: None,
-        }
-    }
 }
 
 /// External formatter/linter/test commands orchestrated by `fmt` and `check --all`.

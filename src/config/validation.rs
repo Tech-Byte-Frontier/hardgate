@@ -114,11 +114,6 @@ fn validate_coverage(coverage: &CoverageConfig) -> Result<()> {
 }
 
 fn validate_mutation(mutation: &MutationConfig) -> Result<()> {
-    if mutation.enabled && !mutation.reject_timeouts {
-        bail!(
-            "mutation.reject_timeouts=false cannot weaken an enabled mutation gate; timeouts are blocking"
-        );
-    }
     if let Some(value) = mutation.min_score {
         ensure_percentage(value, "mutation.min_score")?;
     }
