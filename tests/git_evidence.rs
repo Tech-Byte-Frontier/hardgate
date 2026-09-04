@@ -66,6 +66,16 @@ fn committed_repo(tag: &str, path: &str, contents: &str) -> Repo {
     repo
 }
 
+fn assert_deletion_only_hunk(tag: &str, current: &str) {
+    let repo = committed_repo(tag, "src/lib.rs", "first\nkeep\nmiddle\nlast\n");
+    let path = Path::new("src/lib.rs");
+    repo.write("src/lib.rs", current);
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert!(!evidence.change_set.changed_lines.contains_key(path));
+    assert!(evidence.change_set.changed_files.contains(path));
+}
+
 #[test]
 fn resolves_merge_base_for_reference_branch() {
     let repo = Repo::new("git-evidence-merge-base");
@@ -93,6 +103,24 @@ fn attributes_modified_hunks_to_post_image_lines() {
     assert_changed_lines(&evidence, path, &[2, 4]);
     assert!(touches(&evidence.change_set.changed_lines, path, 2, 2));
     assert!(!touches(&evidence.change_set.changed_lines, path, 3, 3));
+    assert!(evidence.change_set.changed_files.contains(path));
+}
+
+#[test]
+fn ignores_first_middle_and_end_deletion_only_hunks() {
+    assert_deletion_only_hunk("git-evidence-delete-first", "keep\nmiddle\nlast\n");
+    assert_deletion_only_hunk("git-evidence-delete-middle", "first\nkeep\nlast\n");
+    assert_deletion_only_hunk("git-evidence-delete-end", "first\nkeep\nmiddle\n");
+}
+
+#[test]
+fn preserves_current_lines_for_mixed_delete_and_add_hunks() {
+    let repo = committed_repo("git-evidence-delete-add", "src/lib.rs", "one\ntwo\nthree\n");
+    let path = Path::new("src/lib.rs");
+    repo.write("src/lib.rs", "one\nreplacement\nthree\n");
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert_changed_lines(&evidence, path, &[2]);
     assert!(evidence.change_set.changed_files.contains(path));
 }
 

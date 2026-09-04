@@ -386,20 +386,18 @@ fn parse_range(value: &str) -> Option<(usize, usize)> {
     Some((start.parse().ok()?, count.parse().ok()?))
 }
 fn add_hunk_lines(map: &mut ChangedLineMap, path: &Path, start: usize, count: usize) -> Result<()> {
-    let first = if count == 0 { start.max(1) } else { start };
-    if count > 0 && first == 0 {
+    if count == 0 {
+        return Ok(());
+    }
+    if start == 0 {
         bail!("Git returned a zero-based non-empty diff range");
     }
-    let last = if count == 0 {
-        first
-    } else {
-        first
-            .checked_add(count - 1)
-            .context("Git diff hunk line range overflowed")?
-    };
+    let last = start
+        .checked_add(count - 1)
+        .context("Git diff hunk line range overflowed")?;
     map.entry(path.to_path_buf())
         .or_default()
-        .extend(first..=last);
+        .extend(start..=last);
     Ok(())
 }
 fn parse_diff_path(rest: &str, prefix: &str) -> Result<Option<PathBuf>> {
