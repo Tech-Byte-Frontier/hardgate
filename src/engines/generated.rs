@@ -29,19 +29,31 @@ pub fn run_generated_freshness(
         return Some(Err(missing_command_violation()));
     };
 
+    let timeout_secs = config.timeout_secs.unwrap_or(300).max(1);
     let orchestration = OrchestrationConfig {
         timeout_secs: config.timeout_secs,
         ..OrchestrationConfig::default()
     };
     let engine = OrchestrationEngine::new(&orchestration);
-    Some(engine.run_step(
+    let result = engine.run_step(
         OrchestrationStep {
             step: GENERATED_FRESHNESS_STEP,
             command,
             recommendation: GENERATED_FRESHNESS_RECOMMENDATION,
         },
         root,
-    ))
+    );
+    Some(result.map_err(|mut violation| {
+        if violation.exit_code.is_none()
+            && violation.output.contains("Command timed out after")
+            && violation.output.contains("process group terminated")
+        {
+            violation.recommendation = format!(
+                "Fix the generated freshness command or raise generated.timeout_secs above {timeout_secs} only when the longer runtime is expected."
+            );
+        }
+        violation
+    }))
 }
 
 fn missing_command_violation() -> OrchestrationViolation {

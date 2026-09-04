@@ -97,6 +97,10 @@ fn freshness_timeout_terminates_descendants() {
         .expect_err("hung command must time out");
     assert!(violation.output.contains("timed out"), "{violation:?}");
     assert!(violation.output.contains("process group"), "{violation:?}");
+    assert!(
+        violation.recommendation.contains("generated.timeout_secs"),
+        "{violation:?}"
+    );
 
     let child_pid = std::fs::read_to_string(&pid_file).unwrap();
     let child_pid = child_pid.trim().parse::<i32>().unwrap();
