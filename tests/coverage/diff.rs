@@ -1,4 +1,4 @@
-use super::{changed, coverage_map, strict_scorer};
+use super::{changed, coverage, coverage_map, strict_scorer};
 use hardgate::engines::CoverageScorer;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -70,6 +70,24 @@ fn test_full_evaluation_remains_full_project_mode() {
     let full = scorer.evaluate(&map, &[], Path::new("."));
     assert!(full.iter().any(|v| v.metric == "Global Line Coverage"));
     assert!(full.iter().all(|v| v.metric != "Diff Line Coverage"));
+}
+
+#[test]
+fn compatibility_diff_matching_never_uses_first_ambiguous_record() {
+    let scorer = strict_scorer();
+    let map = HashMap::from([
+        (
+            PathBuf::from("one/src/lib.rs"),
+            coverage("one/src/lib.rs", &[(1, 1)]),
+        ),
+        (
+            PathBuf::from("two/src/lib.rs"),
+            coverage("two/src/lib.rs", &[(1, 1)]),
+        ),
+    ]);
+    let violations = scorer.evaluate_diff_coverage(&map, &changed("src/lib.rs", &[1]));
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].metric, "Missing Diff Coverage");
 }
 
 #[test]
