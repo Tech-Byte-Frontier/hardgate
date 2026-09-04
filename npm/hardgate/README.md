@@ -91,7 +91,7 @@ That root script is used only with no local script or reliable local manifest/co
 malformed manifests or ambiguous scripts fail closed. It infers
 Jest, Vitest, or Playwright only when selector behavior is unambiguous, selects
 a matching test where possible, and otherwise runs the full suite.
-`--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
+`--test-cmd` overrides resolution. See the repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
 
 ## MCP
 

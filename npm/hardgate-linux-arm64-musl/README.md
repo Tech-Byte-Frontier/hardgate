@@ -11,6 +11,6 @@ npx hardgate check
 
 Binaries are delivered via `optionalDependencies`, no postinstall downloads.
 
-Full docs: https://github.com/Tech-Byte-Frontier/hardgate
+Full docs: https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0
 
 License: MIT OR Apache-2.0.
