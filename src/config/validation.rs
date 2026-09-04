@@ -28,7 +28,7 @@ pub(super) fn validate(config: &HardgateConfig) -> Result<()> {
     validate_invariants(&config.invariants)?;
     config.roles.validate()?;
     config.classification.validate()?;
-    config.generated.validate(config.gate.strict)?;
+    config.generated.validate()?;
     config.legacy.validate()?;
     Ok(())
 }

@@ -260,9 +260,8 @@ impl Default for GeneratedConfig {
 }
 
 impl GeneratedConfig {
-    pub fn validate(&self, strict: bool) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.enabled
-            && strict
             && self
                 .freshness_command
                 .as_deref()

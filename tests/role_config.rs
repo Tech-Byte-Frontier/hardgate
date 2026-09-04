@@ -267,6 +267,35 @@ fn invalid_role_config_fails_during_load() {
 }
 
 #[test]
+fn enabled_generated_freshness_requires_a_command_in_legacy_mode() {
+    let mut config = Preset::LegacyMigration.to_default_config();
+    config.generated.enabled = true;
+    config.generated.freshness_command = None;
+
+    let error = config.validate().unwrap_err();
+    assert!(error.to_string().contains("freshness_command"), "{error:#}");
+}
+
+#[test]
+fn partial_orchestration_override_preserves_preset_commands() {
+    let root = fs::tempdir("role-partial-orchestration");
+    let path = root.join("hardgate.toml");
+    std::fs::write(
+        &path,
+        "[gate]\npreset = \"strict-agent\"\n\n[orchestration]\ntimeout_secs = 9\n",
+    )
+    .unwrap();
+
+    let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
+    let expected = Preset::StrictAgent.to_default_config().orchestration;
+    assert_eq!(config.orchestration.format_check, expected.format_check);
+    assert_eq!(config.orchestration.format, expected.format);
+    assert_eq!(config.orchestration.lint, expected.lint);
+    assert_eq!(config.orchestration.test_cmd, expected.test_cmd);
+    assert_eq!(config.orchestration.timeout_secs, Some(9));
+}
+
+#[test]
 fn generated_presets_and_runtime_defaults_have_matching_semantics() {
     let strict =
         HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))

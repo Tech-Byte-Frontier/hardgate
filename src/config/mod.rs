@@ -430,20 +430,32 @@ fn merge_verification_overrides(
 }
 
 fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
-    if has_section(raw, &["orchestration"])
-        || user.orchestration.format_check.is_some()
-        || user.orchestration.format.is_some()
-        || user.orchestration.lint.is_some()
-        || user.orchestration.timeout_secs.is_some()
-    {
-        base.orchestration = user.orchestration.clone();
-    }
+    merge_orchestration(&mut base.orchestration, &user.orchestration, raw);
     if has_section(raw, &["analysis", "dead_code"])
         || user.analysis.dead_code.enabled
         || !user.analysis.dead_code.entry_points.is_empty()
     {
         base.analysis = user.analysis.clone();
     }
+}
+
+fn merge_orchestration(
+    base: &mut OrchestrationConfig,
+    user: &OrchestrationConfig,
+    raw: &toml::Table,
+) {
+    let Some(table) = raw.get("orchestration").and_then(toml::Value::as_table) else {
+        return;
+    };
+    when_key(table, "format_check", || {
+        base.format_check = user.format_check.clone()
+    });
+    when_key(table, "format", || base.format = user.format.clone());
+    when_key(table, "lint", || base.lint = user.lint.clone());
+    when_key(table, "test_cmd", || base.test_cmd = user.test_cmd.clone());
+    when_key(table, "timeout_secs", || {
+        base.timeout_secs = user.timeout_secs
+    });
 }
 
 fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets, _raw: &toml::Table) {
