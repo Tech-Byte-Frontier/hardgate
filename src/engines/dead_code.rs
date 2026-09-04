@@ -151,6 +151,7 @@ fn build_entry_globs(user_entries: &[String]) -> GlobSet {
         "index.ts",
         "index.tsx",
         "**/*.d.ts",
+        "**/build.rs",
         "**/vite.config.*",
         "**/next.config.*",
         "**/tailwind.config.*",
@@ -207,6 +208,14 @@ fn rust_mod_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"\bmod\s+([a-zA-Z0-9_]+);"#).expect("valid mod regex"))
 }
 
+fn rust_path_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"#\[path\s*=\s*["']([^"']+)["']\]\s*mod\s+[a-zA-Z0-9_]+\s*;"#)
+            .expect("valid path module regex")
+    })
+}
+
 fn rust_use_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -233,11 +242,13 @@ fn collect_referenced_stems(file_contents: &[(PathBuf, String)]) -> HashSet<Stri
     let mut stems = HashSet::new();
     let import_re = import_regex();
     let rust_mod_re = rust_mod_regex();
+    let rust_path_re = rust_path_regex();
     let rust_use_re = rust_use_regex();
 
     for (_, content) in file_contents {
         scan_import_stems(content, import_re, &mut stems);
         scan_rust_stems(content, rust_mod_re, &mut stems);
+        scan_rust_path_stems(content, rust_path_re, &mut stems);
         scan_rust_stems(content, rust_use_re, &mut stems);
     }
     stems
@@ -265,6 +276,18 @@ fn scan_rust_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
         if let Some(m) = cap.get(1) {
             stems.insert(m.as_str().to_string());
         }
+    }
+}
+
+fn scan_rust_path_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
+    for cap in re.captures_iter(content) {
+        let Some(path) = cap.get(1).map(|m| Path::new(m.as_str())) else {
+            continue;
+        };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        stems.insert(stem.to_string());
     }
 }
 

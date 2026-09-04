@@ -75,3 +75,48 @@ fn test_dead_code_word_boundary() {
             .any(|v| v.symbol.as_deref() == Some("used"))
     );
 }
+
+#[test]
+fn cargo_build_scripts_and_path_modules_are_reachable() {
+    let files = vec![
+        PathBuf::from("build.rs"),
+        PathBuf::from("crates/worker/build.rs"),
+        PathBuf::from("src/main.rs"),
+        PathBuf::from("src/engines/mutation/js.rs"),
+        PathBuf::from("src/engines/mutation/js_resolver_tests.rs"),
+        PathBuf::from("src/engines/mutation/runner.rs"),
+        PathBuf::from("src/engines/mutation/runner_tests.rs"),
+        PathBuf::from("src/orphan.rs"),
+    ];
+    let contents = vec![
+        entry("build.rs", "fn main() {}"),
+        entry("crates/worker/build.rs", "fn main() {}"),
+        entry("src/main.rs", "mod js; mod runner;"),
+        entry(
+            "src/engines/mutation/js.rs",
+            "#[cfg(test)] #[path = \"js_resolver_tests.rs\"] mod tests;",
+        ),
+        entry(
+            "src/engines/mutation/js_resolver_tests.rs",
+            "fn resolver_tests() {}",
+        ),
+        entry(
+            "src/engines/mutation/runner.rs",
+            "#[cfg(test)] #[path = \"runner_tests.rs\"] mod tests;",
+        ),
+        entry(
+            "src/engines/mutation/runner_tests.rs",
+            "fn runner_tests() {}",
+        ),
+        entry("src/orphan.rs", "fn orphan() {}"),
+    ];
+
+    let violations = find_dead_code(files, contents);
+    let unreferenced_files = violations
+        .iter()
+        .filter(|violation| violation.violation_type == "Unreferenced File")
+        .map(|violation| violation.file.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(unreferenced_files, vec![PathBuf::from("src/orphan.rs")]);
+}
