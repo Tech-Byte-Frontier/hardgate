@@ -1,166 +1,116 @@
 # Hardgate
 
-**Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era.**
+**Deterministic quality gates, structural budgets, and anti-gaming checks for agent-assisted software.**
 
 [![Crates.io](https://img.shields.io/crates/v/hardgate.svg)](https://crates.io/crates/hardgate)
 [![Documentation](https://docs.rs/hardgate/badge.svg)](https://docs.rs/hardgate)
 [![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
-[![Diff Speed](https://img.shields.io/badge/git_diff-%3C10ms-brightgreen.svg)](#benchmarks)
-[![Downloads](https://img.shields.io/crates/d/hardgate.svg)](https://crates.io/crates/hardgate)
 
----
+Hardgate is a local Rust CLI. It turns repository policy into a deterministic report that an engineer or an agent can inspect before accepting a change. The gate is deliberately about evidence and boundaries, not a promise that a test command alone proves correctness.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/media/x_article_cover_clean.png" alt="Hardgate Header" width="100%" />
-</p>
+## What is enforced
 
-## The Problem: Goodhart's Law in the Agent Era
+- **Role-aware discovery.** Source, test, fixture, generated, migration, configuration, documentation, vendor, and unknown files are classified before engines choose their inputs. Dependency and build-output directories are pruned by default; user exclusions remain visible as advisories.
+- **Structural budgets.** Tree-sitter metrics cover Rust, JavaScript, TypeScript, TSX, Python, and Go. Configure physical bytes/lines and per-function cyclomatic, cognitive, Halstead, ABC, parameter, statement, body-line, and nesting ceilings.
+- **Anti-gaming policy.** When enabled, known suppression directives and project-forbidden tokens fail safety-checked files. There is no inline exception mechanism in the current configuration.
+- **Architectural boundaries.** Declarative rules inspect source lines for disallowed imports, calls, and tokens. This is a local rule scanner, not global module analysis.
+- **Clone debt.** A bounded rolling hash over normalized lexical token streams finds repeated spans across eligible source, test, and fixture files. Thresholds and per-engine exclusions are configurable.
+- **Optional evidence.** Enabled coverage policies read LCOV and can enforce global line/function/branch floors, CRAP ceilings, and critical-path line coverage. Enabled mutation policies evaluate Stryker, cargo-mutants, or generic JSON outcome reports. Missing or malformed required evidence is a finding in strict mode; disabled engines ignore stale reports.
+- **Native mutation.** `hardgate mutate` is a separate AST mutation run over classified production sources. It runs an unmutated baseline first, rejects a run with no viable mutants, reports killed/survived/timeout/compile/runner/equivalent/unviable outcomes, and verifies source restoration after every mutant.
+- **Local integration.** `check --all` can run configured formatter, linter, and test commands. `fmt` can run the configured formatter. `--format agent`, JSON, compact, and summary output make results consumable by tools without hiding the terminal report.
 
-In the era of autonomous coding assistants (Claude Code, Cursor, Codex, Devin, Cline, Aider), code generation is essentially free. However, LLM agents are token-efficient cost minimizers operating under **Goodhart’s Law**:
+### Supported source and inventory extensions
 
-> *"When a measure becomes a target, it ceases to be a good measure."*
+Tree-sitter parsing currently covers these six parser targets:
 
-When instructed to *"make the tests pass"* or *"fix the compiler error"*, unconstrained agents optimize for the fastest path to exit code `0`:
-* **Suppression Pragmas:** Quietly slipping `// @ts-ignore`, `/* eslint-disable */`, `#[allow(...)]`, `# noqa`, or `/* c8 ignore */` above signatures instead of fixing underlying types.
-* **Complexity Dumping:** Wrapping complex edge cases in 7-level nested conditionals and 200-line monolithic functions rather than designing clean interfaces.
-* **Vacuous Coverage:** Writing assertion-free tests (`expect(true).toBe(true)`) or mocking everything to artificially hit 100% line coverage with 0% semantic verification.
-* **Boilerplate Duplication:** Copy-pasting 40 lines of code across files because local duplication is cheaper in tokens than discovering and refactoring shared abstractions.
-* **Architectural Leakage:** Bypassing boundaries (e.g. calling native OS APIs or raw database queries directly from UI button components).
+| Family | Extensions |
+| --- | --- |
+| Rust | `.rs` |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` |
+| TypeScript | `.ts`, `.mts`, `.cts` |
+| TSX | `.tsx` |
+| Python | `.py` |
+| Go | `.go` |
 
-**You cannot prompt-engineer your way out of software entropy.** Pleading with LLMs through 10-page `.cursorrules` or `CLAUDE.md` files is subjective, non-deterministic, and burns context window tokens on every single turn.
-
-**Hardgate** is a single, zero-dependency binary written in Rust that provides machine-enforced deterministic physics that AI agents **physically cannot game**.
-
----
-
-## Proven in Production: Real-World Benchmarks
-
-### 1. Large Fullstack Monorepo (Next.js + Node.js + Shared Packages)
-Dropped cold into an enterprise repository that had never run Hardgate before:
-* **Scanned:** **517 files** and **4,230 functions** using Tree-sitter ASTs.
-* **Execution Time:** **482 milliseconds**.
-* **Findings:** Uncovered **89 duplicate code clones** and **15 hidden suppression pragmas** before traditional linters could even finish parsing config files.
-
-### 2. Production Desktop Application (Rust + React/TypeScript)
-Migrated a production desktop app (172 source files, 1,954 functions):
-* **AST Scan Speed:** Evaluated in **165 ms**; incremental `hardgate check --diff` completed in **7 ms**.
-* **Bloat Eliminated:** Replaced 55MB+ of local binaries (`bca`, `jscpd`, `knip`) and erased **~1,000 lines of fragile Node.js glue scripts**.
-
----
-
-## Comparison: Hardgate vs. Legacy Toolchains
-
-| Feature | Legacy Toolchain (ESLint + Knip + jscpd + Stryker) | Hardgate Quality Harness |
-| :--- | :--- | :--- |
-| **Execution Speed** | 30,000ms – 60,000ms | **7ms – 165ms** |
-| **Footprint** | 150MB+ of npm dependencies & Node glue scripts | **Single ~15MB zero-dependency Rust binary** |
-| **Multi-Language AST** | Fragmented per-language runtimes | **Unified Tree-sitter AST: Rust, TS/TSX, JS, Python, Go** |
-| **Anti-Gaming** | Trivially bypassed via `@ts-ignore` / `#[allow(...)]` | **Zero-tolerance suppression detection** |
-| **Clone Detection** | Slow regex/token scrapers (`jscpd`) | **Rabin-Karp token-stream rolling hash** |
-| **Agent Integration** | Unstructured terminal text dumps | **Native MCP server & structured `--format agent` Markdown** |
-| **Mutation Testing** | Heavy, fragile external runners with frequent timeouts | **Native Tree-sitter AST mutator with RAII rollbacks** |
-| **Technical Debt** | Invisible bypasses in config files | **Prominent advisory warnings for excluded paths** |
-
----
-
-## Core Engines & Capabilities
-
-### 1. Hard Physical & AST Complexity Budgets
-Computes Cyclomatic, Cognitive (Sonar model), Halstead difficulty, and ABC (Assignments, Branches, Conditions) metrics per function using Tree-sitter. Enforces strict parameter limits ($\le 4$), nesting depths ($\le 4$), and physical line thresholds.
-
-### 2. Zero-Tolerance Anti-Gaming Engine
-Scans ASTs and comment tokens across all languages for compiler, linter, type-checker, and coverage suppression pragmas. Any attempt to silence errors fails the gate immediately.
-
-### 3. Native AST Mutation Testing (`hardgate mutate`)
-Validates that test suites actually catch bugs. Automatically targets binary operators (`==`, `!=`, `<`, `>`, `&&`, `||`, `+`, `-`) and boolean literals, executes scoped tests with strict per-mutant timeouts, and guarantees instant disk restoration via RAII `RollbackGuard`.
-
-### 4. High-Performance Clone Detection
-Token-stream rolling hash (Rabin-Karp / Winnowing) catching cross-file duplicates ($\ge 5$ lines, $\ge 50$ tokens) before agents merge copy-paste redundancy.
-
-### 5. Architectural Invariants
-Declarative boundary enforcement preventing forbidden imports or unauthorized calls between subsystems (e.g., UI $\to$ native IPC or database drivers).
-
-### 6. Dead Code & Ghost Module Extermination (`hardgate check --dead-code`)
-Detects orphaned modules and unreferenced exports left behind when agents switch implementation strategies halfway through.
-
-### 7. Technical Debt Advisory Notices
-When files are bypassed in `[clones].excludes` or `[budgets.files.exclusions]`, Hardgate emits high-visibility advisory notices during checks:
-```text
-⚠️  Advisory: 25 files excluded from clone detection via hardgate.toml.
-```
-This ensures technical debt remains visible and accounted for over time.
-
-### 8. Tool Orchestration (`hardgate fmt` & `hardgate check --all`)
-Automatically detects local `./node_modules/.bin` and global paths, running formatters and linters (`oxfmt`, `cargo fmt`, `oxlint`, `clippy`) in a single unified command.
-
----
+The inventory also records `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`; these formats do not receive a Tree-sitter complexity pass in this revision. Markdown documentation (`.md`) is not part of the built-in inventory.
 
 ## Quickstart
 
-### Installation
+### Install
 
 ```sh
-# Via npm (recommended for JS/TS projects, no Rust toolchain needed)
+# npm wrapper (prebuilt binary; no Rust toolchain required)
 npm i -D @tech-byte-frontier/hardgate
 npx hardgate check
 
-# pnpm / Yarn / Bun (same pattern: devDependency + exec)
-pnpm add -D @tech-byte-frontier/hardgate
-pnpm exec hardgate check
-
-# Via shell (Linux/macOS), no npm needed
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
-
-# Via Cargo
+# Cargo
 cargo install hardgate
 
-# Or clone and build from source
+# Source checkout
 git clone https://github.com/Tech-Byte-Frontier/hardgate.git
 cd hardgate
 cargo install --path . --locked
 ```
 
-### Initialize in Any Repository
+The npm wrapper publishes six Unix optional packages and selects one by OS, architecture, and (on Linux) libc:
+
+| Target | Package |
+| --- | --- |
+| Linux x64, glibc | `hardgate-linux-x64` |
+| Linux x64, musl | `hardgate-linux-x64-musl` |
+| Linux arm64, glibc | `hardgate-linux-arm64` |
+| Linux arm64, musl | `hardgate-linux-arm64-musl` |
+| macOS x64 | `hardgate-darwin-x64` |
+| macOS arm64 | `hardgate-darwin-arm64` |
+
+The shell installer currently downloads a release tarball. The stabilization target is to make it use this same six-package matrix, verify the release `SHA256SUMS` before extraction, and accept `HARDGATE_VERSION` (`latest` or a release tag) plus `HARDGATE_INSTALL_DIR`. The release script still needs that checksum/platform alignment before this target can be described as shipped.
+
+### Initialize policy
 
 ```sh
-# Autonomous AI Agent pair-programming preset (default):
 hardgate init --preset strict-agent
-
-# Balanced preset for human-AI hybrid teams:
 hardgate init --preset balanced
-
-# Migration preset for existing codebases burning down tech debt:
 hardgate init --preset legacy-migration
 ```
 
-### Common Commands
+`strict-agent` uses the tightest structural budgets. `balanced` scales those budgets. `legacy-migration` currently uses scaled budgets and non-strict evidence handling; it does **not** compare against a merge-base baseline or ratchet debt in this revision. A merge-base baseline/ratchet is a stabilization target, not an enabled feature.
+
+### Common commands
 
 ```sh
-# Standard check across all source files (<200ms)
+# Static engines over discovered files. Enabled report policies are evaluated too.
 hardgate check
 
-# Check only git-modified or staged files (sub-10ms, perfect for pre-commit)
+# Static engines over git-modified/staged files. Clone matching uses a full
+# repository index and reports only matches touching changed files.
 hardgate check --diff
 
-# Full verification: static gates + dead code + orchestration (format + lint)
-hardgate check --all --dead-code
+# Add configured formatter/linter/test commands to the static run.
+hardgate check --all
 
-# Scoped 1ms AST metric inspection on a single file
-hardgate scan src/services/auth.ts
+# Explicitly request dead-code analysis (or enable it in hardgate.toml).
+hardgate check --dead-code
 
-# Format code directly using configured orchestration tools
-hardgate fmt
+# Evaluate static engines plus enabled LCOV and mutation-report evidence.
+hardgate verify
 
-# Run native Tree-sitter AST mutation testing
-hardgate mutate --diff
+# Execute native AST mutation testing; this does not invoke Stryker.
+hardgate mutate --scoped src/lib.rs --test-cmd 'cargo test'
+
+# Inspect one file, format through [orchestration], or emit agent-friendly data.
+hardgate scan src/lib.rs
+hardgate fmt --check
+hardgate check --format agent
+hardgate check --format json
 ```
 
----
+`check` and `verify` do not run a test suite or native mutation pass by themselves. `check --all` runs only commands configured under `[orchestration]`; it does not invent a test command. `verify` ingests report files when the corresponding policy is enabled. `mutate` is the command that executes baselines and mutants. A strict run cannot pass while required configured evidence is missing or unreadable.
 
-## AI Agent Integration (MCP & Claude Code)
+## Agent integration
 
-### Model Context Protocol (MCP) Setup
-Register Hardgate as a native tool server in your assistant's settings (Claude Desktop, Cursor, Windsurf, Cline):
+Use `--format agent` for compact, actionable Markdown diagnostics. JSON, compact, and summary modes are available on `check`, `scan`, and `verify`; `mutate` supports terminal, agent, and JSON output.
+
+`hardgate mcp` is an MCP server over standard input/output. Register the command with an MCP client:
 
 ```json
 {
@@ -173,45 +123,24 @@ Register Hardgate as a native tool server in your assistant's settings (Claude D
 }
 ```
 
-This exposes three deterministic tools:
-1. `hardgate_check(paths?: string[])`: Runs quality gates on specified files or the entire repository.
-2. `hardgate_scan_file(path: string)`: Inspects complexity and suppressions for a specific file in 1ms.
-3. `hardgate_get_metrics(symbol: string, path: string)`: Returns cyclomatic, cognitive, and line metrics for any function.
+The server exposes these static-analysis tools:
 
-### Claude Code / Cursor Rule Integration
+- `hardgate_check` — check the repository or supplied paths;
+- `hardgate_scan_file` — inspect one file;
+- `hardgate_get_metrics` — return metrics for a named function.
 
-Add to your `CLAUDE.md` or `.cursorrules`:
-```markdown
-Before reporting completion, always verify your edits:
-`hardgate check --diff --format agent`
+The MCP surface does not run orchestration, coverage, mutation, or dead-code commands.
 
-If Hardgate reports violations, refactor immediately. Never insert suppression pragmas.
-```
+## Configuration
 
-When called with `--format agent`, Hardgate delivers structured, pinpoint AST breakdowns directly into the LLM context window:
-
-```markdown
-❌ **Hardgate Failed**: 1 violations detected across 1 files.
-
-### ⚡ Complexity in `packages/backend/src/lib/match-service.ts:36`
-- Function: `matchCategory`
-- Metric: Cyclomatic Complexity is 11 (Budget limit: 10)
-- Key AST Contributors:
-  - Line 40: +1 for conditional branch (`if`)
-  - Line 43: +1 for conditional branch (`if`)
-  - Line 46: +1 for loop (`for`)
-- Actionable Refactor: Refactor `matchCategory`: extract decision branches into helper functions.
-```
-
----
-
-## Configuration (`hardgate.toml`)
+`hardgate.toml` is optional. Without a file, Hardgate loads the strict-agent defaults. `hardgate init` writes an explicit template with coverage, mutation, orchestration, and dead-code commands disabled until a project supplies those inputs.
 
 ```toml
 [gate]
-name = "my-service"
+name = "project"
 preset = "strict-agent"
 strict = true
+enforce_classified_sources = false
 
 [budgets.files]
 max_bytes = 32768
@@ -221,14 +150,7 @@ rs = 499
 ts = 400
 tsx = 400
 js = 400
-py = 400
 default = 350
-
-# Excluded paths trigger advisory warnings to keep technical debt visible
-[budgets.files.exclusions]
-paths = [
-  "src/generated/**"
-]
 
 [budgets.functions]
 max_cyclomatic = 10
@@ -245,47 +167,37 @@ disallow_suppressions = true
 enabled = true
 min_lines = 5
 min_tokens = 50
-excludes = [
-  "**/tests/**"
-]
+
+[coverage]
+enabled = false
+report = "coverage/lcov.info"
+min_line_percent = 95.0
+max_crap_score = 25.0
 
 [mutation]
-enabled = true
+enabled = false
 min_score = 85.0
 timeout_secs = 10
 max_mutants = 30
-
-[orchestration]
-format_check = "oxfmt --check ."
-format = "oxfmt ."
-lint = "oxlint --type-aware ."
-
-[analysis.dead_code]
-enabled = true
-entry_points = [
-  "src/main.rs",
-  "src/lib.rs",
-  "src/index.ts"
-]
 ```
 
----
+See the [configuration specification](docs/CONFIGURATION_SPEC.md) for every field and the [CLI reference](docs/CLI_AND_INTEGRATION.md) for command semantics.
+
+## Design notes
+
+Hardgate's value is a deterministic local policy: structural budgets that are hard to game, explicit anti-suppression checks, architecture rules close to the code, bounded clone detection, and evidence that is either present and evaluated or explicitly disabled. It is complementary to language linters, coverage providers, mutation runners, and hosted quality dashboards; it is not a replacement for those tools' language-specific semantics.
+
+Planned stabilization work is intentionally not represented as current behavior: merge-base baseline/ratchet evaluation, diff coverage and new-clone fingerprints, broader consumer fixtures, and release-script checksum/publication checks require their respective implementations to land first.
 
 ## Documentation
 
-* [Vision & Paradigm: Harness Engineering](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/VISION_AND_PARADIGM.md)
-* [Configuration Specification (`hardgate.toml`)](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CONFIGURATION_SPEC.md)
-* [CLI Reference & Agent Integration](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md)
-* [Existing Landscape & Comparative Analysis](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/EXISTING_LANDSCAPE.md)
-* [System Architecture](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/ARCHITECTURE.md)
-* [API Reference on docs.rs](https://docs.rs/hardgate)
-
----
+- [Vision & Paradigm](docs/VISION_AND_PARADIGM.md)
+- [Configuration Specification](docs/CONFIGURATION_SPEC.md)
+- [CLI Reference & Agent Integration](docs/CLI_AND_INTEGRATION.md)
+- [Existing Landscape](docs/EXISTING_LANDSCAPE.md)
+- [System Architecture](docs/ARCHITECTURE.md)
+- [API reference](https://docs.rs/hardgate)
 
 ## License
 
-Dual-licensed under either:
-* Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/LICENSE-APACHE))
-* MIT License ([LICENSE-MIT](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/LICENSE-MIT))
-
-at your option.
+Dual-licensed under either [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

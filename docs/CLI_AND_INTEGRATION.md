@@ -1,220 +1,158 @@
-# CLI Reference & Agent Integration
+# CLI reference and agent integration
 
-## 1. CLI Commands
+All commands run from the current repository. The CLI loads `hardgate.toml`, or strict-agent defaults when the file is absent. A report exits non-zero when it contains a violation; advisories are visible context and do not by themselves change the verdict.
+
+## Command semantics
 
 ### `hardgate init`
-Initializes a new `hardgate.toml` in the current repository.
+
+Write a commented `hardgate.toml` template.
 
 ```sh
 hardgate init
 hardgate init --preset strict-agent
+hardgate init --preset balanced
+hardgate init --preset legacy-migration
 ```
+
+The generated template explicitly disables coverage, mutation, orchestration, and dead-code execution. Enable each only after supplying its evidence or command.
 
 ### `hardgate check`
-Runs the fast, deterministic static gate. Executes in $< 100\text{ms}$ over thousands of files:
-* Physical file and byte budgets
-* Tree-sitter AST complexity checks (cyclomatic, cognitive, Halstead, ABC)
-* Anti-gaming zero-suppression scan
-* Architectural invariant boundary checks
-* Token-stream clone detection
-* Technical debt advisory notices (surfaces files excluded from clone detection or file budgets)
+
+Run static engines over discovered inventory files:
+
+- file bytes/physical lines and Tree-sitter function budgets;
+- suppression and custom-token checks;
+- declarative import/call/token invariants;
+- bounded token-stream clone detection;
+- optional dead-code analysis when enabled in policy;
+- optional LCOV and mutation-report evaluation when those policies are enabled.
 
 ```sh
-# Standard human terminal output
 hardgate check
-
-# Check only staged or modified git files (~8ms)
 hardgate check --diff
-
-# Run full orchestration (format check + linter) alongside static gates
 hardgate check --all
-
-# Run dead code and unused export analysis
 hardgate check --dead-code
-
-# Verify test coverage and CRAP scores directly
 hardgate check --coverage-report coverage/lcov.info
-
-# Output formatted specifically for an LLM agent context window
 hardgate check --format agent
-
-# Machine-readable JSON (same flags as --format json; pipe into jq)
-hardgate check --json
-hardgate check --format json | jq '.summary'
-
-# Compact one-line-per-violation output (no snippets or breakdowns)
+hardgate check --format json
 hardgate check --compact
-hardgate check --no-snippets   # alias for --compact
-
-# Summary only: totals per category plus top offending files
 hardgate check --summary
-hardgate check --json --summary  # lean JSON: summary + top files, no payloads
-
-# Scoped checking: only files under the given path(s)
-hardgate check packages/backend
-hardgate check src/routes/revenue.ts src/routes/expenses.ts
+hardgate check src/routes/revenue.ts
 ```
 
-Output modes compose: `--json`, `--compact`/`--no-snippets`, and `--summary`
-are accepted by `check`, `scan`, and `verify` (plus `--json` on `mutate`).
-`--format` also accepts `compact` and `summary` (`terminal` is the default).
-Path filters may be files or directories; missing paths fail loudly instead
-of silently passing the gate. `scan` accepts the same output flags:
+`--diff` gets changed/staged inventory files from Git. Clone detection still builds a full repository index and retains only matches touching changed files. A missing Git repository or Git command is an evidence failure.
 
-```sh
-hardgate scan --compact src/services/auth.ts
-hardgate scan --json --summary src/services/auth.ts
-```
-
-### `hardgate fmt`
-Formats code using the project's configured formatter in `[orchestration]` (e.g. `oxfmt`, `cargo fmt`, `biome`). Automatically resolves binaries in local `./node_modules/.bin` and global `PATH`.
-
-```sh
-# Format all code
-hardgate fmt
-
-# Check formatting without writing changes to disk
-hardgate fmt --check
-```
-
-### `hardgate mutate`
-Runs native Tree-Sitter AST mutation testing directly against your test suite. Mutates binary operators and boolean literals with targeted execution, per-mutant timeouts, and automatic RAII rollbacks.
-
-```sh
-# Mutate only git-modified files
-hardgate mutate --diff
-
-# Scoped mutation on a specific file or directory
-hardgate mutate --scoped src/services/auth.ts --timeout 5 --max-mutants 20
-
-# Output structured diagnostics for AI agent context
-hardgate mutate --diff --format agent
-```
+`--all` adds the configured `[orchestration]` format-check, lint, and test commands. It does not discover or invent commands, and it does not execute native mutation testing. `--dead-code` requests that analysis even when the config switch is false. A CLI coverage path is considered only when `[coverage].enabled = true`; similarly, mutation report paths are considered only when `[mutation].enabled = true`.
 
 ### `hardgate verify`
-Runs the complete everyday quality gate, incorporating test coverage ingestion, per-function CRAP calculation, and mutation score evaluation.
+
+Run the static gate over the full discovered tree, then evaluate enabled LCOV and mutation reports.
 
 ```sh
 hardgate verify
-hardgate verify --coverage-report coverage/lcov.info --mutation-report mutants.json
-
-# Same output modes and path scoping as `check`
-hardgate verify --summary packages/backend
-hardgate verify --json --summary | jq '.summary'
+hardgate verify --coverage-report coverage/lcov.info \
+  --mutation-report reports/stryker-mutation.json
+hardgate verify --format agent
+hardgate verify --format json --summary
+hardgate verify packages/backend
 ```
 
+`verify` ingests reports; it does not run a test suite, invoke Stryker, or run the native AST mutator. Enabled coverage accepts LCOV. Enabled mutation accepts Stryker-shaped, cargo-mutants-shaped, or generic outcome-count JSON. In strict mode, missing/unreadable/malformed required reports are blocking findings. Disabled evidence engines ignore stale report files.
+
+### `hardgate mutate`
+
+Run the built-in AST mutation loop against classified production sources.
+
+```sh
+hardgate mutate --diff
+hardgate mutate --scoped src/services/auth.ts --timeout 5 --max-mutants 20
+hardgate mutate --scoped src/services/auth.ts \
+  --test-cmd 'pnpm test {file}' --format agent
+hardgate mutate --json
+```
+
+The runner:
+
+1. discovers source-role files with a supported AST mutator;
+2. resolves one test command per target (or uses `--test-cmd`);
+3. runs each unmutated baseline before generating mutants;
+4. mutates binary operators and boolean literals, one mutant at a time;
+5. classifies killed, survived, timeout, compile-error, runner-error, equivalent, and unviable outcomes;
+6. restores and verifies original bytes after every mutant.
+
+A failed baseline stops the run. A selection with no viable mutation points fails; zero viable mutants never scores as a pass. `mutate` is independent of report ingestion and does not invoke Stryker.
+
 ### `hardgate scan <file>`
-Immediately evaluates a single file and outputs its AST metrics, violations, and suppressions. Perfect for sub-second agent pre-flight checks.
+
+Analyze one file with the same role-aware safety and AST metrics used by the static gate.
 
 ```sh
 hardgate scan src/services/auth.ts
+hardgate scan --format json --summary src/services/auth.ts
 ```
 
+Unsupported inventory formats can still be inspected for file/safety policy, but they do not produce function metrics. Missing files fail loudly.
+
+### `hardgate fmt`
+
+Run the configured formatter command.
+
+```sh
+hardgate fmt
+hardgate fmt --check
+```
+
+`fmt --check` uses `[orchestration].format_check`; `fmt` uses `format`, falling back to `format_check` when no format command is present. Hardgate prepends a repository-local `node_modules/.bin` to `PATH` and otherwise uses the process environment.
+
 ### `hardgate mcp`
-Launches Hardgate as a Model Context Protocol (MCP) server over standard input/output (`stdio`) or HTTP. Exposes tools directly to AI coding assistants.
+
+Launch the embedded Model Context Protocol server over standard input/output:
 
 ```sh
 hardgate mcp
 ```
 
----
+The server speaks newline-delimited or `Content-Length`-framed JSON-RPC. It exposes static-analysis tools only:
 
-## 2. Integrating with AI Coding Agents
+| Tool | Arguments | Behavior |
+| --- | --- | --- |
+| `hardgate_check` | optional `paths: string[]` | role-aware static report and clone checks |
+| `hardgate_scan_file` | required `path: string` | one-file safety and AST report |
+| `hardgate_get_metrics` | required `path`, `symbol` | metrics for one named function |
 
-### Claude Code (`CLAUDE.md` & Hooks)
-To enforce Hardgate in Claude Code, add the check command to your project instructions:
+The MCP process does not run orchestration, coverage, mutation, or dead-code commands.
 
-```markdown
-<!-- In CLAUDE.md -->
-## Mandatory Pre-Flight Verification
-After modifying code and before reporting completion, always run:
-`hardgate check --format agent`
+## Output modes
 
-If Hardgate reports any violations (complexity, suppressions, or budget limits), 
-you must refactor the implementation immediately. Never add suppression directives.
-```
+`check`, `scan`, and `verify` accept `--format terminal|agent|json|compact|summary`, plus `--json`, `--compact`/`--no-snippets`, and `--summary`. `mutate` accepts terminal, agent, or JSON output. JSON is the machine-readable report; agent output is structured Markdown with actionable locations.
 
-Configure a Claude Code hook in `.claude/settings.json` or `.hooks`:
-```json
-{
-  "postToolExecution": {
-    "command": "hardgate check --diff --format agent"
-  }
-}
-```
+## Agent integration
 
-### Model Context Protocol (MCP) Setup
-To register Hardgate as a native tool for Cline, Cursor, Windsurf, or Claude Desktop, add it to your MCP settings file:
+Register the stdio process with an MCP-capable client:
 
 ```json
 {
   "mcpServers": {
     "hardgate": {
       "command": "hardgate",
-      "args": ["mcp"],
-      "env": {}
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-This exposes three tools to the agent:
-1. `hardgate_check(paths?: string[])`: Runs the gate on specified files or the whole project.
-2. `hardgate_scan_file(path: string)`: Inspects complexity and suppressions for a single file.
-3. `hardgate_get_metrics(symbol: string, path: string)`: Returns cyclomatic, cognitive, and line metrics for a specific function.
+For a hook or an agent instruction, use a command that matches the evidence you intend to collect:
 
-### Cursor (`.cursorrules`)
-Add the following to `.cursorrules`:
 ```text
-All code must pass Hardgate (`hardgate check`).
-Strict invariants:
-- Functions must have cyclomatic complexity <= 10 and cognitive complexity <= 15.
-- Zero suppression comments allowed (no @ts-ignore, no eslint-disable, no #[allow(...)]).
-- Files must not exceed 400 lines.
-Always run `hardgate check --format agent` to verify edits.
+After editing, run:
+hardgate check --diff --format agent
+
+For a repository-wide static report plus configured format/lint/test commands:
+hardgate check --all --format agent
+
+For report evidence already generated by the project:
+hardgate verify --format agent
 ```
 
----
-
-## 3. Git Hooks & CI/CD Integration
-
-### Lefthook (`lefthook.yml`)
-```yaml
-pre-commit:
-  parallel: true
-  commands:
-    hardgate:
-      run: hardgate check --diff
-```
-
-### GitHub Actions Workflow (`.github/workflows/quality.yml`)
-```yaml
-name: Quality Gate
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  hardgate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Hardgate
-        run: cargo install hardgate --locked
-
-      - name: Run Deterministic Quality Gate
-        run: hardgate check
-
-      # Optional full verification with test and coverage
-      - name: Run Tests & Coverage
-        run: pnpm test:coverage
-
-      - name: Run Full Hardgate Verification
-        run: hardgate verify --coverage-report coverage/lcov.info
-```
+A partial command must be described as partial. In particular, `check` does not imply that tests, coverage, mutation, formatting, or dead-code evidence ran unless their policy/command was explicitly enabled.

@@ -1,129 +1,85 @@
-# System Architecture: Hardgate
+# System architecture
 
-## 1. High-Level Overview
-
-Hardgate is built as a modular, highly concurrent Rust application designed for near-instantaneous execution in local development, pre-commit hooks, CI/CD runners, and AI agent feedback loops.
+Hardgate is a local Rust CLI composed of discovery, policy engines, evidence evaluators, command orchestration, and report renderers. The design keeps each source of truth close to the engine that owns it: classification chooses inputs, policy controls whether an engine is enabled, and the report records every blocking finding and advisory.
 
 ```text
-                                  ┌───────────────────────────┐
-                                  │      CLI / MCP Server     │
-                                  └─────────────┬─────────────┘
-                                                │
-                                  ┌─────────────▼─────────────┐
-                                  │   Orchestrator & Runner   │
-                                  │      (Rayon Threadpool)   │
-                                  └─────────────┬─────────────┘
-                                                │
-    ┌───────────────────┬───────────────────────┼───────────────────────┬───────────────────┐
-    ▼                   ▼                       ▼                       ▼                   ▼
-┌───────────────┐ ┌───────────────┐   ┌───────────────────┐   ┌───────────────────┐   ┌───────────────┐
-│  AST Budget   │ │  Anti-Gaming  │   │   Architectural   │   │    Clone Stream   │   │  Coverage &   │
-│   Engine      │ │    Scanner    │   │     Invariants    │   │      Detector     │   │   Mutation    │
-└───────┬───────┘ └───────┬───────┘   └─────────┬─────────┘   └─────────┬─────────┘   └───────┬───────┘
-        │                 │                     │                       │                     │
-        └─────────────────┼─────────────────────┴───────────────────────┴─────────────────────┘
-                          │
-                          ▼
-            ┌───────────────────────────┐
-            │   Diagnostic Aggregator   │
-            └─────────────┬─────────────┘
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-      [Terminal UI]           [Agent Protocol]
-      - ANSI Color diffs      - Token-efficient JSON
-      - Status tables         - Actionable LLM prompts
-      - Exit code (0 or 1)    - MCP Tool Responses
+CLI / MCP (stdio)
+       |
+       v
+configuration + discovery + role classification
+       |
+       +--> file/anti-gaming safety
+       +--> Tree-sitter complexity (supported parser targets)
+       +--> declarative invariant checks
+       +--> bounded token-stream clone detector
+       +--> optional dead-code analysis
+       +--> optional LCOV / mutation-report evidence
+       +--> optional formatter/linter/test orchestration
+       |
+       v
+aggregated report -> terminal / agent Markdown / JSON / compact / summary
 ```
 
----
+## Discovery and roles
 
-## 2. The 7 Core Engines
+The walker inventories configured extensions while pruning dependency and build-output directories. Each file becomes a `ClassifiedFile` with a role and an AST-support flag:
 
-### Engine 1: Tree-sitter AST & Complexity Engine
-Instead of spawning external language compilers, Hardgate embeds `tree-sitter` and official grammars (Rust, TypeScript, JavaScript, Python, Go, C++, etc.) directly into the binary.
+- `source`: ordinary safety, invariants, complexity when parsed, and native mutation targets;
+- `test`: safety, invariants, complexity, and clone analysis, but never a native mutation target;
+- `fixture`: safety and clone analysis;
+- `generated`: inventory and advisory only;
+- `migration`, `config`, `documentation`, `vendor`, or `unknown`: role-specific handling described in the configuration specification.
 
-* **File-level metrics:**
-  - Physical lines of code (excluding blank lines and comments if configured).
-  - Raw byte size (enforcing limits like $\le 32$ KiB per file).
-* **Function-level metrics:**
-  - **Cyclomatic Complexity:** Counts branching control-flow nodes (`if`, `match`/`switch`, `for`, `while`, `&&`, `||`, ternary `? :`).
-  - **Cognitive Complexity:** Measures mental nesting and flow-break penalties (based on G. Ann Campbell's Sonar specification).
-  - **Halstead Metrics:** Computes vocabulary, length, volume, and Halstead difficulty $D = \frac{\eta_1}{2} \times \frac{N_2}{\eta_2}$.
-  - **ABC Metric:** Aggregate of Assignments, Branches, and Conditions.
-  - **Signature constraints:** Enforces maximum parameter counts ($\le 4$) and function statement counts.
+Parser targets are Rust (`.rs`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`), Python (`.py`), and Go (`.go`). Inventory-only formats remain visible for classification and policy but do not receive function metrics.
 
-### Engine 2: Anti-Gaming & Suppression Scanner
-The anti-gaming engine runs across two layers:
-1. **Comment Token Scanning:** Scans all comment nodes identified by Tree-sitter for known suppression directives:
-   - **TypeScript / JavaScript:** `// @ts-ignore`, `// @ts-nocheck`, `/* eslint-disable */`, `oxlint-disable`, `prettier-ignore`.
-   - **Rust:** `#[allow(...)]`, `#[expect(...)]`, `#![allow(...)]`, `mutants::skip`.
-   - **Python:** `# type: ignore`, `# noqa`, `# pragma: no cover`.
-   - **Coverage suppressions:** `c8 ignore`, `istanbul ignore`, `coverage(off)`.
-2. **Policy Enforcement:** By default, *any* suppression directive triggers an immediate failure. If exemptions are permitted, they must reference a signed human override file rather than an inline agent edit.
+A configured file-budget exclusion is owned by the file-budget engine. The file is still available to classification, anti-gaming, invariants, parsing, and clone checks, and the report emits an advisory for the exclusion.
 
-### Engine 3: Architectural Invariant Linter
-This engine statically inspects imports, exports, and call hierarchies to prevent architectural boundary degradation:
-* Constructs an in-memory directed dependency graph of file imports using AST import declaration queries.
-* Evaluates rules specified in `hardgate.toml`:
-  ```toml
-  [[invariants.rules]]
-  from = "src/components/**"
-  disallow_imports = ["@tauri-apps/api*", "src/server/**", "src/db/**"]
-  message = "UI components must route calls through domain services."
-  ```
-* Flags unauthorized calls (e.g., direct `fetch` invocations in components).
+## Static engines
 
-### Engine 4: High-Performance Clone Detector
-Rather than relying on heavy external utilities, Hardgate implements a streaming **Rabin-Karp / Winnowing token hashing algorithm**:
-* AST tokenization normalizes identifiers and literal values while preserving structural syntax tokens.
-* A rolling hash over a sliding token window (e.g., 50 tokens) flags identical or near-identical subtrees across files.
-* Produces zero-duplicate guarantees across production and test code.
+### Structural budgets and complexity
 
-### Engine 5: Coverage & CRAP Scorer
-* Parses standard coverage artifacts:
-  - `lcov.info` (LCOV format)
-  - `cobertura.xml`
-  - JSON summaries (e.g., from `cargo-llvm-cov` or Vitest)
-* Computes the **CRAP (Change Risk Anti-Patterns)** metric per function:
-  $$\text{CRAP}(m) = \text{comp}(m)^2 \cdot (1 - \text{cov}(m))^3 + \text{comp}(m)$$
-  Where $\text{comp}(m)$ is cyclomatic complexity and $\text{cov}(m) \in [0, 1]$ is executable line coverage.
-* Functions with high complexity and low coverage fail the gate if $\text{CRAP} \ge 25$.
+The Tree-sitter analyzer parses each supported source/test file and records function name, source span, parameters, statements, nesting, cyclomatic/cognitive contributors, Halstead difficulty, and ABC score. Configured ceilings produce actionable complexity findings. Parsing errors are evidence failures in strict mode rather than an empty-function success.
 
-### Engine 6: Mutation Gatekeeper
-* Interfaces with mutation runners:
-  - Rust: `cargo-mutants`
-  - JavaScript / TypeScript: Stryker Mutator
-  - Python: `mutmut`
-* Validates baseline integrity: rejects runs with timeouts, missing test files, or unviable mutants.
-* Enforces hard kill-rate thresholds (e.g., minimum 85% mutant detection).
+File budgets separately enforce raw byte and physical-line ceilings. They apply only to the extension keys configured under `[budgets.files.max_lines]` (or `default`).
 
-### Engine 7: Agent Diagnostic Protocol & Native MCP Server
-Hardgate natively supports two operational modes for AI agents:
-1. **Token-Efficient CLI Output (`--format agent`):**
-   Outputs compact, structured markdown optimized for LLM attention spans:
-   ```markdown
-   ❌ Hardgate Violation in `src/payment.ts:42`
-   - Function: `processTransaction`
-   - Violation: Cognitive complexity is 18 (budget: 15)
-   - Recommendation: Extract branch at line 58 into helper `validateCardToken`.
-   ```
-2. **Model Context Protocol (MCP) Server:**
-   Runs as an MCP server (`hardgate mcp`), registering tools with the agent:
-   - `hardgate_verify`: Runs the gate on the current branch.
-   - `hardgate_check_file`: Runs AST metrics and anti-gaming checks on a single file before the agent writes changes.
-   - `hardgate_metrics`: Retrieves cyclomatic and cognitive metrics for any function symbol.
+### Anti-gaming
 
----
+The suppression scanner reads safety-checked files line by line. It recognizes known comment/attribute directives and configured literal tokens, while avoiding common occurrences inside strings. When `disallow_suppressions` is enabled, each recognized directive is a violation. The current policy has no per-file approval path.
 
-## 3. Execution Pipeline & Concurrency
+### Architectural invariants
 
-Hardgate uses [Rayon](https://github.com/rayon-rs/rayon) for parallel work distribution:
+Invariant rules are compiled from `from`/ `exclude` globs and optional import, call, and token patterns. The checker strips line comments and scans source lines, preserving string content where needed to avoid false positives. It does not resolve modules or type-check the project.
 
-1. **Discovery Phase:** Scans git-tracked files using `ignore` / `git ls-files` ($< 5\text{ms}$).
-2. **Parallel Parsing & Analysis Phase:**
-   Files are partitioned across CPU cores. Each thread runs Tree-sitter parsers, computes complexity metrics, scans for suppressions, and extracts import tokens in parallel ($< 30\text{ms}$ for 1,000 files).
-3. **Graph & Clone Phase:**
-   Import graph validation and token window hash lookups are computed in a single unified sweep.
-4. **Report & Verdict Phase:**
-   Results are merged into an immutable verdict object. If any hard budget or anti-gaming rule is violated, Hardgate exits with non-zero status and prints the diagnostic report.
+### Clone detection
+
+The clone engine lexes non-comment source lines into identifiers, punctuation, normalized numbers, and normalized strings. It indexes fixed-size token windows with a rolling hash, verifies token sequences after hash matches, coalesces adjacent windows, and caps repeated-hash work. It analyzes source, test, and fixture roles unless the clone policy excludes a path.
+
+## Evidence engines
+
+### LCOV and CRAP
+
+When `[coverage].enabled` is true, the coverage scorer parses LCOV records and computes global line/function/branch percentages, per-function CRAP, and optional critical-path line coverage. A missing report, malformed record, or missing source record is evidence failure under strict policy. No coverage provider is executed by Hardgate.
+
+### Mutation reports
+
+When `[mutation].enabled` is true, `check` and `verify` parse configured JSON reports in Stryker, cargo-mutants, or generic outcome-count shapes. Scores use killed divided by killed plus survived. Missing reports and parser errors are recorded as evidence failures; timeout handling follows `reject_timeouts`, while compile, runner, and unviable outcomes remain integrity findings.
+
+### Native mutation run
+
+The `mutate` command uses the AST mutation generator over source-role files. It resolves a per-file test command, runs unmutated baselines first, applies one binary/boolean mutation at a time, executes the command with a timeout, and restores the original bytes through a verification guard. A baseline failure, restoration failure, or zero viable mutants fails the command. This runner is separate from Stryker and from mutation-report ingestion.
+
+## Orchestration and reports
+
+`check --all` invokes configured formatter, linter, and test commands sequentially through the orchestration engine. `fmt` invokes the configured formatter (or its check command in check-only mode). A repository-local `node_modules/.bin` is prepended to child-process `PATH); command output and non-zero exits become orchestration findings.
+
+The diagnostic aggregator freezes scan counts, duration, advisories, and violations. It renders terminal output for people, structured Markdown for agents, JSON for automation, or compact/summary views. A report passes only when its violation collections are empty.
+
+## MCP transport
+
+The embedded MCP server reads newline-delimited or `Content-Length`-framed JSON-RPC from standard input and writes responses to standard output. It exposes `hardgate_check`, `hardgate_scan_file`, and `hardgate_get_metrics` for static analysis. It does not run orchestration, coverage, mutation, or dead-code analysis.
+
+## Concurrency and evidence boundaries
+
+File reads and per-file static analysis use Rayon where safe; each engine owns its input policy and exclusions. Discovery errors, Git errors in diff mode, unreadable files, parser errors, and required-report failures are never converted into an empty success under strict policy. Disabled evidence engines do not inspect their configured stale files.
+
+**Planned stabilization (not implemented here):** merge-base baseline/ratchet evaluation, changed-hunk coverage attribution, diff-coverage/new-clone fingerprints, and release artifact verification require separate implementation and regression proofs before they can be documented as active architecture.

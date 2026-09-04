@@ -1,84 +1,49 @@
-# Existing Landscape & Comparative Analysis
+# Existing landscape and comparative analysis
 
-To understand why a dedicated tool like **Hardgate** is needed, we must survey the current software quality, code analysis, and agent verification landscape.
+Hardgate sits at the boundary between source-level tools and a repository's acceptance policy. It can orchestrate a formatter, linter, or test command, but its own contract is narrower: deterministic structural budgets, anti-gaming checks, declarative boundaries, bounded token clones, and explicit local evidence.
 
----
+## Tool positioning
 
-## 1. Survey of Existing Solutions
+| Tool | Primary role | Relationship to Hardgate |
+| --- | --- | --- |
+| PMAT | Rust-based agent context and technical-debt workflows, including quality scoring and MCP integration | Complementary context and grading; Hardgate supplies hard budgets, role ownership, and strict evidence semantics |
+| Qlty | CLI/cloud quality workflow with maintainability metrics, coverage, duplication, and CI reporting | Complementary aggregation and trends; Hardgate remains the local policy/verdict layer |
+| jscpd | Copy/paste detection using token windows and configurable duplication thresholds | A dedicated, broad-format detector; Hardgate includes a bounded token detector whose exclusions belong only to clone analysis |
+| Stryker | Mutation testing for JavaScript/TypeScript and related ecosystems; executes a test runner and emits mutation reports | The mature external mutation path; Hardgate can evaluate a Stryker JSON report but does not invoke Stryker |
+| SonarQube / SonarCloud | Broad static analysis, code smells, security, coverage, duplication, and hosted quality gates | Strong centralized analysis and history; Hardgate is a local, repository-owned policy with no server dependency |
+| ESLint | Extensible JavaScript/TypeScript lint rules and plugins | Language-specific linting remains ESLint's job; Hardgate can run it through the orchestration lint command |
+| Biome | Integrated JavaScript/TypeScript formatter and linter | Hardgate can orchestrate Biome commands; it does not embed Biome's rules |
+| Oxlint | Fast JavaScript/TypeScript linting | Hardgate can orchestrate Oxlint; Oxlint remains the owner of language lint diagnostics |
+| Trunk / Lefthook / pre-commit | Hooks and command orchestration | Useful scheduling layers; Hardgate provides the policy and report that a hook invokes |
 
-### A. PMAT (Pragmatic Multi-language Agent Toolkit)
-* **Crate:** `pmat` (`cargo install pmat`)
-* **Focus:** AI-agent development context & technical debt grading
-* **Overview:** Developed by PAIML, PMAT is a Rust-based tool and Model Context Protocol (MCP) server that grades codebases using a "Technical Debt Gradient" (A+ to F scale). It features an autonomous pre-flight command (`pmat verify`) and quality gate enforcement (`pmat quality-gate --strict`).
-* **Strengths:** Native MCP integration, multi-language support (20+ languages), includes mutation testing concepts and git history RAG.
-* **Limitations:** Primarily geared toward high-level technical debt grading and LLM context generation rather than strict physical line/byte budgets, granular zero-suppression regex/AST scanning, or declarative architectural boundary enforcement.
+No row implies feature parity. Each tool should remain responsible for the semantics it understands best.
 
-### B. BCA (big-code-analysis-cli)
-* **Crate:** `big-code-analysis-cli` (`cargo install big-code-analysis-cli`)
-* **Focus:** High-speed multi-language code metrics via Tree-sitter
-* **Overview:** A Rust fork of Mozilla's `rust-code-analysis`. Computes Cyclomatic Complexity, Cognitive Complexity, Halstead metrics, Maintainability Index, ABC, and LOC across 20+ languages without invoking compilers or runtimes. Features `bca check --strict --no-suppress`.
-* **Strengths:** Extremely fast, language runtime independent, Tree-sitter powered, explicitly designed for agent feedback.
-* **Limitations:** Purely a metric calculator. It does not run test suites, does not ingest or compute CRAP scores from coverage files, does not detect clone blocks across files, and does not enforce custom import/architectural invariants.
+## Comparison by concern
 
-### C. Trunk Check (`trunk.io`)
-* **Platform:** Proprietary / open-core CLI (Go/Rust binary wrapper)
-* **Focus:** Multi-linter orchestration with hermetic runtimes
-* **Overview:** Trunk manages and executes 100+ linters (Clippy, ESLint, Ruff, Prettier, etc.) locally and in CI using pinned hermetic binaries.
-* **Strengths:** Excellent developer experience for orchestrating external linters; git-aware caching.
-* **Limitations:** Trunk is an *orchestrator of external tools*, not a semantic quality gate. It cannot compute cross-language AST budgets, does not enforce zero-suppression policies across linters, and has no native concept of mutation scores or architectural boundaries.
+| Concern | Hardgate's current contract | Typical complementary tool |
+| --- | --- | --- |
+| Structural size and function budgets | Configurable bytes, physical lines, and Tree-sitter metrics for supported parser targets | BCA or language-specific analyzers for additional metrics |
+| Suppression policy | Known directives and project tokens can be blocking findings | ESLint, Oxlint, Biome, Clippy, or type checkers for the underlying diagnostics |
+| Architecture | Declarative path-scoped import/call/token rules evaluated line by line | Dependency-graph or compiler tooling for resolved relationships |
+| Duplication | Bounded rolling-hash token windows over source/test/fixture roles | jscpd or Qlty when broad formats, richer reports, or hosted history are needed |
+| Coverage and CRAP | Optional LCOV ingestion with global floors, CRAP, and critical paths | Vitest/Jest/cargo-llvm-cov or another provider that produces LCOV |
+| Mutation | Native AST loop for selected production files, plus Stryker/cargo-mutants/generic JSON report evaluation | Stryker or cargo-mutants for language-specific mutation operators and runners |
+| Commands and formatting | Optional configured formatter/linter/test commands; no implicit discovery | Biome, Oxlint, ESLint, Cargo, or a CI runner |
+| Agent transport | Stdio MCP tools and structured terminal/agent/JSON output | MCP clients, hooks, and hosted dashboards |
 
-### D. Lefthook / pre-commit
-* **Platform:** Go (`lefthook`) / Python (`pre-commit`)
-* **Focus:** Git hook task runners
-* **Overview:** Fast command runners that trigger linters or formatters before git commits or pushes.
-* **Strengths:** Extremely fast, concurrent execution.
-* **Limitations:** Generic runners with zero domain knowledge. They execute whatever shell commands are defined, meaning teams still have to write and maintain complex glue scripts.
+## Why a policy layer
 
-### E. SonarQube / SonarCloud
-* **Platform:** Java daemon / Cloud SaaS
-* **Focus:** Enterprise Static Analysis & Clean as You Code Quality Gates
-* **Overview:** The enterprise standard for quality gates, cognitive complexity, and duplication detection.
-* **Strengths:** Very mature metrics, established quality gate philosophy.
-* **Limitations:** Heavyweight, Java-dependent, slow execution times, centralized server architecture. Completely unusable for local, sub-second agent feedback loops where an agent needs immediate verification after every file edit.
+A project can use all of these tools and still have an ambiguous acceptance rule: tests may not have run, an excluded file may hide debt, or a report may be stale. Hardgate makes those states visible:
 
----
+- each discovered file has a role before an engine receives it;
+- each exclusion is owned by one engine and can produce an advisory;
+- enabled evidence must be present and parseable in strict mode;
+- disabled evidence is not read merely because an old report exists;
+- static checks and native mutation are separate commands with separate proof obligations;
+- a passing report means the configured violation collections are empty, not that every possible quality property was proven.
 
-## 2. The Current Reality: Bespoke Glue Scripts
+## Current boundaries
 
-Because no single tool bridges AST complexity, hard budgets, anti-gaming suppression rules, coverage/CRAP calculation, mutation floors, and architectural invariants, cutting-edge projects are forced to build **custom glue scripts**.
+Hardgate currently parses six Tree-sitter targets (Rust, JavaScript, TypeScript, TSX, Python, and Go), inventories additional text/data formats, reads LCOV for coverage, and speaks MCP over stdio. It does not claim a broader parser matrix, global module resolution, another MCP transport, or a merge-base baseline/ratchet.
 
-For example, Loreframe's verification system relies on:
-- `scripts/quality-gate.mjs` (272 lines of orchestration logic)
-- `scripts/quality-policy.mjs` (253 lines of file classification and suppression detection)
-- `scripts/quality-invariants.mjs` (architectural boundary checking)
-- Pinned external binaries: `oxlint`, `oxfmt`, `bca`, `cargo-llvm-cov`, `cargo-mutants`, `stryker`, `knip`, `jscpd`, `cargo-machete`.
-
-While this setup achieves incredible rigor, **it requires hundreds of lines of brittle Node.js glue code and dozens of package dependencies that cannot be easily shared across other repositories.**
-
----
-
-## 3. Feature Comparison Matrix
-
-| Capability | PMAT | BCA | Trunk Check | Lefthook | SonarQube | **Hardgate** |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Language Runtime** | Rust | Rust | Go/Rust | Go | Java | **Rust** |
-| **Zero Runtime Deps (Static Binary)** | Yes | Yes | Partial | Yes | No | **Yes** |
-| **Sub-Second Execution** | Yes | Yes | Medium | Fast | Slow | **Ultra-Fast** |
-| **Tree-sitter AST Complexity (20+ langs)** | Partial | Yes | No | No | Custom | **Yes** |
-| **Hard Physical Budgets (Lines/Bytes)** | No | Limited | No | No | No | **Yes** |
-| **Zero-Suppression Anti-Gaming Scan** | No | Basic | No | No | No | **Strict AST+Regex** |
-| **Architectural Boundary Linter** | No | No | No | No | Architecture | **Declarative AST** |
-| **Built-in Clone Detection (Zero-dep)** | No | No | External | No | Yes | **Token Hash** |
-| **CRAP Score & Coverage Ingestion** | Basic | No | No | No | Partial | **Yes (LCOV/JSON)** |
-| **Mutation Testing Gatekeeper** | Metrics | No | No | No | No | **Floor Enforcement** |
-| **Agent-Optimized Token Output** | Yes | Yes | No | No | No | **Yes** |
-| **Native MCP Server Mode** | Yes | No | No | No | No | **Yes** |
-
----
-
-## 4. Why Hardgate Fills the Gap
-
-Hardgate is designed specifically for the **post-LLM software era**:
-1. **Single binary installation:** `cargo install hardgate` gives you an instant, zero-dependency quality gate for Rust, TypeScript, Python, Go, and C++ codebases.
-2. **Anti-gaming by default:** Prevents agents from silently adding `@ts-ignore`, `#[allow(...)]`, or `# noqa`.
-3. **All-in-one efficiency:** Combines the metric power of `BCA`, the duplication checks of `jscpd`, the architectural checks of `dependency-cruiser`, and the verification loops of `PMAT` into one unified CLI.
+**Planned stabilization (not active):** reference-branch baselines, changed-hunk coverage attribution, new-clone fingerprints, consumer fixtures, and release artifact/checksum verification require implementation and regression proof before they belong in this comparison.
