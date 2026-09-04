@@ -19,6 +19,13 @@ mod unix {
     use std::process::Command;
     use std::time::Instant;
 
+    fn assert_error_contains<T>(result: Result<T, String>, expected: &str) {
+        match result {
+            Err(message) => assert!(message.contains(expected), "{message}"),
+            Ok(_) => panic!("expected an error containing `{expected}`"),
+        }
+    }
+
     #[test]
     fn invalid_pid_is_rejected_before_group_syscalls() {
         let pid = Pid::from_raw(1).expect("PID 1 is nonzero");
@@ -28,24 +35,16 @@ mod unix {
                 .expect_err("PID 1 must never be signaled")
                 .contains("invalid PID")
         );
-        assert!(
-            signal_process_group("TERM", pid)
-                .expect_err("PID 1 must never be signaled")
-                .contains("invalid PID")
-        );
-        assert!(
-            probe_process_group(pid)
-                .expect_err("PID 1 must never be probed")
-                .contains("invalid PID")
-        );
+        assert_error_contains(signal_process_group("TERM", pid), "invalid PID");
+        assert_error_contains(probe_process_group(pid), "invalid PID");
     }
 
     #[test]
     fn unsupported_signal_is_rejected_without_signaling() {
         let pid = Pid::from_raw(2).expect("PID 2 is nonzero");
-        assert_eq!(
-            signal_process_group("USR1", pid).expect_err("unsupported signals must be rejected"),
-            "unsupported process-group signal USR1"
+        assert_error_contains(
+            signal_process_group("USR1", pid),
+            "unsupported process-group signal USR1",
         );
     }
 
