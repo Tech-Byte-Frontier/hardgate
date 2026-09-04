@@ -137,7 +137,7 @@ wait_for_crate_version 1
 cargo install hardgate --version "=$RELEASE_VERSION"
 npm install --ignore-scripts
 --package "$pkg"
-env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs
+env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs
 Verify clean npm, pnpm, Yarn, and Bun consumers
 pnpm add --ignore-scripts
 yarn add
@@ -335,3 +335,8 @@ for (const job of ["version-check", "package", "attest", "publication-preflight"
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");
 assert.equal((release.match(/actions\/checkout@/g) ?? []).length, (release.match(/persist-credentials: false/g) ?? []).length, "release checkouts must not persist GitHub credentials");
+assert.equal((release.match(/name: Check out CI-validated release tooling/g) ?? []).length, 2, "npm publication and final verification must use CI-validated recovery tooling");
+assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}[\s\S]{0,120}path: release-tooling/g) ?? []).length, 2, "recovery tooling must come from the exact workflow commit");
+assert.equal((release.match(/cmp -- npm\/hardgate\/bin\/hardgate\.js release-tooling\/npm\/hardgate\/bin\/hardgate\.js/g) ?? []).length, 2, "recovery tooling launcher must match the signed release payload");
+assert.equal((release.match(/node release-tooling\/scripts\/verify-npm-publication\.mjs/g) ?? []).length, 4, "every live npm publication verifier call must use CI-validated recovery tooling");
+assert.doesNotMatch(release, /node scripts\/verify-npm-publication\.mjs/, "signed release payload must not shadow a reviewed npm verifier recovery fix");

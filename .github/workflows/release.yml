@@ -914,6 +914,15 @@ jobs:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Publication payload stays on the signed tag above. Recovery-only
+          # verifier fixes come from the exact main commit approved by CI.
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -940,6 +949,8 @@ jobs:
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          cmp -- npm/hardgate/bin/hardgate.js release-tooling/npm/hardgate/bin/hardgate.js
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/sync-npm-version.mjs --check --tag "$RELEASE_TAG"
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
@@ -1029,13 +1040,13 @@ jobs:
           }
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             publish_platform "$pkg"
-            env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only --package "$pkg"
+            env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only --package "$pkg"
           done
           for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
             wanted=$(node -p "require('./npm/$pkg/package.json').version")
             test "$(wait_for_registry_version 0 "$pkg" "$wanted")" = "$wanted"
           done
-          env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
+          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
           unset publish_token
       - name: Publish wrapper only after all platforms are verified
         env:
@@ -1102,7 +1113,7 @@ jobs:
             NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
           fi
           test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
-          env -u NODE_AUTH_TOKEN node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
           unset publish_token
           echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
 
@@ -1123,6 +1134,13 @@ jobs:
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1146,6 +1164,8 @@ jobs:
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          cmp -- npm/hardgate/bin/hardgate.js release-tooling/npm/hardgate/bin/hardgate.js
           release_metadata=$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease)
           release_tag=$(printf '%s\n' "$release_metadata" | jq -r '.tagName')
           release_is_draft=$(printf '%s\n' "$release_metadata" | jq -r '.isDraft')
@@ -1176,7 +1196,7 @@ jobs:
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
-          node scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+          node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
 
       - name: Verify published registry versions and runnable installs
         env:

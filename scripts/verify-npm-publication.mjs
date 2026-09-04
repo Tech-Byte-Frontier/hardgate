@@ -61,7 +61,12 @@ function verifyExecutableMember(archive, packageDirectory, packageName) {
 }
 
 function packOnce(spec, directory) {
-  const result = spawnSync("npm", ["pack", spec, "--ignore-scripts", "--silent", "--pack-destination", directory], {
+  // Keep npm's error diagnostics so the bounded retry classifier can
+  // distinguish registry propagation (for example E404 immediately after a
+  // publish) from authentication or package-integrity failures. `--silent`
+  // suppresses those diagnostics and turns every failure into an opaque exit
+  // status that must fail closed.
+  const result = spawnSync("npm", ["pack", spec, "--ignore-scripts", "--loglevel=error", "--pack-destination", directory], {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
