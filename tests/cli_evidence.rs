@@ -355,3 +355,41 @@ ratchet = true
         );
     }
 }
+
+#[test]
+fn malformed_legacy_baseline_is_blocking_even_when_current_roles_are_advisory() {
+    let root = tempdir("cli-legacy-advisory-malformed-baseline");
+    let config = base_config(
+        r#"[legacy]
+reference_branch = "HEAD"
+ratchet = true
+"#,
+    )
+    .replace("strict = true", "strict = false");
+    write(&root, "hardgate.toml", &config);
+    write(&root, "src/lib.rs", "pub fn broken( -> i32 { 1 }\n");
+    init_repo(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "malformed advisory baseline"]);
+    write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+
+    for command in ["check", "verify"] {
+        let report = failed_report(&root, command);
+        assert!(
+            report["orchestration_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|violation| violation["step"] == "legacy-ratchet"),
+            "invalid baseline evidence must not inherit advisory role severity"
+        );
+        assert!(
+            report["advisories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|advisory| advisory.as_str().unwrap().contains("grandfathered=0")),
+            "an untrusted advisory baseline must not grandfather debt"
+        );
+    }
+}

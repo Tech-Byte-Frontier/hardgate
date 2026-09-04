@@ -3,7 +3,7 @@ use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::classify_file;
 use super::static_gate::{run_static_gate_scoped, run_static_gate_snapshot};
 use crate::adoption::apply_legacy_ratchet;
-use crate::config::HardgateConfig;
+use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
 use crate::engines::{FunctionMetrics, run_generated_freshness as execute_generated_freshness};
@@ -175,8 +175,9 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
         .iter()
         .map(|(path, content)| (path.clone(), content.clone()))
         .collect();
+    let baseline_config = trusted_baseline_config(config);
     let (mut baseline, _files, baseline_read, _functions) =
-        match run_static_gate_snapshot(config, &baseline_contents) {
+        match run_static_gate_snapshot(&baseline_config, &baseline_contents) {
             Ok(result) => result,
             Err(error) => {
                 record_legacy_failure(
@@ -188,7 +189,9 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
             }
         };
     if include_dead_code {
-        if let Err(error) = run_dead_code_analysis(config, &baseline_read, root, &mut baseline) {
+        if let Err(error) =
+            run_dead_code_analysis(&baseline_config, &baseline_read, root, &mut baseline)
+        {
             record_legacy_failure(
                 current,
                 &summary.reference,
@@ -211,6 +214,24 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
     summary.grandfathered = outcome.grandfathered;
     summary.retained = outcome.retained;
     summary
+}
+
+/// A legacy snapshot is evidence, not a user-facing advisory run.  Force
+/// evidence-producing roles to error severity so malformed or unsupported
+/// baseline inputs can never be hidden by a non-strict current configuration.
+fn trusted_baseline_config(config: &HardgateConfig) -> HardgateConfig {
+    let mut baseline = config.clone();
+    baseline.gate.strict = true;
+    for policy in [
+        &mut baseline.roles.source,
+        &mut baseline.roles.test,
+        &mut baseline.roles.generated,
+        &mut baseline.roles.fixture,
+        &mut baseline.roles.migration,
+    ] {
+        policy.severity = Some(Severity::Error);
+    }
+    baseline
 }
 
 struct LegacyBaselineRequest<'a> {
