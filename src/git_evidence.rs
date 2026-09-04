@@ -36,6 +36,7 @@ pub fn load_reference(root: &Path, reference: &str) -> Result<ReferenceEvidence>
             "--name-status",
             "-z",
             "--find-renames",
+            "--find-copies",
             "--no-ext-diff",
             &merge_base,
             "--",
@@ -188,13 +189,12 @@ fn status_record(status: &[u8], records: &[&[u8]], path_index: usize) -> Result<
             .filter(|path| is_inventory_path(path))
             .cloned()
             .collect();
-        let lineage = (is_inventory_path(&old) && is_inventory_path(&new)).then_some((new, old));
+        let lineage = (marker == b'R' && is_inventory_path(&old) && is_inventory_path(&new))
+            .then_some((new, old));
         return Ok((path_index + 2, paths, lineage));
     }
     let path = normalize_bytes(
-        records
-            .get(path_index)
-            .context("Git returned a malformed diff status")?,
+        records.get(path_index).context("Malformed diff status")?,
         "Git diff path",
     )?;
     let paths = if is_inventory_path(&path) {

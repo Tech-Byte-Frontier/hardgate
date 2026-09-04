@@ -127,6 +127,35 @@ fn tracks_empty_added_inventory_file() {
 }
 
 #[test]
+fn tracks_copy_paths_without_granting_rename_lineage() {
+    let repo = committed_repo(
+        "git-evidence-copy",
+        "src/original.rs",
+        "one\ntwo\nthree\nfour\n",
+    );
+    let source = repo.join("src/original.rs");
+    let copy = repo.join("src/copy.rs");
+    std::fs::copy(&source, &copy).unwrap();
+    repo.write("src/original.rs", "one\nchanged\nthree\nfour\n");
+    git(&repo, &["add", "src/original.rs", "src/copy.rs"]);
+
+    let evidence = load_reference(&repo, "HEAD").unwrap();
+    assert!(
+        evidence
+            .change_set
+            .changed_files
+            .contains(Path::new("src/original.rs"))
+    );
+    assert!(
+        evidence
+            .change_set
+            .changed_files
+            .contains(Path::new("src/copy.rs"))
+    );
+    assert!(evidence.change_set.rename_lineage.is_empty());
+}
+
+#[test]
 fn handles_renames_and_paths_with_spaces() {
     let repo = Repo::new("git-evidence-rename-space");
     repo.write("src/old name.rs", "first\nsecond\nthird\nfourth\n");
