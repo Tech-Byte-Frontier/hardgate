@@ -1,7 +1,18 @@
-use super::run_mutant_batch;
+use super::super::mutation_output::{
+    MutationFailure, MutationNoop, MutationSummaryContext, baseline_failure, render_mutation_noop,
+    render_mutation_output, runtime_failure,
+};
+use super::{
+    increment_stats, mutation_run_passed, outcome_label, print_outcome, round_robin_mutants,
+    run_mutant_batch, take_next_family,
+};
 use crate::engines::mutation::runner::{BaselineSources, MutationRunnerError};
 use crate::engines::mutation::test_support::temp_root;
-use crate::engines::{AstMutant, BaselineExecutionResult, NativeMutationRunner};
+use crate::engines::{
+    AstMutant, BaselineExecutionResult, BaselineOutcome, MutantExecutionResult, MutantOutcome,
+    MutationStats, NativeMutationRunner,
+};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn mutant(id: usize) -> AstMutant {
@@ -25,6 +36,213 @@ fn snapshot_source(root: &Path, file: &str) -> BaselineSources {
 fn assert_runner_error(result: BaselineExecutionResult, marker: &Path) {
     assert_eq!(result.outcome, crate::engines::BaselineOutcome::RunnerError);
     assert!(!marker.exists());
+}
+
+fn execution(outcome: MutantOutcome, diagnostic: &str) -> MutantExecutionResult {
+    MutantExecutionResult {
+        mutant: mutant(1),
+        outcome,
+        duration_ms: 0,
+        command: "true".to_string(),
+        diagnostic: diagnostic.to_string(),
+        source_restored: true,
+    }
+}
+
+fn baseline(outcome: BaselineOutcome, diagnostic: &str) -> BaselineExecutionResult {
+    BaselineExecutionResult {
+        file: PathBuf::from("target.rs"),
+        outcome,
+        duration_ms: 0,
+        command: "true".to_string(),
+        diagnostic: diagnostic.to_string(),
+    }
+}
+
+fn stats(
+    killed: usize,
+    survived: usize,
+    timeout: usize,
+    compile_error: usize,
+    runner_error: usize,
+    unviable: usize,
+) -> MutationStats {
+    MutationStats {
+        killed,
+        survived,
+        timeout,
+        compile_error,
+        runner_error,
+        equivalent: 0,
+        unviable,
+        total: killed + survived + timeout + compile_error + runner_error + unviable,
+    }
+}
+
+#[test]
+fn baseline_snapshot_failure_is_typed_before_commands() {
+    let root = temp_root("hardgate", "baseline-snapshot-failure");
+    let protected = [PathBuf::from("missing.rs")];
+    let runner = NativeMutationRunner::new(1, Some("true".to_string()));
+    let result = super::run_unmutated_baselines(super::BaselineRun {
+        runner: &runner,
+        command_files: &[],
+        protected_files: &protected,
+        root: Path::new(&root),
+        json: true,
+    })
+    .expect_err("missing protected source must fail before baseline commands");
+    let failure = result
+        .downcast_ref::<MutationFailure>()
+        .expect("snapshot failure should preserve MutationFailure");
+    assert_eq!(failure.stage, "baseline");
+    assert_eq!(failure.kind, "source-integrity-error");
+    assert!(failure.message.contains("snapshot protected"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn mutation_helpers_cover_outcomes_and_failure_mappings() {
+    for outcome in [
+        MutantOutcome::Killed,
+        MutantOutcome::Survived,
+        MutantOutcome::Timeout,
+        MutantOutcome::CompileError,
+        MutantOutcome::RunnerError,
+        MutantOutcome::Equivalent,
+        MutantOutcome::Unviable,
+    ] {
+        let _ = outcome_label(outcome);
+    }
+    let mut counted = MutationStats::default();
+    for outcome in [
+        MutantOutcome::Killed,
+        MutantOutcome::Survived,
+        MutantOutcome::Timeout,
+        MutantOutcome::CompileError,
+        MutantOutcome::RunnerError,
+        MutantOutcome::Equivalent,
+        MutantOutcome::Unviable,
+    ] {
+        increment_stats(&mut counted, outcome);
+    }
+    assert_eq!(counted.killed, 1);
+    assert_eq!(counted.unviable, 1);
+
+    let integrity = MutationFailure::from_runner_error(MutationRunnerError::Integrity(
+        "source changed".to_string(),
+    ));
+    assert_eq!(integrity.stage, "execution");
+    assert_eq!(integrity.kind, "execution-error");
+    let resolution = MutationFailure::from_runner_error(MutationRunnerError::Resolution(
+        "test plan unavailable".to_string(),
+    ));
+    assert_eq!(resolution.stage, "resolution");
+    assert_eq!(resolution.kind, "resolution-error");
+
+    let mut styled = MutationStats::default();
+    for outcome in [
+        MutantOutcome::Killed,
+        MutantOutcome::Survived,
+        MutantOutcome::Timeout,
+        MutantOutcome::CompileError,
+        MutantOutcome::RunnerError,
+        MutantOutcome::Equivalent,
+        MutantOutcome::Unviable,
+    ] {
+        print_outcome(&mut styled, outcome);
+    }
+    assert_eq!(styled.killed, 1);
+    assert_eq!(styled.unviable, 1);
+
+    let empty_diagnostic = baseline(BaselineOutcome::Failed, "");
+    assert!(
+        baseline_failure(&empty_diagnostic, Path::new("target.rs"))
+            .to_string()
+            .contains("no diagnostic output")
+    );
+    for outcome in [
+        BaselineOutcome::Timeout,
+        BaselineOutcome::RunnerError,
+        BaselineOutcome::Passed,
+    ] {
+        assert!(
+            baseline_failure(&baseline(outcome, "diagnostic"), Path::new("target.rs"))
+                .to_string()
+                .contains("unmutated baseline")
+        );
+    }
+
+    for outcome in [MutantOutcome::RunnerError, MutantOutcome::Timeout] {
+        let failure = runtime_failure(&execution(outcome, "diagnostic"))
+            .expect("runtime failures should be typed")
+            .to_string();
+        assert!(failure.contains("mutant"));
+    }
+    assert!(runtime_failure(&execution(MutantOutcome::Killed, "")).is_none());
+    assert!(
+        runtime_failure(&execution(MutantOutcome::RunnerError, ""))
+            .expect("empty diagnostics still report runtime failures")
+            .to_string()
+            .contains("no diagnostic output")
+    );
+}
+
+#[test]
+fn mutation_output_modes_and_noops_are_rendered() {
+    let result = execution(MutantOutcome::Survived, "");
+    let stats = stats(0, 1, 0, 0, 0, 0);
+    let context = MutationSummaryContext {
+        stats: &stats,
+        results: std::slice::from_ref(&result),
+        score: 0.0,
+        min_score: 0.0,
+        passed: true,
+        elapsed: 1,
+    };
+    render_mutation_output(&context, Some("agent")).unwrap();
+    render_mutation_output(&context, Some("json")).unwrap();
+    render_mutation_output(&context, None).unwrap();
+    for format in [Some("json"), None] {
+        render_mutation_noop(
+            MutationNoop {
+                passed: true,
+                status: "noop",
+                stage: "selection",
+                kind: "empty",
+                message: "nothing selected",
+            },
+            format,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn mutation_selection_and_verdict_guards_cover_empty_and_failure_paths() {
+    let mut empty_families = BTreeMap::<(String, String), Vec<AstMutant>>::new();
+    assert!(take_next_family(&mut empty_families, &mut 0).is_none());
+    let mut exhausted = BTreeMap::from([(("true".to_string(), "false".to_string()), vec![])]);
+    assert!(take_next_family(&mut exhausted, &mut 0).is_none());
+
+    let grouped = BTreeMap::from([(
+        PathBuf::from("nested/fixture.rs"),
+        BTreeMap::from([(("true".to_string(), "false".to_string()), vec![mutant(1)])]),
+    )]);
+    assert_eq!(round_robin_mutants(grouped, 1).len(), 1);
+    let exhausted_group = BTreeMap::from([(
+        PathBuf::from("nested/fixture.rs"),
+        BTreeMap::from([(("true".to_string(), "false".to_string()), vec![])]),
+    )]);
+    assert!(round_robin_mutants(exhausted_group, 1).is_empty());
+
+    assert!(!mutation_run_passed(&stats(0, 0, 0, 0, 0, 0), 0.0, 0.0));
+    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 0, 0), 0.0, 1.0));
+    assert!(!mutation_run_passed(&stats(1, 0, 1, 0, 0, 0), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats(1, 0, 0, 1, 0, 0), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 1, 0), 100.0, 0.0));
+    assert!(!mutation_run_passed(&stats(1, 0, 0, 0, 0, 1), 100.0, 0.0));
+    assert!(mutation_run_passed(&stats(1, 0, 0, 0, 0, 0), 100.0, 85.0));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
