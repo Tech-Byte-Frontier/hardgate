@@ -144,7 +144,7 @@ pub(crate) fn baseline_integrity(
                 append_diagnostic(
                     &mut diagnostic,
                     format!(
-                        "Baseline command modified source '{}' (protected target); original bytes, permissions, and file identity were restored, so mutation testing was aborted.",
+                        "Baseline command modified source '{}' (protected target); the change was detected and original bytes and permissions were restored, so mutation testing was aborted.",
                         source.path.display()
                     ),
                 );
@@ -175,7 +175,7 @@ pub(crate) fn baseline_preflight(root: &Path, protected: &BaselineSources) -> Op
             Ok(true) => append_diagnostic(
                 &mut diagnostic,
                 format!(
-                    "Protected source '{}' changed before baseline command; original bytes, permissions, and identity were restored. Mutation testing was aborted.",
+                    "Protected source '{}' changed before baseline command; the change was detected and original bytes and permissions were restored. Mutation testing was aborted.",
                     source.path.display()
                 ),
             ),

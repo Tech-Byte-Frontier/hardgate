@@ -1,9 +1,11 @@
 use super::{
-    AtomicReplacement, FileIdentity, SourceSnapshot, same_permissions, same_snapshot_identity,
+    AtomicReplacement, ExpectedEntry, FileIdentity, SourceSnapshot, same_permissions,
+    same_snapshot_identity,
 };
 #[path = "unix/temp.rs"]
 mod temp;
 
+use std::ffi::OsStr;
 use std::fs::{File, Permissions};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -45,25 +47,25 @@ pub(super) fn snapshot_location(location: &TargetLocation) -> io::Result<Option<
 pub(super) fn restore_location(
     context: LocationContext<'_>,
     original: &SourceSnapshot,
-    expected_mutation: Option<&SourceSnapshot>,
+    expected: ExpectedEntry<'_>,
 ) -> io::Result<()> {
     let location = context.location;
     verify_descriptor_identity(location)?;
     verify_live_location(location, context.path, context.root)?;
-    if expected_mutation.is_some()
+    if matches!(&expected, ExpectedEntry::Present(_))
         && let Some(current) = snapshot_location(location)?
         && snapshots_match(&current, original)
     {
         return Ok(());
     }
     reject_existing_target(location)?;
-    verify_expected(location, expected_mutation)?;
+    verify_expected(location, &expected)?;
     atomic_replace_at(
         context,
         AtomicReplacement {
             bytes: &original.bytes,
             permissions: &original.permissions,
-            expected: expected_mutation,
+            expected,
             armed: None,
         },
     )
@@ -181,6 +183,8 @@ fn atomic_replace_at(
     } = replacement;
     let location = context.location;
     let (temp_name, mut temp) = temp::create_temp_file(&location.parent, &location.name)?;
+    let mut temp_identity = temp_file_identity(&temp)?;
+    let mut renamed = false;
     let result = (|| {
         verify_descriptor_identity(location)?;
         verify_live_location(location, context.path, context.root)?;
@@ -188,10 +192,13 @@ fn atomic_replace_at(
         temp.flush()?;
         set_file_permissions(&temp, permissions)?;
         temp.sync_all()?;
-        verify_expected(location, expected)?;
+        verify_expected(location, &expected)?;
         verify_live_location(location, context.path, context.root)?;
+        let temp_snapshot = snapshot_temp_file(&temp, bytes, permissions)?;
+        temp_identity = temp_snapshot.identity;
+        verify_temp_entry(&location.parent, &temp_name, &temp_identity)?;
         if let Some(slot) = armed {
-            *slot = Some(snapshot_temp_file(&temp, bytes, permissions)?);
+            *slot = Some(temp_snapshot);
         }
         drop(temp);
         rustix::fs::renameat(
@@ -201,26 +208,70 @@ fn atomic_replace_at(
             &location.name,
         )
         .map_err(io::Error::from)?;
+        renamed = true;
         rustix::fs::fsync(&location.parent).map_err(io::Error::from)?;
         verify_descriptor_identity(location)?;
         verify_live_location(location, context.path, context.root)?;
         let written = read_location(location)?.snapshot;
         verify_contents(&written, bytes, permissions)
     })();
-    if let Err(error) = &result {
-        match rustix::fs::unlinkat(&location.parent, &temp_name, rustix::fs::AtFlags::empty()) {
-            Ok(()) => {}
-            Err(cleanup) if cleanup == rustix::io::Errno::NOENT => {}
-            Err(cleanup) => {
-                return Err(io::Error::other(format!(
-                    "{error}; failed to clean temporary mutation file '{}': {}",
-                    temp_name.to_string_lossy(),
-                    io::Error::from(cleanup)
-                )));
-            }
-        }
+    if !renamed && let Err(error) = &result {
+        cleanup_temp_entry(&location.parent, &temp_name, &temp_identity, error)?;
     }
     result
+}
+
+fn cleanup_temp_entry(
+    parent: &File,
+    name: &OsStr,
+    expected: &FileIdentity,
+    original: &io::Error,
+) -> io::Result<()> {
+    match verify_temp_entry(parent, name, expected) {
+        Ok(()) => unlink_temp_entry(parent, name, original),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
+            "{original}; temporary mutation file '{}' changed before cleanup: {error}",
+            name.to_string_lossy()
+        ))),
+    }
+}
+
+fn unlink_temp_entry(parent: &File, name: &OsStr, original: &io::Error) -> io::Result<()> {
+    match rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(cleanup) => Err(io::Error::other(format!(
+            "{original}; failed to clean temporary mutation file '{}': {}",
+            name.to_string_lossy(),
+            io::Error::from(cleanup)
+        ))),
+    }
+}
+
+fn verify_temp_entry(parent: &File, name: &OsStr, expected: &FileIdentity) -> io::Result<()> {
+    let stat = rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)?;
+    let actual = FileIdentity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino as u64,
+        links: stat.st_nlink as u64,
+        mode: stat.st_mode as u32,
+    };
+    if same_temp_identity(&actual, expected) {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "temporary mutation file entry changed before descriptor-relative rename",
+        ))
+    }
+}
+
+fn same_temp_identity(actual: &FileIdentity, expected: &FileIdentity) -> bool {
+    actual.device == expected.device
+        && actual.inode == expected.inode
+        && actual.links == expected.links
+        && rustix::fs::FileType::from_raw_mode(actual.mode as rustix::fs::RawMode)
+            == rustix::fs::FileType::RegularFile
 }
 
 fn snapshot_temp_file(
@@ -228,21 +279,26 @@ fn snapshot_temp_file(
     bytes: &[u8],
     permissions: &Permissions,
 ) -> io::Result<SourceSnapshot> {
+    let identity = temp_file_identity(temp)?;
+    Ok(SourceSnapshot {
+        bytes: bytes.to_vec(),
+        permissions: permissions.clone(),
+        identity,
+    })
+}
+
+fn temp_file_identity(temp: &File) -> io::Result<FileIdentity> {
     let stat = rustix::fs::fstat(temp).map_err(io::Error::from)?;
     if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile {
         return Err(io::Error::other(
             "temporary mutation replacement is not a regular file",
         ));
     }
-    Ok(SourceSnapshot {
-        bytes: bytes.to_vec(),
-        permissions: permissions.clone(),
-        identity: FileIdentity {
-            device: stat.st_dev as u64,
-            inode: stat.st_ino as u64,
-            links: stat.st_nlink as u64,
-            mode: stat.st_mode as u32,
-        },
+    Ok(FileIdentity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino as u64,
+        links: stat.st_nlink as u64,
+        mode: stat.st_mode as u32,
     })
 }
 
@@ -252,19 +308,25 @@ fn snapshots_match(current: &SourceSnapshot, expected: &SourceSnapshot) -> bool 
         && same_permissions(&current.permissions, &expected.permissions)
 }
 
-fn verify_expected(location: &TargetLocation, expected: Option<&SourceSnapshot>) -> io::Result<()> {
-    let Some(expected) = expected else {
-        return Ok(());
-    };
-    match snapshot_location(location)? {
-        Some(current) if snapshots_match(&current, expected) => Ok(()),
-        Some(_) => Err(io::Error::new(
+fn verify_expected(location: &TargetLocation, expected: &ExpectedEntry<'_>) -> io::Result<()> {
+    match (expected, snapshot_location(location)?) {
+        (ExpectedEntry::Present(expected), Some(current))
+            if snapshots_match(&current, expected) =>
+        {
+            Ok(())
+        }
+        (ExpectedEntry::Missing, None) => Ok(()),
+        (ExpectedEntry::Present(_), None) => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "mutation target disappeared before descriptor-relative replacement",
+        )),
+        (ExpectedEntry::Missing, Some(_)) => Err(io::Error::other(
+            "mutation target was recreated before descriptor-relative replacement",
+        )),
+        (ExpectedEntry::Present(_), Some(_)) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "mutation target changed before descriptor-relative replacement",
         )),
-        // A command may delete the target between checks. The rename still
-        // creates the original entry through the held parent.
-        None => Ok(()),
     }
 }
 

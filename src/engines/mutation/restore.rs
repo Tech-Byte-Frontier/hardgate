@@ -20,13 +20,18 @@ pub(super) struct SourceSnapshot {
     pub(super) identity: FileIdentity,
 }
 
+pub(super) enum ExpectedEntry<'a> {
+    Present(&'a SourceSnapshot),
+    Missing,
+}
+
 /// Replacement bytes and ownership checks carried through an atomic rename.
 /// Keeping this as one value avoids widening the platform seam with a long
 /// list of independently ordered arguments.
 pub(super) struct AtomicReplacement<'a> {
     pub(super) bytes: &'a [u8],
     pub(super) permissions: &'a Permissions,
-    pub(super) expected: Option<&'a SourceSnapshot>,
+    pub(super) expected: ExpectedEntry<'a>,
     pub(super) armed: Option<&'a mut Option<SourceSnapshot>>,
 }
 
@@ -101,18 +106,52 @@ pub(super) fn verify_live_path(
 pub(super) fn restore_location(
     location: &RestoreLocation,
     original: &SourceSnapshot,
-    expected_mutation: Option<&SourceSnapshot>,
+    expected: ExpectedEntry<'_>,
 ) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let context = unix::LocationContext::new(&location.inner, &location.path, &location.root);
-        unix::restore_location(context, original, expected_mutation)
+        unix::restore_location(context, original, expected)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (location, original, expected_mutation);
+        let _ = (location, original, expected);
         Err(unsupported_platform_error())
     }
+}
+
+/// Restore after a mutation command while preserving the exact entry observed
+/// immediately before the rename. A deleted target is restored only while it
+/// remains absent; a live replacement must still match the armed mutation.
+pub(super) fn restore_mutation_location(
+    location: &RestoreLocation,
+    original: &SourceSnapshot,
+    armed: &SourceSnapshot,
+) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        match verified_snapshot(location)? {
+            Some(current) if same_snapshot(&current, original) => Ok(()),
+            Some(current) if same_snapshot(&current, armed) => {
+                restore_location(location, original, ExpectedEntry::Present(armed))
+            }
+            Some(_) => Err(io::Error::other(
+                "mutation target changed after command execution; refusing to overwrite external edits",
+            )),
+            None => restore_location(location, original, ExpectedEntry::Missing),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (location, original, armed);
+        Err(unsupported_platform_error())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn verified_snapshot(location: &RestoreLocation) -> io::Result<Option<SourceSnapshot>> {
+    verify_live_path(location, &location.path, &location.root)?;
+    snapshot_location(location)
 }
 
 pub(super) fn atomic_replace_location(
@@ -140,8 +179,7 @@ pub(super) fn verify_unchanged(
 ) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        verify_live_path(location, &location.path, &location.root)?;
-        match snapshot_location(location)? {
+        match verified_snapshot(location)? {
             Some(current) if same_snapshot(&current, original) => Ok(()),
             Some(_) => Err(io::Error::other(
                 "source changed before mutation was applied; refusing to overwrite external edits",
@@ -199,15 +237,17 @@ pub(super) fn verify_and_restore(
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         verify_live_path(location, path, root)?;
-        let current = snapshot_location(location)?;
-        let changed = match current {
-            None => true,
-            Some(current) => !same_snapshot(&current, original),
-        };
-        if changed {
-            restore_location(location, original, None)?;
+        match snapshot_location(location)? {
+            Some(current) if same_snapshot(&current, original) => Ok(false),
+            Some(current) => {
+                restore_location(location, original, ExpectedEntry::Present(&current))?;
+                Ok(true)
+            }
+            None => {
+                restore_location(location, original, ExpectedEntry::Missing)?;
+                Ok(true)
+            }
         }
-        Ok(changed)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -217,7 +257,7 @@ pub(super) fn verify_and_restore(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn same_snapshot(left: &SourceSnapshot, right: &SourceSnapshot) -> bool {
+pub(super) fn same_snapshot(left: &SourceSnapshot, right: &SourceSnapshot) -> bool {
     same_snapshot_identity(left, right)
         && same_permissions(&left.permissions, &right.permissions)
         && left.bytes == right.bytes

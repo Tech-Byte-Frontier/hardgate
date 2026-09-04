@@ -3,8 +3,8 @@ use super::super::js::ResolvedTestPlan;
 use super::super::process::{CommandExecution, execute_with_timeout};
 use super::plan::process_roots;
 use super::restore::{
-    AtomicReplacement, RestoreLocation, SourceSnapshot, atomic_replace_location, same_permissions,
-    same_snapshot_identity, snapshot_location,
+    AtomicReplacement, ExpectedEntry, RestoreLocation, SourceSnapshot, atomic_replace_location,
+    same_permissions, same_snapshot_identity, snapshot_location,
 };
 use super::{MutantOutcome, NativeMutationRunner};
 
@@ -150,7 +150,7 @@ fn apply_mutant_bytes(
         AtomicReplacement {
             bytes: &mutated,
             permissions: &original.permissions,
-            expected: Some(original),
+            expected: ExpectedEntry::Present(original),
             armed: Some(armed),
         },
     )

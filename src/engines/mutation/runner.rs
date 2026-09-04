@@ -13,7 +13,7 @@ mod restore;
 use apply::{MutationInput, apply_and_execute};
 use plan::{custom_plan, plain_plan, rust_plan};
 use restore::{
-    RestoreLocation, SourceSnapshot, has_multiple_links, open_location, restore_location,
+    RestoreLocation, SourceSnapshot, has_multiple_links, open_location, restore_mutation_location,
     snapshot_location, verify_live_path, verify_unchanged,
 };
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ impl<'a> RollbackGuard<'a> {
 
     fn restore(&mut self) -> std::io::Result<()> {
         let result = match self.expected_mutation {
-            Some(expected) => restore_location(self.location, self.original, Some(expected)),
+            Some(expected) => restore_mutation_location(self.location, self.original, expected),
             None => verify_unchanged(self.location, self.original),
         };
         if result.is_ok() {
@@ -224,7 +224,7 @@ impl NativeMutationRunner {
         let plan = self.resolve_test_plan(&mutant.file, root);
         if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
             let mut result = mutant_error(mutant, &plan.command, start, diagnostic);
-            result.source_restored = true;
+            verify_no_write(&mut result, &location, &original, &target_path);
             return result;
         }
         let (execution, source_restored) = execute_and_restore(MutationContext {
@@ -362,6 +362,24 @@ fn resolve_target_path(file: &Path, root: &Path) -> PathBuf {
 
 fn append_diagnostic(existing: &mut String, extra: String) {
     *existing = append_output(std::mem::take(existing), extra);
+}
+
+fn verify_no_write(
+    result: &mut MutantExecutionResult,
+    location: &RestoreLocation,
+    original: &SourceSnapshot,
+    target_path: &Path,
+) {
+    match verify_unchanged(location, original) {
+        Ok(()) => result.source_restored = true,
+        Err(error) => append_diagnostic(
+            &mut result.diagnostic,
+            format!(
+                "Failed to verify unchanged source '{}': {error}",
+                target_path.display()
+            ),
+        ),
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
