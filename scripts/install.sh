@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 # Install latest: curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | sh
 # Install a release: curl -fsSL .../scripts/install.sh | HARDGATE_VERSION=vX.Y.Z sh
-# HARDGATE_VERSION accepts `vX.Y.Z` or `X.Y.Z` (latest when omitted).
+# HARDGATE_VERSION accepts `latest`, `vX.Y.Z`, or `X.Y.Z` (latest when omitted).
 # HARDGATE_INSTALL_DIR overrides the default `$HOME/.cargo/bin` destination.
-# HARDGATE_LIBC=gnu|musl overrides Linux libc detection when a host is
+# HARDGATE_LIBC=gnu|glibc|musl overrides Linux libc detection when a host is
 # intentionally minimal and neither `getconf` nor `ldd` can identify it.
 # HARDGATE_CURL_CONNECT_TIMEOUT and HARDGATE_CURL_MAX_TIME override the
 # positive, finite curl timeouts (in seconds) used for release downloads.

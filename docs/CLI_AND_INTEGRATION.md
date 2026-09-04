@@ -128,13 +128,14 @@ source exists. Missing, invalid, unsupported, or non-source explicit scopes
 fail closed. Only a non-diff unrestricted invocation or explicit scope with no
 eligible source-role target fails before mutation execution.
 
-Native mutation is supported only on the six Linux/macOS release target
-families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
-including other Unix systems, fail closed before baseline or source writes
-because the required process-group cleanup and atomic source-restoration
-guarantees are unavailable. Static `check` and `scan` are separate commands;
-the release/archive contract specifies exactly those six artifacts and no
-Windows artifact.
+Native mutation is available to source builds on Linux and macOS through the
+target-OS cfg. On other operating systems it fails closed before baseline or
+source writes because the required process-group cleanup and atomic
+source-restoration guarantees are unavailable. Static `check` and `scan` are
+separate commands. The prebuilt, npm, and shell-installer release contract
+remains exactly six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc
+and musl, macOS x64/arm64); that distribution matrix does not constrain source
+builds.
 
 ### JavaScript/TypeScript command resolution
 
@@ -142,8 +143,8 @@ For JavaScript-family targets (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.m
 
 1. Every existing ancestor `package.json`, including the nearest manifest, is parsed and validated. A malformed or unreadable manifest fails automatic resolution rather than falling back to an ancestor; pass `--test-cmd` to supply an explicit command.
 2. A workspace root is recognized only from a validated declaration: a non-empty `workspaces` array/object in `package.json` or a valid `pnpm-workspace.yaml` `packages` list. Lockfiles and manager configuration files are package-manager hints only; they never prove workspace membership. Package-manager precedence remains `packageManager` in the nearest manifest, then the nearest lock/config hint, then npm as the fallback. Supported managers are npm, pnpm, Yarn, and Bun.
-3. A local `test` script takes precedence. If it is absent, exactly one `test:*` script may be selected; multiple `test:*` scripts are ambiguous and fail closed, so use `--test-cmd`. Without a local script, one reliable child-local framework package or config signal supplies a direct framework command and takes precedence over a workspace-root script.
-4. Only when the child has neither a local script nor a reliable local framework signal may a validated enclosing workspace-root manifest supply a test script; that fallback runs from the workspace root. When a selected script names an unambiguous Jest, Vitest, or Playwright executable, that script supplies selector behavior. Composed or unrecognized scripts run their script command without an inferred selector. Malformed or multiple framework hints fall back to a full-suite command, or use `--test-cmd`.
+3. A local `test` script takes precedence. If it is absent, exactly one `test:*` script may be selected; multiple `test:*` scripts are ambiguous and fail closed, so use `--test-cmd`. Without a local script, one reliable child-local manifest, framework-config, or script signal supplies a direct framework command and takes precedence over a workspace-root script. Framework selection uses only validated manifest fields, known config filenames, and unambiguous script commands; it does not scan dependency packages.
+4. Only when the child has neither a local script nor a reliable local manifest/config/script signal may a validated enclosing workspace-root manifest supply a test script; that fallback runs from the workspace root. When a selected script names an unambiguous Jest, Vitest, or Playwright executable, that script supplies selector behavior. Composed or unrecognized scripts run their script command without an inferred selector. Malformed or multiple framework hints fall back to a full-suite command, or use `--test-cmd`.
 5. A matching `<stem>.test.<ext>` or `<stem>.spec.<ext>` is searched beside the source, under `__tests__`/`tests`, and in nested test roots (bounded depth). A child script runs from its package root; a workspace fallback script runs from the workspace root; a framework-only command runs from its config root (or the package root for a manifest-only hint); and the supplied repository root is the final fallback. If no reliable match exists, the full suite is selected.
 
 The generated command uses the detected manager's local binary: `npm test`/`npm run`, `pnpm test`/`pnpm run`, `yarn test`/`yarn <script>`, or `bun test`/`bun run`; direct framework fallback uses `npm exec --offline`, `pnpm exec`, `yarn exec`, or `bun x --no-install`. Jest receives its normal file selector, Vitest receives `run`, and Playwright receives `test` when selector inference is valid. A project-specific `--test-cmd` is the authoritative override. No resolver path downloads packages; unavailable managers, binaries, malformed manifests, ambiguous scripts, and other resolver failures are baseline failures.

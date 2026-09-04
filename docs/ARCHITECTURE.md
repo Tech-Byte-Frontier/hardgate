@@ -109,15 +109,17 @@ Orchestration commands run sequentially from the repository root; a local `node_
 
 ## Native mutation and JavaScript resolution
 
-Native mutation is source-role only and is supported only on the six Linux/macOS
-release target families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All
-other targets, including other Unix systems, fail closed before baseline or
-source writes because robust process-group cleanup and atomic restoration are
-not available. When `[mutation].enabled = false`, the command exits
-successfully without target discovery or execution. When enabled, it resolves a
-test command per file, runs a passing unmutated baseline, mutates one AST point
-at a time, classifies outcomes, and verifies byte-for-byte restoration. A
-failed baseline or zero viable mutants fails before a green result.
+Native mutation is source-role only and is available to source builds on Linux
+and macOS through the target-OS cfg. On other operating systems it fails closed
+before baseline or source writes because robust process-group cleanup and
+atomic restoration are not available. When `[mutation].enabled = false`, the
+command exits successfully without target discovery or execution. When enabled,
+it resolves a test command per file, runs a passing unmutated baseline, mutates
+one AST point at a time, classifies outcomes, and verifies byte-for-byte
+restoration. A failed baseline or zero viable mutants fails before a green
+result. The prebuilt, npm, and shell-installer release contract remains exactly
+six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc and musl, macOS
+x64/arm64); that distribution matrix does not constrain source builds.
 
 After an explicit scope is validated, a `mutate --diff` run (including
 `--scoped`) with no changed production source is a successful no-op. Missing,
@@ -131,15 +133,18 @@ override. Only validated `workspaces` declarations or a valid
 manager config are hints for npm, pnpm, Yarn, or Bun selection, never workspace
 proof. A child package's `test` script wins, one unambiguous `test:*` script is
 allowed, and multiple `test:*` scripts fail closed. A reliable child-local
-framework package or config signal takes precedence over an enclosing
-workspace-root script; that root script is used only when the child has no
-local script or reliable framework signal. Framework selectors are inferred
+manifest, framework-config, or script signal takes precedence over an
+enclosing workspace-root script; that root script is used only when the child
+has no local script or reliable local manifest/config/script signal. Framework
+selectors are inferred
 only from unambiguous recognized commands or hints;
 ambiguous/composed cases use the full suite. A matching sibling or nested
 `<stem>.test|spec>` file is selected when reliable, otherwise the full suite
 runs. Manager-local `test`/`run`/`exec` commands are used, with
 `npm exec --offline` and `bun x --no-install` preventing runtime installation.
-`--test-cmd` overrides this resolver.
+`--test-cmd` overrides this resolver. Framework selection uses only validated
+manifest fields, known config filenames, and unambiguous script commands; it
+does not scan dependency packages.
 
 ## Reports and MCP
 

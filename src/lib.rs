@@ -77,10 +77,12 @@
 //! It does not run orchestration or native mutation. When enabled, `mutate`
 //! runs the native unmutated baseline and AST mutants; when disabled, it emits
 //! a note and succeeds without target discovery or execution.
-//! Native mutation is supported only on the six Linux/macOS release target
-//! families (Linux x64/arm64 glibc and musl, macOS x64/arm64); all other
-//! targets, including other Unix systems, fail closed before baseline or
-//! source writes.
+//! Native mutation is available to source builds on Linux and macOS through
+//! the target-OS cfg; on other operating systems it fails closed before
+//! baseline or source writes. The prebuilt, npm, and shell-installer release
+//! contract remains exactly six x64/arm64 glibc/musl/macOS targets (Linux
+//! x64/arm64 glibc and musl, macOS x64/arm64), which does not constrain source
+//! builds.
 //! After an explicit scope is validated, a `mutate --diff` run (including
 //! `--scoped`) with no changed production source is a successful no-op. Missing,
 //! invalid, unsupported, or non-source explicit scopes fail closed; only a

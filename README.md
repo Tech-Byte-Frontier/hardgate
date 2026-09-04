@@ -4,7 +4,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/hardgate.svg)](https://crates.io/crates/hardgate)
 [![Documentation](https://docs.rs/hardgate/badge.svg)](https://docs.rs/hardgate)
-[![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
+[![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/LICENSE-MIT)
 
 Hardgate is a local Rust CLI. It turns repository policy into a deterministic report that a maintainer, CI job, or coding agent can inspect before accepting a change. A passing report means that the enabled engines found no blocking findings; it is not a claim that every quality property has been proven.
 
@@ -16,7 +16,7 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 - **Architectural boundaries.** Declarative path-scoped rules inspect import strings, call names, and tokens. This is a local rule scanner, not module resolution or type checking.
 - **Clone debt.** Bounded token windows compare eligible files using verified normalized token sequences. Current clone findings carry a stable content fingerprint that does not include path or line numbers, so rename lineage can be matched during legacy adoption.
 - **Evidence.** Enabled LCOV coverage and JSON mutation reports are required inputs. Empty, missing, unreadable, or malformed required evidence is a blocking finding. Disabled engines do not consume stale report files. Generated-artifact freshness is a separate required check when enabled.
-- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is separate from report ingestion and is supported only on the six Linux/macOS release target families (Linux x64/arm64 glibc and musl, macOS x64/arm64); all other targets, including other Unix systems, fail closed before baseline or source writes because process-group cleanup and atomic restoration are unavailable there.
+- **Native mutation.** When `[mutation].enabled = true`, `hardgate mutate` runs a real unmutated baseline before bounded AST mutants, classifies outcomes, rejects a selection with no viable mutants, and restores source bytes after each mutant. With mutation disabled it prints a note and succeeds without target discovery or execution. Native mutation is separate from report ingestion and is available to source builds on Linux and macOS through the target-OS cfg; on other operating systems it fails closed before baseline or source writes because process-group cleanup and atomic restoration are unavailable there. The prebuilt, npm, and shell-installer release contract remains exactly six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc and musl, macOS x64/arm64), which does not constrain source builds.
 - **Orchestration.** `check --all` runs only formatter, linter, and test commands configured by the repository. Hardgate never invents a command or treats an unconfigured test suite as evidence.
 
 Invariant checking is enabled by default; with no configured rules it has nothing to report. Set `[invariants].enforce = false` to disable it explicitly.
@@ -73,6 +73,8 @@ bun add -d @tech-byte-frontier/hardgate
 bunx --no-install hardgate scan src/index.ts
 ```
 
+The npm wrapper requires Node.js 18 or newer.
+
 The v0.5.0 release contract defines exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc. This matrix documents the intended channel behavior; it does not claim that publication has already occurred:
 
 | Target | Package |
@@ -105,8 +107,21 @@ cargo install --path . --locked
 Hardgate v0.5.0 requires Rust 1.98.1 when installed from source. It is a
 pre-1.0 compatibility release, not a patch: configuration, public Rust APIs,
 CLI evidence behavior, and supported distribution targets changed from
-v0.4.2. See [the v0.5.0 migration notes](CHANGELOG.md#050) before upgrading a
-library integration or an existing policy file.
+v0.4.2. See [the v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) before upgrading a library integration or an existing policy file.
+
+## Upgrading from 0.4.2
+
+Pinned installs and lockfiles do not auto-update. Upgrade explicitly to 0.5.0:
+
+```sh
+cargo install hardgate --version 0.5.0 --locked --force
+npm install --save-dev @tech-byte-frontier/hardgate@0.5.0
+pnpm add --save-dev @tech-byte-frontier/hardgate@0.5.0
+yarn up @tech-byte-frontier/hardgate@0.5.0
+bun add --dev @tech-byte-frontier/hardgate@0.5.0
+```
+
+Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
 
 ### Shell installer
 
@@ -188,7 +203,7 @@ validates the full configured reference snapshot, then compares it only to the
 selected current static/dead-code findings; explicit paths do not widen that
 current selection.
 
-Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
+Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See the [CLI reference and agent integration](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CLI_AND_INTEGRATION.md) for details.
 
 When native mutation is enabled, it requires a source-role target and at least
 one viable mutant. After an explicit scope is validated, a `mutate --diff`
@@ -233,14 +248,14 @@ the archive metadata and binary version/commit before installation.
 
 ## Documentation
 
-- [Vision and paradigm](docs/VISION_AND_PARADIGM.md)
-- [Configuration specification](docs/CONFIGURATION_SPEC.md)
-- [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md)
-- [System architecture](docs/ARCHITECTURE.md)
-- [Existing landscape](docs/EXISTING_LANDSCAPE.md)
-- [X article](docs/X_ARTICLE.md)
+- [Vision and paradigm](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/VISION_AND_PARADIGM.md)
+- [Configuration specification](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CONFIGURATION_SPEC.md)
+- [CLI reference and agent integration](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CLI_AND_INTEGRATION.md)
+- [System architecture](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/ARCHITECTURE.md)
+- [Existing landscape](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/EXISTING_LANDSCAPE.md)
+- [X article](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/X_ARTICLE.md)
 - [API reference](https://docs.rs/hardgate)
 
 ## License
 
-Dual-licensed under either [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+Dual-licensed under either [Apache License 2.0](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/LICENSE-APACHE) or [MIT](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/LICENSE-MIT), at your option.

@@ -19,6 +19,8 @@ bun add -d @tech-byte-frontier/hardgate
 bunx --no-install hardgate scan src/index.ts
 ```
 
+The npm wrapper requires Node.js 18 or newer.
+
 ## Platform packages and fallback
 
 The v0.5.0 release contract defines exactly six Linux/macOS optional
@@ -65,13 +67,13 @@ static/dead-code findings without widening explicit paths.
 
 No-config execution and `init --preset strict-agent` use the same preset object, including enabled coverage and mutation report policies. A generated strict template therefore needs valid report inputs. Balanced disables coverage/mutation reports; legacy-migration disables those reports and enables static reference/merge-base adoption. Missing, empty, unreadable, or malformed enabled evidence fails closed. Native `mutate` is separate from mutation-report evaluation. If `[mutation].enabled = false`, it prints a disabled-policy note and succeeds without target discovery, baseline execution, or mutants; target/no-target rules apply only when enabled.
 
-Native `mutate` is supported only on the six Linux/macOS release target
-families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
-including other Unix systems, fail closed before baseline or source writes
-because robust process-group cleanup and atomic source restoration are
-unavailable there. Static `check` and `scan` remain separate commands; the
-release/archive contract specifies exactly those six artifacts and no Windows
-artifact.
+Native `mutate` is available to source builds on Linux and macOS through the
+target-OS cfg; on other operating systems it fails closed before baseline or
+source writes because robust process-group cleanup and atomic source
+restoration are unavailable there. Static `check` and `scan` remain separate
+commands. The prebuilt, npm, and shell-installer release contract remains
+exactly six x64/arm64 glibc/musl/macOS targets (Linux x64/arm64 glibc and musl,
+macOS x64/arm64), which does not constrain source builds.
 
 After an explicit scope is validated, a `mutate --diff` run (including
 `--scoped`) with no changed production source is a successful no-op. Missing,
@@ -81,9 +83,11 @@ unrestricted or scoped run with no eligible source target fails.
 For JavaScript/TypeScript mutation targets, Hardgate validates encountered
 package manifests, recognizes only declared workspaces (lockfiles are manager
 hints), and resolves npm, pnpm, Yarn, or Bun. A child `test` script wins; one
-unambiguous `test:*` script is allowed, and a reliable child-local framework
-package or config signal wins over a validated enclosing workspace-root script.
-That root script is used only with no local script or reliable local signal;
+unambiguous `test:*` script is allowed, and a reliable child-local manifest,
+framework-config, or script signal wins over a validated enclosing
+workspace-root script. Framework selection uses only those manifest, config,
+and unambiguous script signals; it does not scan dependency packages.
+That root script is used only with no local script or reliable local manifest/config/script signal;
 malformed manifests or ambiguous scripts fail closed. It infers
 Jest, Vitest, or Playwright only when selector behavior is unambiguous, selects
 a matching test where possible, and otherwise runs the full suite.
@@ -107,4 +111,18 @@ also embeds `hardgate-target:<target>`, which release verification checks.
 `HARDGATE_INSTALL_DIR` chooses the destination. Windows and Homebrew are not
 supported by this package contract.
 
-Full documentation lives in the repository's [README](https://github.com/Tech-Byte-Frontier/hardgate) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/main/docs).
+## Upgrading from 0.4.2
+
+Pinned installs and lockfiles do not auto-update. Upgrade explicitly to 0.5.0:
+
+```sh
+cargo install hardgate --version 0.5.0 --locked --force
+npm install --save-dev @tech-byte-frontier/hardgate@0.5.0
+pnpm add --save-dev @tech-byte-frontier/hardgate@0.5.0
+yarn up @tech-byte-frontier/hardgate@0.5.0
+bun add --dev @tech-byte-frontier/hardgate@0.5.0
+```
+
+Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
+
+Full documentation lives in the repository's [README](https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0/docs).

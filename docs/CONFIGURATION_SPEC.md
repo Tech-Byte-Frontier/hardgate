@@ -279,13 +279,14 @@ reports = ["reports/stryker-mutation.json"]
 
 `hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool. When `[mutation].enabled = false`, it prints a disabled-policy note and exits successfully without target discovery or execution; the native baseline and no-target rules apply only when enabled.
 
-Native mutation is supported only on the six Linux/macOS release target
-families (Linux x64/arm64 glibc and musl, macOS x64/arm64). All other targets,
-including other Unix systems, fail closed before baseline or source writes
-because robust process-group cleanup and atomic source restoration are not
-available there. This limitation applies to native mutation; static `check` and
-`scan` remain separate capabilities, and the release/archive contract specifies
-exactly those six artifacts with no Windows artifact.
+Native mutation is available to source builds on Linux and macOS through the
+target-OS cfg. On other operating systems it fails closed before baseline or
+source writes because robust process-group cleanup and atomic source restoration
+are not available there. This limitation applies to native mutation; static
+`check` and `scan` remain separate capabilities. The prebuilt, npm, and
+shell-installer release contract remains exactly six x64/arm64 glibc/musl/macOS
+targets (Linux x64/arm64 glibc and musl, macOS x64/arm64), which does not
+constrain source builds.
 
 After an explicit scope is validated, a `mutate --diff` run (including
 `--scoped`) with no changed production source is a successful no-op. Missing,
