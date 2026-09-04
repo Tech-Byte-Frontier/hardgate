@@ -4,6 +4,7 @@ pub mod clones;
 pub mod complexity;
 pub mod coverage;
 pub mod dead_code;
+pub mod generated;
 pub mod invariants;
 pub mod mutation;
 pub mod orchestration;
@@ -18,6 +19,7 @@ pub use complexity::{
 };
 pub use coverage::{CoverageScorer, CoverageViolation};
 pub use dead_code::{DeadCodeAnalyzer, DeadCodeViolation};
+pub use generated::run_generated_freshness;
 pub use invariants::{InvariantViolation, InvariantsChecker};
 pub use mutation::{
     AstMutant, AstMutationGenerator, BaselineExecutionResult, BaselineOutcome,
