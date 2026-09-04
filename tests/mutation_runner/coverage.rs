@@ -119,6 +119,19 @@ fn automatic_rust_and_unknown_plans_use_plain_commands_and_default_timeout() {
             "cargo test"
         );
     }
+    #[cfg(unix)]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let non_utf8_rust = PathBuf::from(OsString::from_vec(vec![0xff, b'.', b'r', b's']));
+        assert_eq!(
+            runner
+                .resolve_test_command(&non_utf8_rust, root_path)
+                .unwrap(),
+            "cargo test"
+        );
+    }
     assert_eq!(
         runner
             .resolve_test_command(Path::new("notes.txt"), root_path)

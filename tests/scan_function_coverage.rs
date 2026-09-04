@@ -23,6 +23,11 @@ fn scan_directory_read_failure_is_a_structured_json_error() {
             .unwrap()
             .contains("Failed to read file")
     );
+
+    fixture.write("clean.rs", "fn answer() -> i32 { 42 }\n");
+    let output = run(fixture.as_ref(), &["scan", "clean.rs", "--json"]);
+    assert_status(&output, true, "scan --json");
+    assert_eq!(json(&output)["passed"], true);
 }
 
 #[test]
