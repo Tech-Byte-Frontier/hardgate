@@ -26,6 +26,7 @@ fn presets_round_trip_and_explain_their_first_step() {
                 assert!(content.contains("mutation.reports"));
                 assert!(content.contains("95% line/function"));
                 assert!(content.contains("remains incomplete until real LCOV"));
+                assert!(content.contains("hardgate check also requires"));
             }
             if preset == "balanced" {
                 assert!(content.contains("structural starting point"));
@@ -63,6 +64,95 @@ fn full_output_contains_effective_policy_while_default_stays_concise() {
         assert!(!content.contains("[budgets.files]"));
         let _: HardgateConfig = toml::from_str(&content).unwrap();
     });
+}
+
+fn generated_policy(
+    tag: &str,
+    preset: &str,
+    manifest: Option<(&str, &str)>,
+    generation: (bool, [Option<&str>; 3]),
+) -> HardgateConfig {
+    let (full, overrides) = generation;
+    let mut generated = None;
+    with_root(tag, |root| {
+        if let Some((name, content)) = manifest {
+            fs::write(root.join(name), content).unwrap();
+        }
+        let mut init = options(preset);
+        init.full = full;
+        init.format_check = overrides[0].map(str::to_string);
+        init.format = overrides[1].map(str::to_string);
+        init.lint = overrides[2].map(str::to_string);
+        cmd_init_with_options(init).unwrap();
+        generated = Some(load_written(root));
+    });
+    generated.unwrap()
+}
+
+fn assert_policy_round_trip(
+    tag: &str,
+    preset: &str,
+    manifest: Option<(&str, &str)>,
+    overrides: [Option<&str>; 3],
+) {
+    let full = generated_policy(tag, preset, manifest, (true, overrides));
+    let concise = generated_policy(tag, preset, manifest, (false, overrides));
+    assert_eq!(
+        serde_json::to_value(full).unwrap(),
+        serde_json::to_value(concise).unwrap(),
+        "full and concise policies diverged for {tag}"
+    );
+}
+
+#[test]
+fn concise_and_full_outputs_preserve_the_effective_policy() {
+    for preset in ["strict-agent", "balanced", "legacy-migration", "custom"] {
+        assert_policy_round_trip(
+            &format!("preset-{preset}"),
+            preset,
+            None,
+            [None, None, None],
+        );
+    }
+    for (tag, manifest) in [
+        (
+            "effective-rust",
+            (
+                "Cargo.toml",
+                "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+            ),
+        ),
+        (
+            "effective-javascript",
+            (
+                "package.json",
+                r#"{"packageManager":"pnpm@9","scripts":{"format":"format","lint":"lint","test":"test"}}"#,
+            ),
+        ),
+        (
+            "effective-python",
+            (
+                "pyproject.toml",
+                "[project]\nname = \"fixture\"\n\n[tool.ruff]\nline-length = 88\n",
+            ),
+        ),
+        (
+            "effective-go",
+            ("go.mod", "module example.test\n\ngo 1.23\n"),
+        ),
+    ] {
+        assert_policy_round_trip(tag, "balanced", Some(manifest), [None, None, None]);
+    }
+    assert_policy_round_trip(
+        "effective-overrides",
+        "balanced",
+        Some(("go.mod", "module example.test\n\ngo 1.23\n")),
+        [
+            Some("tool format --check"),
+            Some("tool format"),
+            Some("tool lint"),
+        ],
+    );
 }
 
 #[test]

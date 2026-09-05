@@ -426,7 +426,7 @@ fn parse_manager(value: &str) -> Option<String> {
 }
 
 fn package_manager(root: &Path) -> Option<String> {
-    let lockfiles = [
+    let managers = [
         ("pnpm-lock.yaml", "pnpm"),
         ("yarn.lock", "yarn"),
         ("bun.lock", "bun"),
@@ -436,13 +436,12 @@ fn package_manager(root: &Path) -> Option<String> {
     .into_iter()
     .filter(|(name, _)| root.join(name).is_file())
     .map(|(_, manager)| manager.to_string())
-    .collect::<Vec<_>>();
-    (lockfiles.len() <= 1).then(|| {
-        lockfiles
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| "npm".to_string())
-    })
+    .collect::<BTreeSet<_>>();
+    match managers.len() {
+        0 => Some("npm".to_string()),
+        1 => managers.into_iter().next(),
+        _ => None,
+    }
 }
 
 fn set_script_commands(

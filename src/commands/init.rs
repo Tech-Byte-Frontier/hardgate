@@ -262,6 +262,14 @@ fn completion_summary(context: &SummaryContext<'_>) -> String {
             output.push_str(&format!("  - {item}\n"));
         }
     }
+    if context.preset == Preset::StrictAgent
+        && context.config.coverage.enabled
+        && context.config.mutation.enabled
+    {
+        output.push_str(
+            "strict evidence: hardgate check also requires generated LCOV and mutation reports.\n",
+        );
+    }
     if context.preset == Preset::LegacyMigration {
         output.push_str(&format!(
             "legacy reference: {}.\n",
@@ -324,7 +332,7 @@ fn next_command(
             .iter()
             .any(|item| item.contains("coverage") || item.contains("mutation"))
     {
-        return "configure coverage.report and mutation.reports, generate the required evidence, then run hardgate verify";
+        return "hardgate config";
     }
     if config.orchestration.format_check.is_some()
         || config.orchestration.lint.is_some()

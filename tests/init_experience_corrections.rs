@@ -162,6 +162,21 @@ fn javascript_scripts_require_nonempty_values_and_one_manager() {
         assert!(config.orchestration.format.is_none());
         assert!(content.contains("multiple package manager lockfiles"));
     });
+
+    with_root("javascript-bun-lock-variants", |root| {
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"format":"format"}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("bun.lock"), "lockfileVersion: 1\n").unwrap();
+        fs::write(root.join("bun.lockb"), "legacy\n").unwrap();
+        cmd_init_with_options(options("balanced")).unwrap();
+        assert_eq!(
+            load_written(root).orchestration.format.as_deref(),
+            Some("bun run format")
+        );
+    });
 }
 
 #[test]
@@ -169,7 +184,7 @@ fn preview_stdout_is_toml_and_summary_is_stderr() {
     with_root("preview-cli", |root| {
         fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_hardgate"))
-            .args(["init", "--preset", "balanced", "--preview"])
+            .args(["init", "--preset", "strict-agent", "--preview"])
             .current_dir(root)
             .output()
             .unwrap();
@@ -180,7 +195,10 @@ fn preview_stdout_is_toml_and_summary_is_stderr() {
         );
         let stdout = String::from_utf8(output.stdout).unwrap();
         let _: toml::Value = toml::from_str(&stdout).unwrap();
-        assert!(String::from_utf8_lossy(&output.stderr).contains("summary:"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("summary:"));
+        assert!(stderr.contains("next: hardgate config."));
+        assert!(stderr.contains("strict evidence: hardgate check also requires"));
         assert!(!root.join("hardgate.toml").exists());
     });
 }

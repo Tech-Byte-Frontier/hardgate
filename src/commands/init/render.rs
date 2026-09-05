@@ -17,7 +17,11 @@ pub(crate) fn effective_config(
     options: &InitOptions,
 ) -> HardgateConfig {
     let mut config = preset.to_default_config();
+    let default_timeout = config.orchestration.timeout_secs;
     config.orchestration = detection.orchestration.clone();
+    if config.orchestration.timeout_secs.is_none() {
+        config.orchestration.timeout_secs = default_timeout;
+    }
     if let Some(command) = &options.format_check {
         config.orchestration.format_check = Some(command.clone());
     }
@@ -55,6 +59,7 @@ fn render_concise(input: &RenderInput<'_>) -> String {
     output.push_str(&detection_comments(input.detection, input.missing_setup));
     output.push_str(&reference_comment(input.reference_status));
     output.push_str("\n[gate]\n");
+    output.push_str(&format!("name = {:?}\n", input.config.gate.name));
     output.push_str(&format!(
         "preset = {:?}\n",
         super::preset_name(input.preset)
@@ -82,7 +87,8 @@ fn preset_guidance(preset: Preset) -> String {
              # 90% branch coverage, and an 85% mutation floor) and requires evidence.\n\
              # Provide coverage/lcov.info and [mutation].reports before hardgate verify.\n\
              # The policy remains incomplete until real LCOV and mutation reports exist;\n\
-             # generate those reports before using hardgate verify.\n"
+             # generate those reports before using hardgate verify.\n\
+             # hardgate check also requires these generated reports under strict policy.\n"
                 .to_string()
         }
         Preset::Balanced => {
@@ -142,6 +148,7 @@ fn append_orchestration(output: &mut String, orchestration: &OrchestrationConfig
         && orchestration.format.is_none()
         && orchestration.lint.is_none()
         && orchestration.test_cmd.is_none()
+        && orchestration.timeout_secs.is_none()
     {
         return;
     }
@@ -154,6 +161,9 @@ fn append_orchestration(output: &mut String, orchestration: &OrchestrationConfig
     append_command(output, "format", orchestration.format.as_deref());
     append_command(output, "lint", orchestration.lint.as_deref());
     append_command(output, "test_cmd", orchestration.test_cmd.as_deref());
+    if let Some(timeout_secs) = orchestration.timeout_secs {
+        output.push_str(&format!("timeout_secs = {timeout_secs}\n"));
+    }
 }
 
 fn append_command(output: &mut String, key: &str, command: Option<&str>) {
