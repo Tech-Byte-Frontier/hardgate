@@ -189,6 +189,8 @@ impl NativeMutationRunner {
         }
         if file.extension().and_then(|value| value.to_str()) == Some("rs") {
             Ok(rust_plan(file, root))
+        } else if file.extension().and_then(|value| value.to_str()) == Some("py") {
+            resolve_python_test_plan(file, root)
         } else {
             Ok(plain_plan(
                 "cargo test".to_string(),
@@ -364,6 +366,25 @@ fn mutant_error(
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn unsupported_platform_diagnostic() -> String {
     "mutation runner requires Linux/macOS process-group cleanup and descriptor-relative atomic source replacement; this platform is unsupported and no baseline or source write was attempted".to_string()
+}
+
+fn resolve_python_test_plan(file: &Path, root: &Path) -> Result<ResolvedTestPlan> {
+    let has_pytest = root.join("pytest.ini").exists()
+        || root.join("pyproject.toml").exists()
+        || root.join("setup.cfg").exists()
+        || root.join("tox.ini").exists()
+        || root.join("tests").is_dir();
+    if has_pytest {
+        let file_arg = file.to_string_lossy();
+        return Ok(plain_plan(
+            format!("pytest {file_arg}"),
+            root,
+            TestSelection::Custom,
+        ));
+    }
+    anyhow::bail!(
+        "native mutation testing for Python requires --test-cmd (e.g. --test-cmd 'pytest') or a configured [orchestration].test_cmd"
+    )
 }
 
 struct PreparedTarget {

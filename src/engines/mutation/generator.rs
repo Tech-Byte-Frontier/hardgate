@@ -103,7 +103,14 @@ fn collect_node_mutants(
     path: &Path,
     generated: &mut GenerationResult,
 ) -> bool {
-    if node.kind() == "binary_expression" {
+    let kind = node.kind();
+    if matches!(
+        kind,
+        "binary_expression"
+            | "binary_operator"
+            | "comparison_operator"
+            | "boolean_operator"
+    ) {
         collect_binary_mutants(node, source, path, generated)
     } else if let Some(mutant) =
         try_mutate_boolean(node, source, path, generated.candidates.len() + 1)
@@ -169,10 +176,18 @@ const BINARY_MUTATIONS: &[(&str, &str)] = &[
     (">=", "<"),
     ("&&", "||"),
     ("||", "&&"),
+    ("and", "or"),
+    ("or", "and"),
+    ("in", "not in"),
+    ("not in", "in"),
+    ("is", "is not"),
+    ("is not", "is"),
     ("+", "-"),
     ("-", "+"),
     ("*", "/"),
     ("/", "*"),
+    ("%", "*"),
+    ("//", "/"),
 ];
 
 fn invert_binary_op(op: &str) -> Option<&'static str> {
@@ -186,13 +201,15 @@ fn invert_binary_op(op: &str) -> Option<&'static str> {
 
 fn try_mutate_boolean(node: Node, source: &[u8], path: &Path, id: usize) -> Option<AstMutant> {
     let kind = node.kind();
-    if kind != "boolean_literal" && kind != "true" && kind != "false" {
+    if kind != "boolean_literal" && kind != "true" && kind != "false" && kind != "boolean" {
         return None;
     }
     let text = node.utf8_text(source).ok()?;
     let replacement = match text {
         "true" => "false",
         "false" => "true",
+        "True" => "False",
+        "False" => "True",
         _ => return None,
     };
     Some(AstMutant {
