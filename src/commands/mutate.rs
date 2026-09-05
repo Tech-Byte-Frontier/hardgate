@@ -8,6 +8,7 @@ mod baselines;
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
 mod targets;
+mod workspace;
 
 use crate::config::HardgateConfig;
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
@@ -60,6 +61,9 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     if target_files.is_empty() {
         return handle_no_targets(opts.diff, opts.format.as_deref());
     }
+    let workspace = workspace::MutationWorkspace::create(root, &target_files)
+        .map_err(|error| MutationFailure::new("setup", "snapshot-error", format!("{error:#}")))?;
+    let root = workspace.root();
     let json = opts.format.as_deref() == Some("json");
     if !json {
         print_generation_notice(&target_files, opts.diff);
@@ -70,7 +74,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .or_else(|| config.mutation.test_cmd.clone());
     let max_count = resolve_max_mutants(&opts, &config)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
-    let mutants = generate_target_mutants(&target_files, max_count)
+    let mutants = generate_target_mutants(&target_files, max_count, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if mutants.is_empty() {
         return Err(MutationFailure::new(
@@ -94,6 +98,8 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         print_mutant_notice(mutants.len(), timeout);
     }
     let (results, stats) = run_mutant_batch(&mutants, &runner, root, json)?;
+    workspace.close()?;
+    crate::cancellation::check()?;
     finish_mutation_run(MutationRun {
         config: &config,
         opts: &opts,
@@ -219,11 +225,15 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     targets::effective_mutation_target(path, config)
 }
-fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
+fn generate_target_mutants(
+    files: &[PathBuf],
+    max_count: usize,
+    root: &Path,
+) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();
     let mut all = Vec::new();
     for file in files {
-        let content = fs::read_to_string(file)
+        let content = fs::read_to_string(root.join(file))
             .with_context(|| format!("Failed to read mutation target `{}`", file.display()))?;
         all.extend(mutator.generate_mutants(file, &content));
     }
@@ -357,6 +367,7 @@ fn run_mutant_batch(
     };
 
     for (idx, mutant) in mutants.iter().enumerate() {
+        crate::cancellation::check()?;
         if !json {
             print!(
                 "   [{}/{}] {}:{} {} ... ",

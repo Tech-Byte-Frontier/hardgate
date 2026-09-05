@@ -259,6 +259,7 @@ impl NativeMutationRunner {
         mutant: &AstMutant,
         root: &Path,
     ) -> MutationRunnerResult<MutantExecutionResult> {
+        crate::cancellation::install().map_err(MutationRunnerError::resolution)?;
         let start = Instant::now();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {

@@ -131,6 +131,7 @@
 //! the checksum, metadata, target marker, and version/commit identity together.
 
 pub mod adoption;
+pub mod cancellation;
 pub mod commands;
 pub mod config;
 pub mod diagnostics;

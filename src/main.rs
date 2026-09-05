@@ -149,7 +149,14 @@ fn main() -> anyhow::Result<()> {
     let _ = std::hint::black_box(build_info::TARGET);
     let _ = std::hint::black_box(build_info::BUILD_TARGET_MARKER);
     let cli = Cli::parse();
-    execute_with_json_errors(cli.command)
+    if matches!(cli.command, Commands::Mutate { .. }) {
+        hardgate::cancellation::install()?;
+    }
+    let result = execute_with_json_errors(cli.command);
+    if let Some(signal) = hardgate::cancellation::signal() {
+        std::process::exit(128 + signal);
+    }
+    result
 }
 
 fn execute_with_json_errors(command: Commands) -> anyhow::Result<()> {

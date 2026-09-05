@@ -120,11 +120,32 @@ mutation is enabled.
 The native runner:
 
 1. selects supported production (`source`) files, never tests or generated/fixture files;
-2. resolves one test command per target, unless `--test-cmd` overrides it;
+2. copies current workspace inputs to a private temporary directory and resolves test commands there;
 3. executes an unmutated baseline and stops before mutants if that baseline fails;
 4. applies bounded binary/boolean AST mutations one at a time;
 5. records killed, survived, timeout, compile-error, runner-error, equivalent, and unviable outcomes;
-6. restores and verifies original bytes after every mutant.
+6. restores and verifies the copied source bytes after every mutant, then removes the temporary workspace.
+
+The CLI copies dirty, untracked, and ignored regular files, including installed
+dependencies, without hardlinking them to live inputs. `.git` administrative
+data and directories named `target` are omitted. Test commands run from the
+copied repository or resolved package root; Cargo uses a fresh `target` inside
+that copy even when the invoking environment sets `CARGO_TARGET_DIR`.
+Commands requiring Git administrative data must be adapted before the
+unmutated baseline can pass. Internal symlinks are remapped into the copy;
+external symlinks, special files, and hardlinked mutation targets fail before
+tests. Choose a workspace root containing the required sources/dependencies.
+
+SIGINT/SIGTERM stop and reap owned test processes, verify restoration, and
+remove the copy before exit 130/143. Later edits in the original workspace are
+preserved. SIGKILL cannot run cleanup: the original source remains untouched,
+but a private `hardgate-mutation-<pid>-<id>` directory and test processes may
+remain. Stop those processes before deleting that exact temporary directory.
+Use an external `TMPDIR` with enough space for copied inputs and a fresh build.
+Mutation remains serial. Configured commands are trusted project code: the
+copy is not an operating-system sandbox for explicit absolute-path writes or
+external services. The low-level library runner still operates on its supplied
+root; library callers should supply their own disposable workspace.
 
 A scope with no viable mutation points fails. Native mutation is independent of mutation-report ingestion and does not invoke Stryker or cargo-mutants.
 

@@ -58,13 +58,19 @@ pub(crate) fn run_command_with_roots(
     timeout: Duration,
     operation: &str,
 ) -> ProcessOutcome {
+    if let Err(error) = crate::cancellation::install() {
+        return ProcessOutcome::Failed {
+            message: error.to_string(),
+            output: String::new(),
+        };
+    }
     let Some(program) = tokens.first() else {
         return ProcessOutcome::Failed {
             message: "Empty command string; nothing was executed.".to_string(),
             output: String::new(),
         };
     };
-    let mut child = match spawn_command(tokens, roots) {
+    let mut child = match spawn_command(tokens, roots, operation) {
         Ok(child) => child,
         Err(error) => {
             return ProcessOutcome::Failed {
@@ -99,7 +105,11 @@ pub(crate) fn append_output(existing: String, extra: String) -> String {
     format!("{existing}{separator}{extra}")
 }
 
-fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<Child> {
+fn spawn_command(
+    tokens: &[String],
+    roots: CommandRoots<'_>,
+    operation: &str,
+) -> std::io::Result<Child> {
     let mut command = Command::new(&tokens[0]);
     command
         .args(&tokens[1..])
@@ -107,6 +117,9 @@ fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<
         .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if operation == "mutation" {
+        command.env("CARGO_TARGET_DIR", roots.workspace_root.join("target"));
+    }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
     command.spawn()
@@ -320,6 +333,9 @@ enum ChildPoll {
 }
 
 fn poll_child(child: &mut Child) -> ChildPoll {
+    if let Err(error) = crate::cancellation::check() {
+        return ChildPoll::Error(error);
+    }
     match child.try_wait() {
         Ok(Some(status)) => ChildPoll::Exited(status),
         Ok(None) => ChildPoll::Running,
