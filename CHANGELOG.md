@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Machine-readable gate, mutation, no-op, config, and error outputs use
+  `schema_version: 1`; execution records distinguish `disabled`, `skipped`,
+  `incomplete`, `failed`, and `completed` evidence.
+- Exit status is 0 for pass/no-op, 1 for policy violations, and 2 when required
+  evidence or configuration cannot be evaluated. Complete verdict/summary counts survive bounded
+  `--max-diagnostics`/`--snippets` output; stable rule IDs replace message parsing and snippets use
+  only captured source bytes.
+- `check --diff` indexes the full eligible repository for clones and reports
+  changed/reference context, catching copies against unchanged files; dead-code analysis retains
+  required repository reference context.
+- Native `mutate` runs in a private workspace, restores and verifies source bytes
+  after each mutant, and cleans up owned processes and temporary files. Mutation report ingestion
+  remains a separate engine.
+- Policy discovery uses the nearest `hardgate.toml` up to the Git boundary;
+  absent policy defaults to `strict-agent` at the Git root. Fixed configuration tables reject
+  unknown keys, while `hardgate config` exposes effective policy, root, invocation directory, and identity.
+- Public command APIs return `CommandOutcome`/`CommandResult` and structured
+  reports/errors. `init` is project-aware and non-destructive; use `--preview` or `--full`, and add explicit
+  commands for ambiguous or nested projects. Shell completions, `--threads`, `--timing`, effective-policy
+  inspection, and bounded diagnostics are available; migrate consumers to documented roots, schema/status
+  checks, exit 1 versus 2, additive fields, and stable rule IDs.
+- Local unreleased release tooling drafts staged identity-bound receipts with
+  exact-version-before-default checks, explicit npm auth modes, and independent native/registry/consumer
+  verification. This is review-only local capability; no publication or external settings change is claimed.
+
 ## 0.5.0
 
 Hardgate 0.5.0 is the pre-1.0 compatibility boundary for the stabilization
