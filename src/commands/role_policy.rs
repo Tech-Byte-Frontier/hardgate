@@ -224,7 +224,7 @@ mod tests {
             report
                 .budget_violations
                 .iter()
-                .all(|finding| finding.file == PathBuf::from("src/source.rs"))
+                .all(|finding| finding.file.as_path() == std::path::Path::new("src/source.rs"))
         );
 
         let source = effective_file_budgets(&config, FileRole::Source);
