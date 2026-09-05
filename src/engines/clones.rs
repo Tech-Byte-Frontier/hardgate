@@ -7,8 +7,10 @@ mod index;
 mod tokenizer;
 use fingerprint::clone_fingerprint;
 pub use index::CloneIndexError;
-use index::{CloneIndexOptions, RawCloneMatch, build_index, token_kinds_match, token_slice};
-use tokenizer::Token;
+use index::{
+    CloneIndexOptions, RawCloneMatch, build_index, stream_path, token_kinds_match, token_slice,
+};
+use tokenizer::{Token, TokenInterner};
 
 /// Return a stable repository-relative key without touching the filesystem.
 /// Lexical normalization keeps deleted or otherwise nonexistent paths safe to
@@ -200,32 +202,54 @@ impl CloneDetector {
             index.raw_matches,
             self.min_tokens,
             self.min_lines,
-            &index.token_streams,
+            CloneStreams {
+                token_streams: &index.token_streams,
+                interner: &index.interner,
+            },
         ))
     }
 }
+
+#[derive(Clone, Copy)]
+struct CloneStreams<'a> {
+    token_streams: &'a [(PathBuf, Vec<Token>)],
+    interner: &'a TokenInterner,
+}
+
 fn coalesce_matches(
     mut matches: Vec<RawCloneMatch>,
     min_tokens: usize,
     min_lines: usize,
-    token_streams: &[(PathBuf, Vec<Token>)],
+    streams: CloneStreams<'_>,
 ) -> Vec<CloneViolation> {
     if matches.is_empty() {
         return Vec::new();
     }
     matches.sort_by(|a, b| {
-        a.file_a
-            .cmp(&b.file_a)
-            .then(a.file_b.cmp(&b.file_b))
+        stream_path(a.stream_idx_a, streams.token_streams)
+            .cmp(stream_path(b.stream_idx_a, streams.token_streams))
+            .then(a.stream_idx_a.cmp(&b.stream_idx_a))
+            .then(
+                stream_path(a.stream_idx_b, streams.token_streams)
+                    .cmp(stream_path(b.stream_idx_b, streams.token_streams)),
+            )
+            .then(a.stream_idx_b.cmp(&b.stream_idx_b))
             .then(a.start_a.cmp(&b.start_a))
             .then(a.start_b.cmp(&b.start_b))
+            .then(a.start_idx_a.cmp(&b.start_idx_a))
+            .then(a.start_idx_b.cmp(&b.start_idx_b))
     });
     let mut coalesced: Vec<RawCloneMatch> = Vec::new();
     for m in matches {
         let mut merged = false;
         if let Some(last) = coalesced.last_mut() {
-            let same_pair = last.file_a == m.file_a && last.file_b == m.file_b;
-            if matches_can_merge(last, &m, same_pair, token_streams) {
+            // Keep the historical lexical-pair pruning contract; stream IDs
+            // below still prevent duplicate-path streams from being merged.
+            let same_pair = stream_path(last.stream_idx_a, streams.token_streams)
+                == stream_path(m.stream_idx_a, streams.token_streams)
+                && stream_path(last.stream_idx_b, streams.token_streams)
+                    == stream_path(m.stream_idx_b, streams.token_streams);
+            if matches_can_merge(last, &m, same_pair, streams.token_streams) {
                 merge_match(last, &m);
                 merged = true;
             } else if same_pair && ranges_overlap(last, &m) {
@@ -241,7 +265,7 @@ fn coalesce_matches(
     }
     coalesced
         .into_iter()
-        .filter_map(|c| build_violation(c, min_tokens, min_lines, token_streams))
+        .filter_map(|c| build_violation(c, min_tokens, min_lines, streams))
         .collect()
 }
 fn ranges_overlap(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
@@ -258,11 +282,50 @@ fn matches_can_merge(
     same_pair
         && left.stream_idx_a == right.stream_idx_a
         && left.stream_idx_b == right.stream_idx_b
-        && right.start_a <= left.end_a.saturating_add(2)
-        && right.start_b <= left.end_b.saturating_add(2)
-        && right.start_idx_a <= left.end_idx_a.saturating_add(1)
-        && right.start_idx_b <= left.end_idx_b.saturating_add(1)
-        && merged_ranges_match(left, right, streams)
+        && within_gap(right.start_a, left.end_a, 2)
+        && within_gap(right.start_b, left.end_b, 2)
+        && within_gap(right.start_idx_a, left.end_idx_a, 1)
+        && within_gap(right.start_idx_b, left.end_idx_b, 1)
+        && (aligned_ranges_are_verified(left, right) || merged_ranges_match(left, right, streams))
+}
+
+fn within_gap(start: usize, end: usize, gap: usize) -> bool {
+    end.checked_add(gap).is_some_and(|limit| start <= limit)
+}
+
+fn ranges_touch_or_overlap(
+    left_start: usize,
+    left_end: usize,
+    right_start: usize,
+    right_end: usize,
+) -> bool {
+    within_gap(right_start, left_end, 1) && within_gap(left_start, right_end, 1)
+}
+
+fn aligned_ranges_are_verified(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
+    same_token_alignment(left, right)
+        && ranges_touch_or_overlap(
+            left.start_idx_a,
+            left.end_idx_a,
+            right.start_idx_a,
+            right.end_idx_a,
+        )
+        && ranges_touch_or_overlap(
+            left.start_idx_b,
+            left.end_idx_b,
+            right.start_idx_b,
+            right.end_idx_b,
+        )
+}
+
+fn same_token_alignment(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
+    checked_delta(right.start_idx_a, left.start_idx_a)
+        .zip(checked_delta(right.start_idx_b, left.start_idx_b))
+        .is_some_and(|(delta_a, delta_b)| delta_a == delta_b)
+}
+
+fn checked_delta(right: usize, left: usize) -> Option<usize> {
+    right.checked_sub(left).or(left.checked_sub(right))
 }
 fn merge_match(left: &mut RawCloneMatch, right: &RawCloneMatch) {
     left.end_a = left.end_a.max(right.end_a);
@@ -276,7 +339,7 @@ fn build_violation(
     c: RawCloneMatch,
     min_tokens: usize,
     min_lines: usize,
-    token_streams: &[(PathBuf, Vec<Token>)],
+    streams: CloneStreams<'_>,
 ) -> Option<CloneViolation> {
     let span_a = c.end_a.saturating_sub(c.start_a) + 1;
     let span_b = c.end_b.saturating_sub(c.start_b) + 1;
@@ -284,8 +347,18 @@ fn build_violation(
     if span < min_lines {
         return None;
     }
-    let tokens_a = token_slice(c.stream_idx_a, c.start_idx_a, c.end_idx_a, token_streams)?;
-    let tokens_b = token_slice(c.stream_idx_b, c.start_idx_b, c.end_idx_b, token_streams)?;
+    let tokens_a = token_slice(
+        c.stream_idx_a,
+        c.start_idx_a,
+        c.end_idx_a,
+        streams.token_streams,
+    )?;
+    let tokens_b = token_slice(
+        c.stream_idx_b,
+        c.start_idx_b,
+        c.end_idx_b,
+        streams.token_streams,
+    )?;
     if !token_kinds_match(tokens_a, tokens_b) {
         return None;
     }
@@ -294,29 +367,31 @@ fn build_violation(
     if actual_tokens < min_tokens {
         return None;
     }
+    let file_a = stream_path(c.stream_idx_a, streams.token_streams).to_path_buf();
+    let file_b = stream_path(c.stream_idx_b, streams.token_streams).to_path_buf();
     Some(CloneViolation {
-        file_a: c.file_a.clone(),
+        file_a,
         lines_a: (c.start_a, c.end_a),
-        file_b: c.file_b.clone(),
+        file_b,
         lines_b: (c.start_b, c.end_b),
         tokens: actual_tokens,
         lines: span,
-        fingerprint: clone_fingerprint(tokens_a),
+        fingerprint: clone_fingerprint(tokens_a, streams.interner),
         message: format!(
             "Duplicate code clone ({} lines, ~{} tokens) between `{}:{}-{}` and `{}:{}-{}`",
             span,
             actual_tokens,
-            c.file_a.display(),
+            stream_path(c.stream_idx_a, streams.token_streams).display(),
             c.start_a,
             c.end_a,
-            c.file_b.display(),
+            stream_path(c.stream_idx_b, streams.token_streams).display(),
             c.start_b,
             c.end_b
         ),
         recommendation: format!(
             "Extract duplicated logic in `{}` and `{}` into a shared helper.",
-            c.file_a.display(),
-            c.file_b.display()
+            stream_path(c.stream_idx_a, streams.token_streams).display(),
+            stream_path(c.stream_idx_b, streams.token_streams).display()
         ),
     })
 }
