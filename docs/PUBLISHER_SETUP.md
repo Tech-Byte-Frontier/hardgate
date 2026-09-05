@@ -7,21 +7,21 @@ checkout and the official sources linked below.
 ## Current release state
 
 The active workflow is `.github/workflows/release.yml`. Repository-wide pins are Node
-`26.8.1`, npm `12.0.2` (`release.yml:32-34`),
+`26.8.1`, npm `12.0.2` (the workflow `env` block),
 `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), and
 `actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` (`v7.0.0`).
 
 `publish-npm` runs on GitHub-hosted `ubuntu-24.04` with job-scoped `contents: read`,
-`actions: read`, and `id-token: write` (`release.yml:906-942`). `publish-crates` has no
-job-level permissions block and inherits `contents: read` and `actions: read`
-(`release.yml:25-27`, `:729-742`); it cannot request OIDC today.
+`actions: read`, and `id-token: write`. `publish-crates` has no job-level permissions
+block and inherits `contents: read` and `actions: read` from the workflow defaults; it
+cannot request OIDC today.
 The active authentication mode is **token**:
 
 - `publication-preflight` requires `secrets.NPM_TOKEN` as `NODE_AUTH_TOKEN`
-  (`release.yml:604-615`); `publish-npm` uses it for both publication steps
-  (`release.yml:977-996`).
+  in the `Authenticate the npm publication credential` step; `publish-npm` uses it in
+  `Publish and verify each platform package in order` and `Publish wrapper only after all platforms are verified`.
 - `publication-preflight` and `publish-crates` require `secrets.CARGO_REGISTRY_TOKEN`
-  (`release.yml:595-603`, `:826-834`).
+  in `Require the crates.io publication credential` and `Publish crate when exact version is missing`, respectively.
 - The npm child process runs `npm publish --provenance --access public --ignore-scripts`;
   the token is unset before the publication verifier.
 No remote trusted-publisher setting, GitHub environment, or secret value was read. Treat
@@ -100,7 +100,7 @@ failure is terminal for the job, with no automatic `CARGO_REGISTRY_TOKEN` fallba
 Before selecting trusted mode, an authorized workflow change must verify:
 
 1. The job is GitHub-hosted and the exact workflow filename is `release.yml`.
-2. The job declares only the needed `contents: read` and `id-token: write` permissions.
+2. Each trusted publisher job keeps job-scoped `contents: read` and `actions: read` (needed by artifact downloads) and adds `id-token: write`; do not rely on broader workflow defaults.
 3. Node/npm meet npm's documented minimums and package metadata identifies
    `Tech-Byte-Frontier/hardgate`.
 4. Each external binding matches owner, repository, workflow file, and any environment
