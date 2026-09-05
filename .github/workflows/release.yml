@@ -1827,15 +1827,16 @@ jobs:
             sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' sh "$npm_global_command"
           verify_install "$npm_global" "$npm_global_command" "$npm_global_home" npm-global
 
-          pnpm_global="$consumer_tmp/pnpm-global"; pnpm_global_home="$consumer_tmp/pnpm-global-home"
+          pnpm_global="$consumer_tmp/pnpm-global"; pnpm_global_bin_expected="$pnpm_global/bin"; pnpm_global_home="$consumer_tmp/pnpm-global-home"
           pnpm_global_config="$consumer_tmp/pnpm-global-config"; pnpm_global_store="$pnpm_global/store"
-          mkdir -p "$pnpm_global" "$pnpm_global_home" "$pnpm_global_config" "$pnpm_global_store"
+          mkdir -p "$pnpm_global" "$pnpm_global_bin_expected" "$pnpm_global_home" "$pnpm_global_config" "$pnpm_global_store"
           env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \
-            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global:$manager_path" \
+            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global_bin_expected:$manager_path" \
             "$pnpm_tool" add --ignore-scripts --global --store-dir "$pnpm_global_store" "@tech-byte-frontier/hardgate@latest"
           pnpm_global_bin=$(env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \
-            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global:$manager_path" \
+            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global_bin_expected:$manager_path" \
             "$pnpm_tool" bin --global)
+          test "$pnpm_global_bin" = "$pnpm_global_bin_expected"
           test -d "$pnpm_global_bin"; pnpm_global_command="$pnpm_global_bin/hardgate"
           test -x "$pnpm_global_command"
           env -i HOME="$pnpm_global_home" EXPECTED="$expected" PATH="$pnpm_global_bin:$private_bin:$node_bin:/usr/bin:/bin" \

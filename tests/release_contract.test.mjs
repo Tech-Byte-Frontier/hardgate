@@ -3,6 +3,7 @@
 "use strict";
 
 import "./release_contract.workflow.mjs";
+import "./release_contract.globals.mjs";
 import "./release_contract.authorization.mjs";
 import "./release_contract.artifacts.mjs";
 import "./release_contract.staging.mjs";
