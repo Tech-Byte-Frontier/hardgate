@@ -1,0 +1,195 @@
+// Isolated package-manager environments and installed-wrapper verification.
+"use strict";
+
+import fs from "node:fs";
+import crypto from "node:crypto";
+import path from "node:path";
+import { createRequire } from "node:module";
+
+import { runReleaseProcess } from "./release-process.mjs";
+import { WRAPPER_NAME } from "./packed-consumer-artifacts.mjs";
+
+const PROCESS_TIMEOUT_MS = 120_000;
+const PROCESS_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function managerPath(name) {
+  const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const entry of entries) {
+    const candidate = path.join(entry, name);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0) return candidate;
+    } catch {
+      // Try the next PATH entry.
+    }
+  }
+  fail(`could not find ${name} on PATH`);
+}
+
+function clearAmbientConfig(env) {
+  for (const key of Object.keys(env)) {
+    if (/^(?:NPM_CONFIG_|npm_config_|PNPM_CONFIG_|pnpm_config_)/.test(key)) delete env[key];
+  }
+  for (const key of [
+    "HARDGATE_BINARY", "HARDGATE_BINARY_PATH", "HARDGATE_LAUNCHER_DEPTH", "NODE_PATH", "NODE_OPTIONS",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+  ]) delete env[key];
+}
+
+function writeNpmConfig(file, registryUrl, cache) {
+  fs.writeFileSync(file, [
+    `registry=${registryUrl}`, `cache=${cache}`, "audit=false", "fund=false",
+    "update-notifier=false", "fetch-retries=0", "fetch-timeout=10000", "include=optional",
+    "optional=true", "ignore-scripts=false", "proxy=", "https-proxy=",
+    "noproxy=127.0.0.1,localhost", "",
+  ].join("\n"));
+}
+
+function cleanConsumerEnvironment(root, registryUrl, cache, store) {
+  const env = { ...process.env };
+  clearAmbientConfig(env);
+  const nodeDirectory = path.dirname(process.execPath);
+  env.PATH = [nodeDirectory, "/usr/local/bin", "/usr/bin", "/bin"].join(path.delimiter);
+  env.HOME = path.join(root, "home");
+  env.XDG_CONFIG_HOME = path.join(root, "config");
+  env.PNPM_HOME = path.join(root, "pnpm-home");
+  env.NPM_CONFIG_USERCONFIG = path.join(root, "npmrc");
+  env.NPM_CONFIG_CACHE = cache;
+  env.NPM_CONFIG_REGISTRY = registryUrl;
+  env.NPM_CONFIG_AUDIT = "false";
+  env.NPM_CONFIG_FUND = "false";
+  env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
+  env.NPM_CONFIG_FETCH_RETRIES = "0";
+  env.NPM_CONFIG_FETCH_TIMEOUT = "10000";
+  env.NPM_CONFIG_INCLUDE = "optional";
+  env.NPM_CONFIG_OMIT = "";
+  env.NPM_CONFIG_OPTIONAL = "true";
+  env.NPM_CONFIG_IGNORE_SCRIPTS = "false";
+  env.NPM_CONFIG_PROXY = "";
+  env.NPM_CONFIG_HTTPS_PROXY = "";
+  env.NPM_CONFIG_NO_PROXY = "127.0.0.1,localhost";
+  env.PNPM_STORE_DIR = store;
+  env.PNPM_CONFIG_REGISTRY = registryUrl;
+  env.PNPM_CONFIG_IGNORE_SCRIPTS = "false";
+  env.PNPM_CONFIG_OPTIONAL = "true";
+  env.npm_config_userconfig = env.NPM_CONFIG_USERCONFIG;
+  env.npm_config_cache = cache;
+  env.npm_config_registry = registryUrl;
+  env.npm_config_audit = "false";
+  env.npm_config_fund = "false";
+  env.npm_config_update_notifier = "false";
+  env.npm_config_fetch_retries = "0";
+  env.npm_config_fetch_timeout = "10000";
+  env.npm_config_include = "optional";
+  env.npm_config_omit = "";
+  env.npm_config_optional = "true";
+  env.npm_config_ignore_scripts = "false";
+  env.npm_config_proxy = "";
+  env.npm_config_https_proxy = "";
+  env.npm_config_no_proxy = "127.0.0.1,localhost";
+  env.pnpm_store_dir = store;
+  env.pnpm_config_registry = registryUrl;
+  env.pnpm_config_ignore_scripts = "false";
+  env.pnpm_config_optional = "true";
+  env.CI = "1";
+  fs.mkdirSync(env.HOME, { recursive: true });
+  fs.mkdirSync(env.XDG_CONFIG_HOME, { recursive: true });
+  fs.mkdirSync(env.PNPM_HOME, { recursive: true });
+  fs.mkdirSync(cache, { recursive: true });
+  fs.mkdirSync(store, { recursive: true });
+  writeNpmConfig(env.NPM_CONFIG_USERCONFIG, registryUrl, cache);
+  return env;
+}
+
+export function createConsumerRoot(parent, manager) {
+  const root = path.join(parent, manager);
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+    name: `hardgate-packed-${manager}-consumer`, version: "1.0.0", private: true,
+  }, null, 2) + "\n");
+  return root;
+}
+
+function installedPackageManifest(root, packageName, from = path.join(root, "package.json")) {
+  const requireFromRoot = createRequire(from);
+  let manifestPath;
+  try {
+    manifestPath = requireFromRoot.resolve(`${packageName}/package.json`);
+  } catch (error) {
+    fail(`installed optional dependency ${packageName} is not resolvable: ${error.message}`);
+  }
+  return { path: manifestPath, manifest: JSON.parse(fs.readFileSync(manifestPath, "utf8")) };
+}
+
+function installedPackageBinary(root, packageName, from) {
+  const packageManifest = installedPackageManifest(root, packageName, from);
+  const binary = path.join(path.dirname(packageManifest.path), "bin", "hardgate");
+  let stat;
+  try {
+    stat = fs.statSync(binary);
+  } catch (error) {
+    fail(`installed ${packageName} binary is missing: ${binary} (${error.message})`);
+  }
+  if (!stat.isFile() || (stat.mode & 0o111) === 0) fail(`installed ${packageName} binary is not executable: ${binary}`);
+  return { ...packageManifest, binary };
+}
+
+async function boundedProcess(command, args, options, label) {
+  try {
+    return await runReleaseProcess(command, args, {
+      cwd: options.cwd, env: options.env, timeoutMs: PROCESS_TIMEOUT_MS, maxBuffer: PROCESS_OUTPUT_BYTES,
+    });
+  } catch (error) {
+    const stdout = error.stdout ? `\nstdout:\n${error.stdout}` : "";
+    const stderr = error.stderr ? `\nstderr:\n${error.stderr}` : "";
+    fail(`${label} failed: ${error.message}${stdout}${stderr}`);
+  }
+}
+
+function verifyInstalledPackage(packageValue, expectedName, expectedVersion, label) {
+  if (packageValue.manifest.name !== expectedName || packageValue.manifest.version !== expectedVersion) {
+    fail(`${label} identity is ${packageValue.manifest.name}@${packageValue.manifest.version}; expected ${expectedName}@${expectedVersion}`);
+  }
+}
+
+export async function installAndVerify({ manager, root, registry, version, host, wrapperLauncherBytes, expectedOutput, expectedHash, tempRoot }) {
+  const cache = path.join(tempRoot, `${manager}-cache`);
+  const store = path.join(tempRoot, `${manager}-store`);
+  const env = cleanConsumerEnvironment(root, registry.baseUrl, cache, store);
+  const managerExecutable = managerPath(manager);
+  const spec = `${WRAPPER_NAME}@${version}`;
+  const args = manager === "npm"
+    ? ["install", "--no-audit", "--no-fund", "--include=optional", "--registry", registry.baseUrl, spec]
+    : ["add", "--registry", registry.baseUrl, "--store-dir", store, spec];
+  await boundedProcess(managerExecutable, args, { cwd: root, env }, `${manager} packed consumer install`);
+  const wrapper = installedPackageManifest(root, WRAPPER_NAME);
+  verifyInstalledPackage(wrapper, WRAPPER_NAME, version, `${manager} installed wrapper`);
+  const installedLauncher = path.join(path.dirname(wrapper.path), "bin", "hardgate.js");
+  if (!fs.readFileSync(installedLauncher).equals(wrapperLauncherBytes)) fail(`${manager} installed wrapper launcher bytes differ from the packed wrapper archive`);
+  const nativePackage = installedPackageBinary(root, host, wrapper.path);
+  verifyInstalledPackage(nativePackage, host, version, `${manager} installed native`);
+  const installedHash = crypto.createHash("sha256").update(fs.readFileSync(nativePackage.binary)).digest("hex");
+  if (installedHash !== expectedHash) fail(`${manager} resolved ${host} digest ${installedHash} does not match expected ${expectedHash}`);
+  const wrapperBinary = path.join(root, "node_modules", ".bin", "hardgate");
+  let wrapperStat;
+  try {
+    wrapperStat = fs.statSync(wrapperBinary);
+  } catch (error) {
+    fail(`${manager} installed wrapper .bin entry is missing: ${error.message}`);
+  }
+  if (!wrapperStat.isFile() || (wrapperStat.mode & 0o111) === 0) fail(`${manager} installed wrapper .bin entry is not executable`);
+  const output = (await boundedProcess(wrapperBinary, ["--version"], { cwd: root, env }, `${manager} packed consumer invocation`)).trim();
+  if (output !== expectedOutput) fail(`${manager} installed wrapper reported ${JSON.stringify(output)}; expected ${JSON.stringify(expectedOutput)}`);
+  return { manager, root, nativeBinary: fs.realpathSync(nativePackage.binary), nativeSha256: installedHash, versionOutput: output };
+}
+
+export async function expectedVersion(binary, version, tempRoot) {
+  const env = cleanConsumerEnvironment(tempRoot, "http://127.0.0.1/", path.join(tempRoot, "expected-cache"), path.join(tempRoot, "expected-store"));
+  const output = (await boundedProcess(binary, ["--version"], { cwd: tempRoot, env }, "expected native binary invocation")).trim();
+  if (!output.startsWith(`hardgate ${version} (`) || !output.endsWith(")")) fail(`--binary --version output does not identify ${version}: ${JSON.stringify(output)}`);
+  return output;
+}
