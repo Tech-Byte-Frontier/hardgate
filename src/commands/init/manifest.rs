@@ -50,7 +50,11 @@ pub(crate) fn collect_manifests(root: &Path) -> ManifestInventory {
     inventory
 }
 
-pub(crate) fn collect_manifests_at(directory: &Path, depth: usize, inventory: &mut ManifestInventory) {
+pub(crate) fn collect_manifests_at(
+    directory: &Path,
+    depth: usize,
+    inventory: &mut ManifestInventory,
+) {
     if depth == 0 {
         return;
     }

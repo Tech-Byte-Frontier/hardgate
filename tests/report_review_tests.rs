@@ -217,3 +217,42 @@ fn comparison_stdout_errors_return_a_command_error_instead_of_panicking() {
     assert_eq!(output.status.code(), Some(2));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
 }
+
+#[test]
+fn scope_advice_adds_only_omitted_flags_and_requires_enabling_evidence() {
+    let config =
+        "[gate]\npreset = 'custom'\n[coverage]\nenabled = false\n[mutation]\nenabled = false\n";
+    for (index, flags, suggestion) in [
+        (0, vec![], "add `--all --dead-code`"),
+        (1, vec!["--all"], "add `--dead-code`"),
+        (2, vec!["--dead-code"], "add `--all`"),
+        (3, vec!["--all", "--dead-code"], ""),
+    ] {
+        let fixture = Fixture::new(
+            "report-review",
+            &format!("scope-advice-{index}"),
+            Some(config),
+        );
+        fixture.write("src/lib.rs", "pub fn value() -> i32 { 1 }\n");
+        let mut args = vec!["check", "--json"];
+        args.extend(flags);
+        let output = run(fixture.as_ref(), &args);
+        assert_status(&output, true, "scope advice");
+        let value = json(&output);
+        let advice = value["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find(|s| s.contains("partial gate"))
+            .unwrap();
+        if suggestion.is_empty() {
+            assert!(!advice.contains("add `--"));
+        } else {
+            assert!(advice.contains(suggestion));
+        }
+        assert!(advice.contains("enable `[coverage]`"));
+        assert!(advice.contains("enable `[mutation]`"));
+        assert!(!advice.contains("for complete evidence"));
+    }
+}

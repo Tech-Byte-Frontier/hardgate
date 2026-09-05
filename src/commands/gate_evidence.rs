@@ -1,3 +1,4 @@
+use super::check::CheckOptions;
 use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::classify_files;
@@ -30,6 +31,78 @@ pub(crate) fn empty_discovery_advisory(diff: bool, scoped: bool) -> String {
         "no git-modified source files detected to check.".to_string()
     } else {
         "no matching source files detected.".to_string()
+    }
+}
+
+pub(crate) fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String {
+    let (omitted, recommendations) = collect_scope_omissions(config, opts);
+    if omitted.is_empty() {
+        "This check requested every configured report and static/orchestration engine in its selected scope; consult engine states for completion. Native mutation execution remains a separate `hardgate mutate` command."
+            .to_string()
+    } else {
+        let rec = format_recommendations(&recommendations);
+        format!(
+            "This is a partial gate; omitted {}.{} Native mutation execution remains separate from report ingestion.",
+            omitted.join(", "),
+            rec
+        )
+    }
+}
+
+fn collect_static_omissions(
+    config: &HardgateConfig,
+    opts: &CheckOptions,
+    omitted: &mut Vec<&'static str>,
+    recs: &mut Vec<&'static str>,
+) {
+    let missing_all = !opts.all;
+    let missing_dead_code = !opts.dead_code && !config.analysis.dead_code.enabled;
+
+    if missing_all {
+        omitted.push("configured formatter/linter/test commands");
+    }
+    if missing_dead_code {
+        omitted.push("dead-code analysis");
+    }
+    match (missing_all, missing_dead_code) {
+        (true, true) => recs.push("add `--all --dead-code` to this check command"),
+        (true, false) => recs.push("add `--all` to this check command"),
+        (false, true) => recs.push("add `--dead-code` to this check command"),
+        (false, false) => {}
+    }
+}
+
+fn collect_evidence_omissions(
+    config: &HardgateConfig,
+    omitted: &mut Vec<&'static str>,
+    recs: &mut Vec<&'static str>,
+) {
+    if !config.coverage.enabled {
+        omitted.push("coverage evidence (disabled by policy)");
+        recs.push("enable `[coverage]`, generate LCOV, then run `verify`");
+    }
+    if !config.mutation.enabled {
+        omitted.push("mutation evidence (disabled by policy)");
+        recs.push("enable `[mutation]` and configure mutation reports for ingestion or run `mutate` for native execution");
+    }
+}
+
+fn collect_scope_omissions(
+    config: &HardgateConfig,
+    opts: &CheckOptions,
+) -> (Vec<&'static str>, Vec<&'static str>) {
+    let mut omitted = Vec::new();
+    let mut recs = Vec::new();
+    collect_static_omissions(config, opts, &mut omitted, &mut recs);
+    collect_evidence_omissions(config, &mut omitted, &mut recs);
+    (omitted, recs)
+}
+
+fn format_recommendations(recs: &[&'static str]) -> String {
+    if recs.is_empty() {
+        String::new()
+    } else {
+        format!(" Next: {}.", recs.join("; "))
     }
 }
 

@@ -199,23 +199,20 @@ fn starts_routine_declaration(trimmed: &str) -> Option<bool> {
     }
 }
 
+fn strip_pub_visibility(rest: &str) -> &str {
+    rest.strip_prefix('(')
+        .and_then(|s| s.split_once(')'))
+        .map(|(_, after)| after.trim_start())
+        .unwrap_or(rest)
+}
+
 fn is_use_declaration(trimmed: &str) -> bool {
     if trimmed.starts_with("use ") {
         return true;
     }
     if let Some(rest) = trimmed.strip_prefix("pub") {
         let rest = rest.trim_start();
-        if rest.starts_with("use ") {
-            return true;
-        }
-        if rest.starts_with('(') {
-            if let Some(after_paren) = rest.find(')') {
-                let after = rest[after_paren + 1..].trim_start();
-                if after.starts_with("use ") {
-                    return true;
-                }
-            }
-        }
+        return strip_pub_visibility(rest).starts_with("use ");
     }
     false
 }
@@ -272,12 +269,7 @@ fn strip_export_and_pub(trimmed: &str) -> &str {
         return trimmed;
     };
     let rest = rest.trim_start();
-    if let Some(stripped) = rest.strip_prefix('(') {
-        if let Some(after_paren) = stripped.find(')') {
-            return stripped[after_paren + 1..].trim_start();
-        }
-    }
-    rest
+    strip_pub_visibility(rest)
 }
 
 fn is_valid_type_alias_name(name: &str) -> bool {

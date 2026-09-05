@@ -106,10 +106,7 @@ fn collect_node_mutants(
     let kind = node.kind();
     if matches!(
         kind,
-        "binary_expression"
-            | "binary_operator"
-            | "comparison_operator"
-            | "boolean_operator"
+        "binary_expression" | "binary_operator" | "comparison_operator" | "boolean_operator"
     ) {
         collect_binary_mutants(node, source, path, generated)
     } else if let Some(mutant) =

@@ -72,13 +72,15 @@ fn test_summary_separates_code_findings_from_analysis_blockers() {
     assert_eq!(report.analysis_blockers_count(), 0);
 
     // Add an orchestration / analysis blocker
-    report.orchestration_violations.push(hardgate::engines::OrchestrationViolation {
-        step: "coverage-report".to_string(),
-        command: "coverage/lcov.info".to_string(),
-        exit_code: Some(1),
-        output: "Required coverage report was not found.".to_string(),
-        recommendation: "generate coverage".to_string(),
-    });
+    report
+        .orchestration_violations
+        .push(hardgate::engines::OrchestrationViolation {
+            step: "coverage-report".to_string(),
+            command: "coverage/lcov.info".to_string(),
+            exit_code: Some(1),
+            output: "Required coverage report was not found.".to_string(),
+            recommendation: "generate coverage".to_string(),
+        });
 
     assert_eq!(report.code_findings_count(), 3);
     assert_eq!(report.analysis_blockers_count(), 1);

@@ -205,7 +205,7 @@ fn check_all_reports_complete_evidence_advisory() {
             .unwrap()
             .is_empty()
     );
-    assert_advisory(&report, "evaluated every configured report");
+    assert_advisory(&report, "requested every configured report");
 }
 
 #[test]
