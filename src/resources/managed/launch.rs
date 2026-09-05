@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+// Match execvp's unset-PATH defaults for the supported Linux C libraries.
+#[cfg(target_env = "musl")]
+const DEFAULT_PATH: &str = "/usr/local/bin:/bin:/usr/bin";
+#[cfg(not(target_env = "musl"))]
+const DEFAULT_PATH: &str = "/bin:/usr/bin";
+
 pub(super) fn available_tools() -> io::Result<Option<(PathBuf, PathBuf)>> {
     // Scope commands execute in the caller's environment and namespaces;
     // the user manager applies resource limits to that existing process.
@@ -135,7 +141,7 @@ fn resolve_original_program(command: &Command) -> io::Result<PathBuf> {
     let path = command
         .get_envs()
         .find(|(name, _)| *name == "PATH")
-        .and_then(|(_, value)| value);
+        .map(|(_, value)| value.unwrap_or(OsStr::new(DEFAULT_PATH)));
     find_program(command.get_program(), path, command.get_current_dir()).ok_or_else(|| {
         resource_error("Failed to execute mutation command: executable was not found in PATH")
     })
@@ -147,13 +153,26 @@ fn find_program(
     directory: Option<&Path>,
 ) -> Option<PathBuf> {
     let inherited = std::env::var_os("PATH");
-    let path = path.or(inherited.as_deref())?;
+    let path = path
+        .or(inherited.as_deref())
+        .unwrap_or(OsStr::new(DEFAULT_PATH));
     let directory = std::env::current_dir()
         .ok()?
         .join(directory.unwrap_or(Path::new(".")));
     std::env::split_paths(path)
         .map(|entry| directory.join(entry).join(program))
-        .find(|entry| entry.is_file())
+        .find(|entry| executable_file(entry))
+}
+
+fn executable_file(path: &Path) -> bool {
+    path.is_file()
+        && rustix::fs::accessat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::Access::EXEC_OK,
+            rustix::fs::AtFlags::EACCESS,
+        )
+        .is_ok()
 }
 
 #[cfg(test)]
