@@ -180,6 +180,7 @@ fn javascript_config_rejects_a_directory_as_the_tool() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn javascript_config_accepts_a_validated_local_executable() {
     balanced_case(

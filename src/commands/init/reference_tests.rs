@@ -6,6 +6,7 @@ fn missing_repository_reference_is_distinguished_from_invalid_path() {
     let root = std::env::temp_dir().join(format!("hardgate-init-reference-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
+    fs::create_dir(root.join(".git")).unwrap();
     assert_eq!(
         legacy_reference_status(&root, "origin/main"),
         ReferenceStatus::Missing
