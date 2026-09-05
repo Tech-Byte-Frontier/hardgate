@@ -82,7 +82,7 @@ function assertNoSecretFields(value, label = "receipt") {
   }
 }
 
-export function assertText(value, label, { max = 4096, allowEmpty = false } = {}) {
+function assertText(value, label, { max = 4096, allowEmpty = false } = {}) {
   if (typeof value !== "string") fail(`${label} must be a string`);
   if ((!allowEmpty && value.length === 0) || value.length > max) fail(`${label} has an invalid length`);
   if (value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)) fail(`${label} contains unsupported characters`);
