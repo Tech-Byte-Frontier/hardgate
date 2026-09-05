@@ -94,9 +94,60 @@ impl SupportedLanguage {
         let tree = lang
             .parse_tree(content)
             .ok_or_else(|| anyhow::anyhow!("Tree-sitter did not return a syntax tree"))?;
-        if tree.root_node().has_error() {
+        if has_syntax_errors(&tree, lang, content.as_bytes()) {
             anyhow::bail!("Tree-sitter found syntax errors in {}", path.display());
         }
         Ok(Some((lang, tree)))
     }
 }
+
+fn has_syntax_errors(tree: &tree_sitter::Tree, lang: SupportedLanguage, source: &[u8]) -> bool {
+    let root = tree.root_node();
+    if !root.has_error() {
+        return false;
+    }
+    has_genuine_syntax_error(root, lang, source)
+}
+
+fn has_genuine_syntax_error(node: tree_sitter::Node, lang: SupportedLanguage, source: &[u8]) -> bool {
+    if node.is_error() || node.is_missing() {
+        if is_benign_jsx_attribute_error(node, lang, source) {
+            return false;
+        }
+        return true;
+    }
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i)
+            && child.has_error()
+            && has_genuine_syntax_error(child, lang, source)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_benign_jsx_attribute_error(
+    node: tree_sitter::Node,
+    lang: SupportedLanguage,
+    source: &[u8],
+) -> bool {
+    if !matches!(lang, SupportedLanguage::Tsx | SupportedLanguage::JavaScript) {
+        return false;
+    }
+    let mut current = Some(node);
+    let mut in_jsx_attribute = false;
+    while let Some(parent) = current.and_then(|n| n.parent()) {
+        if parent.kind() == "jsx_attribute" {
+            in_jsx_attribute = true;
+            break;
+        }
+        current = Some(parent);
+    }
+    if !in_jsx_attribute {
+        return false;
+    }
+    let text = node.utf8_text(source).unwrap_or_default();
+    text.contains('&')
+}
+

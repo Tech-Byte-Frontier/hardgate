@@ -81,3 +81,39 @@ fn parser_reuse_preserves_errors_language_switches_and_independent_trees() {
         assert_eq!(second[0].name, "second");
     }
 }
+
+#[test]
+fn test_python_parameter_separators_and_comments() {
+    let mut analyzer = ComplexityAnalyzer::new();
+    let root = Path::new(".");
+    let code = r#"def total(*, a, b, c, d):
+    return a + b + c + d
+
+def positional(x, y, /, z):
+    return x + y + z
+"#;
+    let functions = analyzer
+        .analyze_file_checked(Path::new("parameters.py"), code, root)
+        .unwrap();
+    assert_eq!(functions.len(), 2);
+    assert_eq!(functions[0].name, "total");
+    assert_eq!(functions[0].parameters, 4, "bare * should not count as parameter");
+    assert_eq!(functions[1].name, "positional");
+    assert_eq!(functions[1].parameters, 3, "bare / should not count as parameter");
+}
+
+#[test]
+fn test_tsx_jsx_attribute_ampersand_compatibility() {
+    let mut analyzer = ComplexityAnalyzer::new();
+    let root = Path::new(".");
+    let code = r#"export function TradeView() {
+    return <div label="Unrealized P&L">Trade</div>;
+}
+"#;
+    let functions = analyzer
+        .analyze_file_checked(Path::new("Trade.tsx"), code, root)
+        .unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "TradeView");
+}
+

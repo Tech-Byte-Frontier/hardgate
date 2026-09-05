@@ -445,6 +445,22 @@ fn count_parameters(node: Node, lang: SupportedLanguage) -> usize {
 
     (0..child.child_count())
         .filter_map(|j| child.child(j))
-        .filter(|param| !matches!(param.kind(), "(" | ")" | "," | "{" | "}" | "[" | "]"))
+        .filter(|param| {
+            let kind = param.kind();
+            !matches!(
+                kind,
+                "(" | ")"
+                    | ","
+                    | "{"
+                    | "}"
+                    | "["
+                    | "]"
+                    | "*"
+                    | "/"
+                    | ":"
+                    | "keyword_separator"
+                    | "positional_separator"
+            ) && !kind.contains("comment")
+        })
         .count()
 }
