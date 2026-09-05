@@ -255,7 +255,8 @@ fn compare_existing_windows(
     raw_matches: &mut Vec<RawCloneMatch>,
 ) -> Result<(), CloneIndexError> {
     for previous in existing {
-        let same_file = previous.stream_idx == check.location.stream_idx;
+        let same_file = stream_path(previous.stream_idx, check.token_streams)
+            == stream_path(check.location.stream_idx, check.token_streams);
         let too_close = same_file
             && (check.location.start_line <= previous.end_line.saturating_add(check.min_lines));
         if !too_close && token_sequences_match(previous, check.location, check.token_streams) {

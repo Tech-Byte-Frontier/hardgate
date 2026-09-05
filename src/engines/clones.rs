@@ -228,16 +228,12 @@ fn coalesce_matches(
     matches.sort_by(|a, b| {
         stream_path(a.stream_idx_a, streams.token_streams)
             .cmp(stream_path(b.stream_idx_a, streams.token_streams))
-            .then(a.stream_idx_a.cmp(&b.stream_idx_a))
             .then(
                 stream_path(a.stream_idx_b, streams.token_streams)
                     .cmp(stream_path(b.stream_idx_b, streams.token_streams)),
             )
-            .then(a.stream_idx_b.cmp(&b.stream_idx_b))
             .then(a.start_a.cmp(&b.start_a))
             .then(a.start_b.cmp(&b.start_b))
-            .then(a.start_idx_a.cmp(&b.start_idx_a))
-            .then(a.start_idx_b.cmp(&b.start_idx_b))
     });
     let mut coalesced: Vec<RawCloneMatch> = Vec::new();
     for m in matches {
@@ -319,13 +315,10 @@ fn aligned_ranges_are_verified(left: &RawCloneMatch, right: &RawCloneMatch) -> b
 }
 
 fn same_token_alignment(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
-    checked_delta(right.start_idx_a, left.start_idx_a)
-        .zip(checked_delta(right.start_idx_b, left.start_idx_b))
-        .is_some_and(|(delta_a, delta_b)| delta_a == delta_b)
-}
-
-fn checked_delta(right: usize, left: usize) -> Option<usize> {
-    right.checked_sub(left).or(left.checked_sub(right))
+    left.start_idx_a
+        .checked_add(right.start_idx_b)
+        .zip(right.start_idx_a.checked_add(left.start_idx_b))
+        .is_some_and(|(left_delta, right_delta)| left_delta == right_delta)
 }
 fn merge_match(left: &mut RawCloneMatch, right: &RawCloneMatch) {
     left.end_a = left.end_a.max(right.end_a);

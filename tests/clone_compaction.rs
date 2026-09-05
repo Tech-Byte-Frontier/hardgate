@@ -40,6 +40,13 @@ fn interning_preserves_normalized_tokens_and_fingerprint_bytes() {
             normalized_body("20", "'second'", "two"),
         ),
     ]);
+    // Captured from the source-equivalent release binary with this fixture,
+    // using [clones] min_lines = 1 and min_tokens = 3.
+    assert_eq!(
+        baseline,
+        ("1850ca82e0bf9553".to_owned(), 21),
+        "the compact index must retain the established fingerprint contract"
+    );
     let changed_literals_and_comment = fingerprint(vec![
         (
             PathBuf::from("src/a.rs"),
@@ -55,26 +62,35 @@ fn interning_preserves_normalized_tokens_and_fingerprint_bytes() {
 }
 
 #[test]
-fn duplicate_paths_remain_distinct_streams_and_changed_priority_stays_bounded() {
-    let shared = "shared_alpha shared_beta shared_gamma\n";
+fn duplicate_paths_keep_spaced_streams_and_same_line_suppression() {
     let duplicate_streams = vec![
-        (
-            PathBuf::from("duplicate.rs"),
-            format!("zero_alpha zero_beta zero_gamma\n{shared}"),
-        ),
-        (
-            PathBuf::from("duplicate.rs"),
-            format!("one_alpha one_beta one_gamma\n{shared}"),
-        ),
+        (PathBuf::from("duplicate.rs"), shifted_body("zero", 0)),
+        (PathBuf::from("duplicate.rs"), shifted_body("one", 8)),
+        (PathBuf::from("duplicate.rs"), shifted_body("two", 16)),
     ];
     let violations = detector(1, 3)
         .detect_clones_checked(&duplicate_streams, Path::new("."))
         .unwrap();
-    assert_eq!(violations.len(), 1);
-    assert_eq!(violations[0].file_a, PathBuf::from("duplicate.rs"));
-    assert_eq!(violations[0].file_b, PathBuf::from("duplicate.rs"));
-    assert_eq!(violations[0].lines_a, (2, 2));
-    assert_eq!(violations[0].lines_b, (2, 2));
+    assert_eq!(violations.len(), 2);
+    assert_eq!(violations[0].lines_a, (1, 1));
+    assert_eq!(violations[1].lines_a, (9, 9));
+
+    let same_line = vec![
+        (
+            PathBuf::from("duplicate.rs"),
+            "shared_alpha shared_beta shared_gamma\n".to_owned(),
+        ),
+        (
+            PathBuf::from("duplicate.rs"),
+            "shared_alpha shared_beta shared_gamma\n".to_owned(),
+        ),
+    ];
+    assert!(
+        detector(1, 3)
+            .detect_clones_checked(&same_line, Path::new("."))
+            .unwrap()
+            .is_empty()
+    );
 
     let repeated = "same\n".repeat(65);
     let copied = "copied_alpha copied_beta copied_gamma\n";
@@ -95,6 +111,15 @@ fn duplicate_paths_remain_distinct_streams_and_changed_priority_stays_bounded() 
         CloneIndexError::HashWindowCapacityExceeded { ref file, line: 65, limit: 64 }
             if file == Path::new("m-unchanged.rs")
     ));
+}
+
+fn shifted_body(prefix: &str, filler_lines: usize) -> String {
+    let mut content = String::new();
+    for index in 0..filler_lines {
+        content.push_str(&format!("{prefix}_filler_{index}\n"));
+    }
+    content.push_str("stream_alpha stream_beta stream_gamma\n");
+    content
 }
 
 fn long_body(lines: usize) -> String {
@@ -154,6 +179,22 @@ fn repeated_cross_products_keep_the_explicit_capacity_error() {
         error,
         CloneIndexError::HashWindowCapacityExceeded { limit: 64, .. }
     ));
+}
+
+#[test]
+fn opposite_direction_windows_keep_the_verified_clone() {
+    let files = vec![
+        (PathBuf::from("src/a.rs"), "a\na\na\nb\na\n".to_owned()),
+        (PathBuf::from("src/b.rs"), "a\nb\na\na\na\n".to_owned()),
+    ];
+    let violations = detector(1, 3)
+        .detect_clones_checked(&files, Path::new("."))
+        .unwrap();
+
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].lines_a, (1, 3));
+    assert_eq!(violations[0].lines_b, (3, 5));
+    assert_eq!(violations[0].tokens, 3);
 }
 
 #[test]
