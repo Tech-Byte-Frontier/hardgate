@@ -50,6 +50,7 @@ fn test_compact_lists_each_violation_without_details() {
 
 #[test]
 fn test_summary_shows_totals_and_top_files() {
+    colored::control::set_override(false);
     let out = report_with_violations().render_summary();
     for needle in [
         "Summary: 3 errors",
@@ -61,6 +62,36 @@ fn test_summary_shows_totals_and_top_files() {
         assert!(out.contains(needle), "missing {needle}");
     }
     assert!(!out.contains("-->"), "summary must not list violations");
+}
+
+#[test]
+fn test_summary_separates_code_findings_from_analysis_blockers() {
+    let mut report = report_with_violations();
+    // report_with_violations has 3 code findings: 1 complexity, 1 budget, 1 clone
+    assert_eq!(report.code_findings_count(), 3);
+    assert_eq!(report.analysis_blockers_count(), 0);
+
+    // Add an orchestration / analysis blocker
+    report.orchestration_violations.push(hardgate::engines::OrchestrationViolation {
+        step: "coverage-report".to_string(),
+        command: "coverage/lcov.info".to_string(),
+        exit_code: Some(1),
+        output: "Required coverage report was not found.".to_string(),
+        recommendation: "generate coverage".to_string(),
+    });
+
+    assert_eq!(report.code_findings_count(), 3);
+    assert_eq!(report.analysis_blockers_count(), 1);
+    assert_eq!(report.total_violations(), 4);
+
+    let summary = report.summary();
+    assert_eq!(summary.total_errors, 4);
+    assert_eq!(summary.code_findings, 3);
+    assert_eq!(summary.analysis_blockers, 1);
+
+    colored::control::set_override(false);
+    let terminal = report.render_terminal();
+    assert!(terminal.contains("3 code findings, 1 analysis blockers"));
 }
 
 #[test]

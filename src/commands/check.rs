@@ -140,6 +140,10 @@ fn execute_check(
 
     run_generated_freshness(config, root, &mut report);
 
+    if opts.all {
+        run_orchestration(config, root, &mut report);
+    }
+
     run_check_coverage(CheckCoverage {
         config,
         diff: opts.diff,
@@ -154,10 +158,6 @@ fn execute_check(
 
     if config.mutation.enabled {
         verify_mutation_at(config, None, &mut report, root);
-    }
-
-    if opts.all {
-        run_orchestration(config, root, &mut report);
     }
 
     report.advisories.push(check_scope_advisory(config, &opts));

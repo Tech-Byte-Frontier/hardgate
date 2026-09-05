@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GateSummary {
     pub total_errors: usize,
+    #[serde(default)]
+    pub code_findings: usize,
+    #[serde(default)]
+    pub analysis_blockers: usize,
     pub clones: usize,
     pub ast_violations: usize,
     pub complexity: usize,
@@ -34,8 +38,12 @@ pub struct TopFileEntry {
 impl GateReport {
     /// Build the [`GateSummary`] rollup for this report.
     pub fn summary(&self) -> GateSummary {
+        let code_findings = self.code_findings_count();
+        let analysis_blockers = self.analysis_blockers_count();
         GateSummary {
             total_errors: self.total_violations(),
+            code_findings,
+            analysis_blockers,
             clones: self.clone_violations.len(),
             ast_violations: self.complexity_violations.len(),
             complexity: self.complexity_violations.len(),
@@ -135,15 +143,17 @@ impl GateReport {
             status_label(self.passed, s.total_errors),
         );
         out.push_str(&format!(
-            "Summary: {} errors ({} clones, {} AST violations across {} files)\n",
-            s.total_errors, s.clones, s.ast_violations, s.files_with_violations,
+            "Summary: {} errors ({} code findings across {} files, {} analysis blockers; {} clones, {} AST violations)\n",
+            s.total_errors, s.code_findings, s.files_with_violations, s.analysis_blockers, s.clones, s.ast_violations,
         ));
         out.push_str(&format!(
             "Scanned: {} files, {} functions in {}ms\n",
             self.files_scanned, self.functions_analyzed, self.duration_ms
         ));
         out.push_str(&format!(
-            "Breakdown: clones={}, complexity={}, file-budget={}, anti-gaming={}, architecture={}, coverage={}, mutation={}, dead-code={}, tool={}\n",
+            "Breakdown: code_findings={}, analysis_blockers={}, clones={}, complexity={}, file-budget={}, anti-gaming={}, architecture={}, coverage={}, mutation={}, dead-code={}, tool={}\n",
+            s.code_findings,
+            s.analysis_blockers,
             s.clones,
             s.complexity,
             s.file_budgets,

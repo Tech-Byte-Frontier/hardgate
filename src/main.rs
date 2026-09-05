@@ -122,7 +122,7 @@ enum Commands {
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
-        /// Run configured format-check, linter, and test commands alongside static gates
+        /// Run configured format-check, linter, and test commands before verifying static gates, coverage, and mutation
         #[arg(short, long)]
         all: bool,
         /// Run dead code and unused export analysis
@@ -172,7 +172,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Evaluate static policy and configured coverage/mutation reports
+    /// Evaluate static policy and verify configured coverage/mutation evidence reports
     Verify {
         /// Path to coverage report (e.g., coverage/lcov.info)
         #[arg(long)]

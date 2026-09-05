@@ -259,14 +259,29 @@ impl GateReport {
     }
 
     pub(crate) fn render_terminal_summary(&self, out: &mut String) {
-        out.push_str(&format!(
-            "{}\nsummary: {} files, {} functions in {}ms\nresult: {}\n",
-            "-".repeat(70).dimmed(),
-            self.files_scanned,
-            self.functions_analyzed,
-            self.duration_ms,
-            status_label(self.passed, self.total_violations()),
-        ));
+        let code_findings = self.code_findings_count();
+        let blockers = self.analysis_blockers_count();
+        if self.passed {
+            out.push_str(&format!(
+                "{}\nsummary: {} files, {} functions in {}ms\nresult: {}\n",
+                "-".repeat(70).dimmed(),
+                self.files_scanned,
+                self.functions_analyzed,
+                self.duration_ms,
+                status_label(self.passed, self.total_violations()),
+            ));
+        } else {
+            out.push_str(&format!(
+                "{}\nsummary: {} files, {} functions in {}ms ({} code findings, {} analysis blockers)\nresult: {}\n",
+                "-".repeat(70).dimmed(),
+                self.files_scanned,
+                self.functions_analyzed,
+                self.duration_ms,
+                code_findings,
+                blockers,
+                status_label(self.passed, self.total_violations()),
+            ));
+        }
     }
 }
 

@@ -81,6 +81,23 @@ impl GateReport {
         .sum()
     }
 
+    /// Count of genuine code findings (complexity, budgets, suppressions, invariants, clones, dead-code, coverage, mutation).
+    pub fn code_findings_count(&self) -> usize {
+        self.budget_violations.len()
+            + self.suppression_violations.len()
+            + self.complexity_violations.len()
+            + self.invariant_violations.len()
+            + self.clone_violations.len()
+            + self.coverage_violations.len()
+            + self.mutation_violations.len()
+            + self.dead_code_violations.len()
+    }
+
+    /// Count of analysis blockers and tool/evidence failures (orchestration / report failures).
+    pub fn analysis_blockers_count(&self) -> usize {
+        self.orchestration_violations.len()
+    }
+
     /// Freeze scan counts and derive `passed` (true only with zero violations).
     pub fn finalize(&mut self, files_scanned: usize, functions_analyzed: usize, duration_ms: u128) {
         self.files_scanned = files_scanned;
