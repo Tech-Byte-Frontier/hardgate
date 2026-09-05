@@ -42,7 +42,7 @@ function inlineList(block, key) {
   return match[1].split(",").map((value) => value.trim()).filter(Boolean);
 }
 
-export function readWorkflowContract(root = ROOT) {
+function readWorkflowContract(root = ROOT) {
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
   const quality = jobBlock(workflow, "quality");
   return { aggregateName: scalar(quality, "name"), needs: inlineList(quality, "needs") };
