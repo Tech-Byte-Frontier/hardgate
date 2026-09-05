@@ -1,0 +1,186 @@
+// Strict state transitions for staging an immutable public GitHub release.
+"use strict";
+
+import { performance } from "node:perf_hooks";
+import { compareReleaseTags } from "./release-order.mjs";
+import { assertExactKeys as assertKeys, assertPlainObject as assertObject } from "./release-receipt-validation.mjs";
+
+const GITHUB_ARCHIVES = Object.freeze([
+  "hardgate-linux-x64.tar.gz",
+  "hardgate-linux-x64-musl.tar.gz",
+  "hardgate-linux-arm64.tar.gz",
+  "hardgate-linux-arm64-musl.tar.gz",
+  "hardgate-darwin-x64.tar.gz",
+  "hardgate-darwin-arm64.tar.gz",
+]);
+
+const PROBE_STATES = new Set(["missing", "present"]);
+const SAFE_ASSET = /^[A-Za-z0-9][A-Za-z0-9._+@-]*$/;
+
+function fail(message) {
+  throw new Error(`GitHub staging: ${message}`);
+}
+
+function assertVersion(value, label) {
+  if (typeof value !== "string" || value.length === 0) fail(`${label} must be a semantic version`);
+  try {
+    compareReleaseTags(`v${value}`, `v${value}`);
+  } catch {
+    fail(`${label} must be a valid repository semantic version`);
+  }
+  return value;
+}
+
+function assertAssetName(value, label) {
+  if (typeof value !== "string" || !SAFE_ASSET.test(value) || value === "." || value === "..") fail(`${label} is not a safe asset basename`);
+  return value;
+}
+
+function assertAssetList(value, label) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) fail(`${label} must be a non-empty asset list`);
+  const result = [];
+  const names = new Set();
+  for (const [index, name] of value.entries()) {
+    const checked = assertAssetName(name, `${label}[${index}]`);
+    if (names.has(checked)) fail(`${label} contains duplicate assets`);
+    names.add(checked);
+    result.push(checked);
+  }
+  return result;
+}
+
+export function expectedGithubAssets(version) {
+  const checked = assertVersion(version, "version");
+  return [...GITHUB_ARCHIVES, "SHA256SUMS", `hardgate-${checked}.sbom.cdx.json`];
+}
+
+function assertPolicy(policy) {
+  assertObject(policy, "request.policy");
+  if (!Number.isFinite(policy.deadline)) fail("request.policy.deadline must be a finite monotonic deadline");
+  return policy;
+}
+
+function assertRequest(request) {
+  assertObject(request, "request");
+  const expected = ["tag", "version", "assets", "policy"];
+  const optional = ["repo"];
+  const keys = Object.getOwnPropertyNames(request);
+  if (keys.some((key) => !expected.includes(key) && !optional.includes(key))) fail("request contains unknown keys");
+  for (const key of expected) if (!Object.prototype.hasOwnProperty.call(request, key)) fail(`request.${key} is required`);
+  const version = assertVersion(request.version, "request.version");
+  if (typeof request.tag !== "string" || request.tag !== `v${version}`) fail("request.tag must exactly match request.version");
+  if (request.repo !== undefined && (typeof request.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(request.repo))) fail("request.repo must be OWNER/REPO");
+  assertAssetList(request.assets, "request.assets");
+  assertPolicy(request.policy);
+  return request;
+}
+
+function assertOperations(operations) {
+  assertObject(operations, "operations");
+  for (const name of ["probe", "create", "upload", "verify"]) {
+    if (typeof operations[name] !== "function") fail(`operations.${name} must be a function`);
+  }
+  return operations;
+}
+
+function validateProbe(value) {
+  assertObject(value, "probe result");
+  if (!PROBE_STATES.has(value.state)) fail("probe result.state is unknown");
+  if (value.state === "missing") {
+    assertKeys(value, ["state"], "probe result");
+    return { state: "missing" };
+  }
+  assertKeys(value, ["state", "tag", "isDraft", "isPrerelease", "assets"], "probe result");
+  if (typeof value.tag !== "string" || typeof value.isDraft !== "boolean" || typeof value.isPrerelease !== "boolean") fail("probe result metadata is malformed");
+  return { state: "present", tag: value.tag, isDraft: value.isDraft, isPrerelease: value.isPrerelease, assets: assertAssetList(value.assets, "probe result.assets") };
+}
+
+function remainingMs(policy) {
+  const remaining = Math.floor(policy.deadline - performance.now());
+  if (remaining < 1) fail("operation deadline exhausted");
+  return remaining;
+}
+
+export { remainingMs };
+
+async function call(request, operation) {
+  remainingMs(request.policy);
+  const result = await operation();
+  remainingMs(request.policy);
+  return result;
+}
+
+function assertCurrent(request, value) {
+  const current = validateProbe(value);
+  if (current.state === "missing") fail(`release ${request.tag} is missing`);
+  if (current.tag !== request.tag) fail(`release tag mismatch: expected ${request.tag}, got ${current.tag}`);
+  if (current.isDraft) fail(`release ${request.tag} is a draft`);
+  const expected = new Set(request.assets);
+  if (current.assets.some((name) => !expected.has(name))) fail(`release ${request.tag} contains unexpected assets`);
+  return current;
+}
+
+function assertExactAssets(request, current) {
+  if (current.assets.length !== request.assets.length || request.assets.some((name) => !current.assets.includes(name))) fail(`release ${request.tag} does not contain the exact expected asset set`);
+}
+
+function assertProof(result, label) {
+  if (result === false || (result && typeof result === "object" && result.verified === false)) fail(`${label} did not verify expected bytes`);
+}
+
+async function verifyAssets(request, operations, names) {
+  if (names.length === 0) return;
+  assertProof(await call(request, () => operations.verify(request, [...names])), "asset verification");
+}
+
+async function reconcileRelease(request, operations, requirePrerelease = false) {
+  const current = assertCurrent(request, await call(request, () => operations.probe(request)));
+  assertExactAssets(request, current);
+  if (requirePrerelease && !current.isPrerelease) fail(`new release ${request.tag} is not a public prerelease`);
+  await verifyAssets(request, operations, request.assets);
+  return current;
+}
+
+async function stageMissing(request, operations) {
+  let createError;
+  try {
+    await call(request, () => operations.create(request));
+  } catch (error) {
+    createError = error;
+  }
+  const current = await reconcileRelease(request, operations, !createError);
+  return { publication: createError ? "ambiguous" : "created", state: "immutable_verified", prerelease: current.isPrerelease };
+}
+
+async function stageExisting(request, operations, initial) {
+  const existing = new Set(initial.assets);
+  await verifyAssets(request, operations, initial.assets);
+  const missing = request.assets.filter((name) => !existing.has(name));
+  let ambiguous = false;
+  for (const name of missing) {
+    let uploadError;
+    try {
+      await call(request, () => operations.upload(request, name));
+    } catch (error) {
+      uploadError = error;
+    }
+    const observed = assertCurrent(request, await call(request, () => operations.probe(request)));
+    if (!observed.assets.includes(name)) {
+      if (uploadError) throw uploadError;
+      fail(`uploaded asset ${name} was not observed`);
+    }
+    await verifyAssets(request, operations, [name]);
+    if (uploadError) ambiguous = true;
+  }
+  if (missing.length === 0) return { publication: "existing", state: "immutable_verified", prerelease: initial.isPrerelease };
+  const current = await reconcileRelease(request, operations);
+  return { publication: ambiguous ? "ambiguous" : "existing", state: "immutable_verified", prerelease: current.isPrerelease };
+}
+
+export async function stageGithubRelease(request, operations) {
+  assertRequest(request);
+  assertOperations(operations);
+  const initial = validateProbe(await call(request, () => operations.probe(request)));
+  if (initial.state === "missing") return stageMissing(request, operations);
+  return stageExisting(request, operations, assertCurrent(request, initial));
+}
