@@ -6,6 +6,10 @@ import path from "node:path";
 import { childTimeoutMs, remainingMs } from "./npm-verification-policy.mjs";
 import { runReleaseProcess } from "./release-process.mjs";
 import { compareReleaseTags } from "./release-order.mjs";
+import {
+  validateDefaultMetadata as validateDefaultMetadataImpl,
+  validateMetadata as validateMetadataImpl,
+} from "./verify-crate-publication-metadata.mjs";
 
 const CRATE_NAME = "hardgate";
 const PROJECT_URL = "https://github.com/Tech-Byte-Frontier/hardgate";
@@ -17,7 +21,6 @@ export const CURL_COMMAND = "/usr/bin/curl";
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_TAR_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_API_OUTPUT_BYTES = 4 * 1024 * 1024;
-const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 export class VerificationError extends Error {
@@ -246,35 +249,12 @@ export function staticRequestArgs(version, destination, timeoutMs) {
   ];
 }
 
-function parseMetadata(body) {
-  try {
-    return JSON.parse(body);
-  } catch {
-    fail("crates.io returned malformed metadata");
-  }
-}
-
-function assertMetadataVersion(published, version) {
-  if (!published || Array.isArray(published) || typeof published !== "object") {
-    fail("crates.io metadata has no version object");
-  }
-  if (published.num !== version) fail("crates.io metadata version does not match the requested version");
-  if (published.yanked !== false) fail("the requested crates.io version is yanked");
-}
-
-function assertMetadataChecksum(published, expectedSha256) {
-  if (published.checksum !== expectedSha256 || !HASH_PATTERN.test(published.checksum)) {
-    fail("crates.io checksum does not match the local archive");
-  }
-}
 export function validateMetadata(body, version, expectedSha256) {
-  const metadata = parseMetadata(body);
-  const published = metadata?.version;
-  assertMetadataVersion(published, version);
-  assertMetadataChecksum(published, expectedSha256);
-  return published;
+  return validateMetadataImpl(body, version, expectedSha256, fail);
 }
-export function validateDefaultMetadata(body, version) { const metadata = parseMetadata(body); if (metadata?.crate?.max_stable_version !== version) fail("crates.io default stable version does not match the requested version"); return metadata.crate; }
+export function validateDefaultMetadata(body, version) {
+  return validateDefaultMetadataImpl(body, version, fail);
+}
 function parseCargoInfo(output) {
   try {
     return JSON.parse(normalizeOutput(output));
