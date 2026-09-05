@@ -2,10 +2,11 @@
 
 hardgate prebuilt binary: linux arm64 (glibc).
 
-This is a platform-specific package. Install the main wrapper instead:
+This is a platform-specific package. Install the main wrapper instead.
+The latest published main wrapper is `0.4.2`; npm `0.5.0` is not published.
 
 ```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
 npx hardgate check
 ```
 
