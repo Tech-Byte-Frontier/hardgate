@@ -297,11 +297,9 @@ fn analyze_loaded_files(
         invariants: &invariants,
     };
     let analyzed = analyze_inputs(analyzed_inputs, &context);
-    observations::observe_files(
-        analyzed_inputs.iter().map(|(file, _)| *file),
-        config,
-        report,
-    );
+    for (file, _) in analyzed_inputs {
+        observations::observe_file(file, config, report);
+    }
     merge_file_analysis(analyzed, config, report)
 }
 
@@ -487,6 +485,6 @@ pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec
         invariants: input.invariants,
     };
     let analyzed = analyze_one(&classified, input.content, &context);
-    observations::observe_files(std::iter::once(&classified), input.config, report);
+    observations::observe_file(&classified, input.config, report);
     merge_file_analysis(vec![analyzed], input.config, report)
 }
