@@ -164,7 +164,7 @@ fn static_snapshot_turns_raw_truncation_into_required_evidence() {
         .expect("raw truncation must be required evidence");
     assert!(finding.output.contains("raw clone-match capacity"));
     assert!(finding.output.contains("role Fixture"));
-    assert!(finding.recommendation.contains("Raise clone thresholds"));
+    assert!(finding.recommendation.contains("Retain the failing status"));
 }
 
 #[test]
@@ -301,16 +301,18 @@ fn static_snapshot_turns_hash_truncation_into_required_evidence() {
         .expect("hash truncation must be required evidence");
     assert!(finding.output.contains("role Source"), "{}", finding.output);
     assert!(
-        finding.output.contains("Raise clone thresholds"),
+        finding.output.contains("Retain the failing status"),
         "{}",
         finding.output
     );
     assert!(
-        finding.output.contains("do not add exclusions"),
+        finding
+            .output
+            .contains("do not omit source or weaken policy"),
         "{}",
         finding.output
     );
-    assert!(finding.recommendation.contains("Raise clone thresholds"));
+    assert!(finding.recommendation.contains("Retain the failing status"));
 }
 
 fn write_fixture(root: &Path, path: &str, content: &str) {
@@ -388,7 +390,7 @@ min_tokens = 1
         finding["output"]
             .as_str()
             .unwrap()
-            .contains("Raise clone thresholds")
+            .contains("Retain the failing status")
     );
     let _ = std::fs::remove_dir_all(root);
 }

@@ -1,60 +1,44 @@
 use super::{GraphInput, graph_eligible, run_graph};
 use crate::commands::evidence::{EvidenceFailure, record_evidence_failure};
-use crate::commands::role_policy::classify_files;
+use crate::commands::source_snapshot::SourceSnapshot;
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{DiscoverOptions, discover_files};
 use anyhow::Result;
-use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) struct DeadCodeScope<'a> {
     pub config: &'a HardgateConfig,
     pub root: &'a Path,
     pub selected: &'a [PathBuf],
-    pub read_results: &'a [(PathBuf, String)],
+    pub snapshot: &'a SourceSnapshot,
 }
 
-/// Scope selects findings; every discoverable reference remains graph context.
-/// Reuse selected bytes already analyzed by the static gate.
+/// All references and selected sources come from the same immutable capture.
 pub(crate) fn run_scoped_dead_code_analysis(
     scope: DeadCodeScope<'_>,
     report: &mut GateReport,
 ) -> Result<()> {
-    let mut paths = discover_files(DiscoverOptions {
-        root: scope.root,
-        diff_only: false,
-        exclusions: &scope.config.budgets.files.exclusions.paths,
-    })?;
-    paths.extend_from_slice(scope.selected);
-    paths.sort();
-    paths.dedup();
-    let classified = classify_files(&paths, scope.config, scope.root)?;
-    let cached: HashMap<&Path, &str> = scope
-        .read_results
-        .iter()
-        .map(|(path, text)| (path.as_path(), text.as_str()))
-        .collect();
     let mut inputs = Vec::new();
-    for file in classified.into_iter().filter(graph_eligible) {
-        let text = if let Some(text) = cached.get(file.path.as_path()) {
-            Cow::Borrowed(*text)
-        } else if scope.selected.contains(&file.path) {
-            // The static gate already recorded this selected file's read failure.
+    for source in &scope.snapshot.files {
+        let file = &source.classified;
+        if !graph_eligible(file) {
             continue;
-        } else {
-            let Some(text) = read_reference(&file.path, report) else {
-                continue;
-            };
-            Cow::Owned(text)
-        };
-        inputs.push((file, text));
+        }
+        match &source.content {
+            Ok(text) => inputs.push((file, text.as_ref())),
+            Err(error) if !scope.selected.contains(&file.path) => record_evidence_failure(
+                report,
+                true,
+                EvidenceFailure {
+                    step: "dead-code-context",
+                    target: &file.path,
+                    message: format!("Cannot read a required repository reference: {error}"),
+                },
+            ),
+            Err(_) => {} // The static gate already recorded selected read failures.
+        }
     }
-    let borrowed = inputs
-        .iter()
-        .map(|(file, text)| (file, text.as_ref()))
-        .collect::<Vec<_>>();
     let selected = scope
         .selected
         .iter()
@@ -64,28 +48,10 @@ pub(crate) fn run_scoped_dead_code_analysis(
         GraphInput {
             config: scope.config,
             root: scope.root,
-            sources: &borrowed,
+            sources: &inputs,
             selected: Some(&selected),
         },
         report,
     );
     Ok(())
-}
-
-fn read_reference(path: &Path, report: &mut GateReport) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Some(text),
-        Err(error) => {
-            record_evidence_failure(
-                report,
-                true,
-                EvidenceFailure {
-                    step: "dead-code-context",
-                    target: path,
-                    message: format!("Cannot read a required repository reference: {error}"),
-                },
-            );
-            None
-        }
-    }
 }

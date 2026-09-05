@@ -1,19 +1,18 @@
 use super::super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::findings::apply_clone_findings;
-use super::{
-    RoleEvidence, classify_file, classify_files, clone_config_for_role,
-    record_role_evidence_failure,
-};
+use super::{RoleEvidence, clone_config_for_role, record_role_evidence_failure};
+use crate::commands::source_snapshot::{FileId, SourceSnapshot};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{ClassifiedFile, FileRole};
+use crate::discovery::FileRole;
 use crate::engines::{CloneDetector, CloneViolation};
 use anyhow::Result;
-use std::fs;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) struct CloneRun<'a> {
-    pub read_results: &'a [(PathBuf, String)],
+    pub snapshot: &'a SourceSnapshot,
+    pub selected_ids: &'a [FileId],
     pub changed_files: &'a [PathBuf],
     pub config: &'a HardgateConfig,
     pub root: &'a Path,
@@ -21,152 +20,114 @@ pub(crate) struct CloneRun<'a> {
 }
 
 pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -> Result<()> {
-    let inputs = if input.diff {
-        full_clone_inputs(input.config, input.root, report)?
-    } else {
-        clone_eligible_inputs(input.read_results, input.config, input.root)?
-    };
-    let mut groups: Vec<(FileRole, Vec<(PathBuf, String)>)> = FileRole::POLICY_ROLES
-        .into_iter()
-        .map(|role| (role, Vec::new()))
-        .collect();
-    for (file, content) in inputs {
-        if let Some((_, group)) = groups.iter_mut().find(|(role, _)| *role == file.role) {
-            group.push((file.path, content));
+    let selected: HashSet<FileId> = input.selected_ids.iter().copied().collect();
+    for role in FileRole::POLICY_ROLES {
+        let Some(config) = clone_config_for_role(input.config, role) else {
+            continue;
+        };
+        if !role.receives_clone_analysis()
+            && input
+                .config
+                .roles
+                .for_role(role)
+                .and_then(|policy| policy.clone_enabled)
+                != Some(true)
+        {
+            continue;
         }
-    }
-    for (role, files) in groups {
-        run_clone_group(role, files, &input, report);
+        let files = clone_group(&input, role, &selected, report);
+        run_clone_group(
+            CloneGroup {
+                role,
+                files,
+                detector: CloneDetector::new(&config),
+            },
+            &input,
+            report,
+        );
     }
     Ok(())
 }
 
-fn run_clone_group(
+fn clone_group<'a>(
+    input: &'a CloneRun<'_>,
     role: FileRole,
-    files: Vec<(PathBuf, String)>,
-    input: &CloneRun<'_>,
+    selected: &HashSet<FileId>,
     report: &mut GateReport,
-) {
-    let Some(clone_config) = clone_config_for_role(input.config, role) else {
-        return;
-    };
-    let detector = CloneDetector::new(&clone_config);
-    record_clone_exclusion_advisory(&detector, &files, input.root, report);
-    if files.len() < 2 {
-        return;
-    }
-    let result =
-        detector.detect_clones_checked_with_changed_files(&files, input.root, input.changed_files);
-    if let Err(ref error) = result {
-        record_evidence_failure(
-            report,
-            true,
-            EvidenceFailure {
-                step: "clone-index",
-                target: input.root,
-                message: format!(
-                    "role {role:?} clone index is incomplete: {error}. Raise clone thresholds or narrow this role's clone engine; do not add exclusions or suppressions."
-                ),
-            },
-        );
-        if let Some(failure) = report.orchestration_violations.last_mut() {
-            failure.recommendation =
-                "Raise clone thresholds or narrow this role's clone engine; do not add exclusions or suppressions."
-                    .to_string();
+) -> Vec<(PathBuf, &'a str)> {
+    let mut files = Vec::new();
+    for source in &input.snapshot.files {
+        if source.classified.role != role || (!input.diff && !selected.contains(&source.id)) {
+            continue;
         }
-        return;
-    }
-    let mut violations = result.expect("clone index result checked above");
-    if input.diff {
-        violations
-            .retain(|violation| clone_touches_files(violation, input.changed_files, input.root));
-    }
-    apply_clone_findings(report, input.config, role, violations);
-}
-
-fn clone_eligible_inputs(
-    read_results: &[(PathBuf, String)],
-    config: &HardgateConfig,
-    root: &Path,
-) -> Result<Vec<(ClassifiedFile, String)>> {
-    read_results
-        .iter()
-        .map(|(path, content)| Ok((classify_file(path, config, root)?, content.clone())))
-        .collect::<Result<Vec<_>>>()
-        .map(|files| {
-            files
-                .into_iter()
-                .filter(|(file, _)| clone_input_is_eligible(file, config))
-                .collect()
-        })
-}
-
-fn full_clone_inputs(
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) -> Result<Vec<(ClassifiedFile, String)>> {
-    let discovery =
-        crate::discovery::discover_files_with_exclusions(crate::discovery::DiscoverOptions {
-            root,
-            diff_only: false,
-            exclusions: &config.budgets.files.exclusions.paths,
-        })?;
-    let files = classify_files(&discovery.files, config, root)?
-        .into_iter()
-        .filter(|file| clone_input_is_eligible(file, config))
-        .collect::<Vec<_>>();
-    Ok(read_clone_files(&files, config, report))
-}
-
-fn clone_input_is_eligible(file: &ClassifiedFile, config: &HardgateConfig) -> bool {
-    file.role.receives_clone_analysis()
-        || config
-            .roles
-            .for_role(file.role)
-            .and_then(|policy| policy.clone_enabled)
-            == Some(true)
-}
-
-fn read_clone_files(
-    files: &[ClassifiedFile],
-    config: &HardgateConfig,
-    report: &mut GateReport,
-) -> Vec<(ClassifiedFile, String)> {
-    let mut read = Vec::new();
-    for file in files {
-        match fs::read_to_string(&file.path) {
-            Ok(content) => read.push((file.clone(), content)),
+        match &source.content {
+            Ok(text) => files.push((source.classified.path.clone(), text.as_ref())),
             Err(error) => record_role_evidence_failure(
                 report,
                 RoleEvidence {
-                    config,
-                    role: file.role,
+                    config: input.config,
+                    role,
                     step: "read-clone-index",
-                    target: &file.path,
+                    target: &source.classified.path,
                     message: format!("Unable to read file required by full clone index: {error}"),
                 },
             ),
         }
     }
-    read
+    files
 }
 
-fn record_clone_exclusion_advisory(
-    detector: &CloneDetector,
-    inputs: &[(PathBuf, String)],
-    root: &Path,
-    report: &mut crate::diagnostics::GateReport,
-) {
-    let count = detector.count_excluded_files(inputs, root);
-    if count == 0 {
+struct CloneGroup<'a> {
+    role: FileRole,
+    files: Vec<(PathBuf, &'a str)>,
+    detector: CloneDetector,
+}
+
+fn run_clone_group(group: CloneGroup<'_>, input: &CloneRun<'_>, report: &mut GateReport) {
+    let CloneGroup {
+        role,
+        files,
+        detector,
+    } = group;
+    let count = files
+        .iter()
+        .filter(|(path, _)| detector.excludes_path(path, input.root))
+        .count();
+    if count > 0 {
+        let noun = if count == 1 { "file" } else { "files" };
+        report.advisories.push(format!(
+            "{count} {noun} excluded from clone detection via hardgate.toml."
+        ));
+    }
+    if files.len() < 2 {
         return;
     }
-    let noun = if count == 1 { "file" } else { "files" };
-    report.advisories.push(format!(
-        "{} {} excluded from clone detection via hardgate.toml.",
-        count, noun
-    ));
+    match detector.detect_clones_borrowed(&files, input.root, input.changed_files) {
+        Ok(mut findings) => {
+            if input.diff {
+                findings.retain(|finding| {
+                    clone_touches_files(finding, input.changed_files, input.root)
+                });
+            }
+            apply_clone_findings(report, input.config, role, findings);
+        }
+        Err(error) => {
+            record_evidence_failure(
+                report,
+                true,
+                EvidenceFailure {
+                    step: "clone-index",
+                    target: input.root,
+                    message: format!(
+                        "role {role:?} clone index is incomplete: {error}. Retain the failing status and report this input pattern; do not omit source or weaken policy to obtain a pass."
+                    ),
+                },
+            );
+            if let Some(failure) = report.orchestration_violations.last_mut() {
+                failure.recommendation = "Retain the failing status and report the input pattern and capacity error; do not weaken policy or omit source to obtain a pass.".to_string();
+            }
+        }
+    }
 }
 
 fn clone_touches_files(violation: &CloneViolation, files: &[PathBuf], root: &Path) -> bool {

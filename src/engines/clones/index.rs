@@ -94,7 +94,7 @@ pub(super) struct CloneIndex {
 }
 
 pub(super) struct CloneIndexOptions<'a> {
-    pub(super) files: &'a [(PathBuf, String)],
+    pub(super) files: &'a [(PathBuf, &'a str)],
     pub(super) root: &'a Path,
     pub(super) exclude_glob: Option<&'a GlobSet>,
     pub(super) min_lines: usize,
@@ -118,14 +118,14 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
         .iter()
         .map(|path| repository_relative_path(path, root))
         .collect::<HashSet<_>>();
-    let mut inputs: Vec<(PathBuf, String)> = files
+    let mut inputs: Vec<(PathBuf, &str)> = files
         .iter()
         .filter_map(|(abs_path, content)| {
             let rel_path = repository_relative_path(abs_path, root);
             if exclude_glob.is_some_and(|exclude| exclude.is_match(&rel_path)) {
                 return None;
             }
-            Some((rel_path, content.clone()))
+            Some((rel_path, *content))
         })
         .collect();
     inputs.sort_by(|(left, _), (right, _)| {
@@ -136,7 +136,7 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
     });
     let token_streams = inputs
         .into_iter()
-        .map(|(path, content)| (path, tokenize(&content)))
+        .map(|(path, content)| (path, tokenize(content)))
         .collect::<Vec<_>>();
     let mut window_map = HashMap::new();
     let mut raw_matches = Vec::new();

@@ -1,5 +1,5 @@
 use crate::config::HardgateConfig;
-use crate::discovery::{DiscoverOptions, discover_files_with_exclusions, filter_files_by_paths};
+use crate::discovery::{DiscoverOptions, discover_paths, filter_files_by_paths};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::fs;
@@ -10,6 +10,7 @@ pub(super) struct Scope<'a> {
     pub diff: bool,
     pub paths: &'a [PathBuf],
     pub root: &'a Path,
+    pub full: Option<&'a crate::discovery::DiscoveryResult>,
 }
 
 pub(super) fn select_files(
@@ -21,6 +22,7 @@ pub(super) fn select_files(
         diff,
         paths,
         root,
+        full,
     } = scope;
     let scope_paths = normalize_scope_paths(paths, root)?;
     let crate::discovery::DiscoveryResult {
@@ -30,16 +32,24 @@ pub(super) fn select_files(
     } = discovery;
 
     let (mut files, mut excluded_files) = if diff && !paths.is_empty() {
-        let full_discovery = discover_files_with_exclusions(DiscoverOptions {
-            root,
-            diff_only: false,
-            exclusions: &config.budgets.files.exclusions.paths,
-        })?;
-        let explicit_files = filter_files_by_paths(full_discovery.files, &scope_paths, root)?;
+        let owned;
+        let full_discovery = match full {
+            Some(full) => full,
+            None => {
+                owned = discover_paths(DiscoverOptions {
+                    root,
+                    diff_only: false,
+                    exclusions: &config.budgets.files.exclusions.paths,
+                })?;
+                &owned
+            }
+        };
+        let explicit_files =
+            filter_files_by_paths(full_discovery.files.clone(), &scope_paths, root)?;
         let mut files = discovered_files;
         files.extend(explicit_files);
         let mut excluded_files = discovered_excluded;
-        excluded_files.extend(full_discovery.excluded_files);
+        excluded_files.extend_from_slice(&full_discovery.excluded_files);
         (files, excluded_files)
     } else {
         (

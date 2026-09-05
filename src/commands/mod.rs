@@ -13,6 +13,7 @@ pub mod mutate;
 mod mutation_output;
 mod role_policy;
 pub mod scan;
+mod source_snapshot;
 mod static_gate;
 pub mod verify;
 
@@ -26,3 +27,5 @@ pub use static_gate::{
     run_static_gate_at, run_static_gate_scoped, run_static_gate_snapshot,
 };
 pub use verify::{VerifyOptions, cmd_verify, cmd_verify_in, cmd_verify_legacy};
+
+pub(crate) use static_gate::{StaticRequest, run_shared_gate};

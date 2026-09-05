@@ -135,6 +135,12 @@ impl CloneDetector {
             .collect()
     }
 
+    pub fn excludes_path(&self, path: &Path, root: &Path) -> bool {
+        self.exclude_glob
+            .as_ref()
+            .is_some_and(|exclude| exclude.is_match(repository_relative_path(path, root)))
+    }
+
     pub fn count_excluded_files(&self, files: &[(PathBuf, String)], root: &Path) -> usize {
         self.excluded_files(files, root).len()
     }
@@ -165,6 +171,20 @@ impl CloneDetector {
     pub fn detect_clones_checked_with_changed_files(
         &self,
         files: &[(PathBuf, String)],
+        root: &Path,
+        changed_files: &[PathBuf],
+    ) -> Result<Vec<CloneViolation>, CloneIndexError> {
+        let borrowed = files
+            .iter()
+            .map(|(path, text)| (path.clone(), text.as_str()))
+            .collect::<Vec<_>>();
+        self.detect_clones_borrowed(&borrowed, root, changed_files)
+    }
+
+    /// Detect clones in shared immutable source bytes.
+    pub fn detect_clones_borrowed(
+        &self,
+        files: &[(PathBuf, &str)],
         root: &Path,
         changed_files: &[PathBuf],
     ) -> Result<Vec<CloneViolation>, CloneIndexError> {

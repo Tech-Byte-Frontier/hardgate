@@ -1,4 +1,4 @@
-use crate::commands::{AnalyzeInput, analyze_file_content, run_static_gate_at};
+use crate::commands::{AnalyzeInput, StaticRequest, analyze_file_content, run_shared_gate};
 use crate::config::ConfigContext;
 use crate::diagnostics::GateReport;
 use crate::engines::{AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker};
@@ -231,18 +231,25 @@ fn execute_check_with_config(
         Err(error) => return tool_error(&error),
     };
     let paths = context.input_paths(scoped.as_deref().unwrap_or_default());
-    let outcome = match run_static_gate_at(&context.config, diff_only, &paths, &context.root) {
+    let outcome = match run_shared_gate(StaticRequest {
+        config: &context.config,
+        root: &context.root,
+        paths: &paths,
+        diff: diff_only,
+        dead_code: false,
+    }) {
         Ok(outcome) => outcome,
         Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
     };
-    let Some((mut report, files, _, functions)) = outcome else {
+    if outcome.empty {
         return tool_error(if scoped.is_some() {
             "No source files matched the provided paths; refusing an empty successful check"
         } else {
             "No source files discovered; refusing an empty successful check"
         });
-    };
-    report.finalize(files.len(), functions.len(), 0);
+    }
+    let mut report = outcome.report;
+    report.finalize(outcome.files.len(), outcome.functions.len(), 0);
     json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
 }
 

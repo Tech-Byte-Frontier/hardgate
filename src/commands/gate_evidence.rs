@@ -1,13 +1,14 @@
 use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::classify_file;
-use super::static_gate::{run_static_gate_at, run_static_gate_snapshot};
+use super::source_snapshot::SharedSource;
+pub(crate) use super::static_gate::StaticAnalysis as GateRun;
+use super::static_gate::{StaticRequest, run_shared_gate, run_static_gate_snapshot};
 use crate::adoption::apply_legacy_ratchet;
 use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
 use crate::engines::{
-    FunctionMetrics,
     coverage::{normalized_repository_key, retain_code_lines},
     run_generated_freshness as execute_generated_freshness,
 };
@@ -16,39 +17,8 @@ use anyhow::Result;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// Static artifacts with an explicit empty marker so command callers can keep
-/// emitting reports when discovery finds no files.
-pub(crate) struct GateRun {
-    pub report: GateReport,
-    pub files: Vec<PathBuf>,
-    pub read_results: Vec<(PathBuf, String)>,
-    pub functions: Vec<FunctionMetrics>,
-    pub empty: bool,
-}
-
-pub(crate) fn run_static_gate_or_empty(
-    config: &HardgateConfig,
-    diff: bool,
-    paths: &[PathBuf],
-    root: &Path,
-) -> Result<GateRun> {
-    let outcome = run_static_gate_at(config, diff, paths, root)?;
-    let Some((report, files, read_results, functions)) = outcome else {
-        return Ok(GateRun {
-            report: GateReport::new(config.gate.name.clone()),
-            files: Vec::new(),
-            read_results: Vec::new(),
-            functions: Vec::new(),
-            empty: true,
-        });
-    };
-    Ok(GateRun {
-        report,
-        files,
-        read_results,
-        functions,
-        empty: false,
-    })
+pub(crate) fn run_static_gate_or_empty(request: StaticRequest<'_>) -> Result<GateRun> {
+    run_shared_gate(request)
 }
 
 /// Human-readable discovery context retained as a report advisory so JSON
@@ -269,7 +239,7 @@ fn push_legacy_summary(report: &mut GateReport, summary: &LegacySummary) {
 pub(crate) struct ChangedLineFilter<'a> {
     pub changed_lines: &'a ChangedLineMap,
     pub selected_files: &'a [PathBuf],
-    pub read_results: &'a [(PathBuf, String)],
+    pub read_results: &'a [SharedSource],
     pub config: &'a HardgateConfig,
     pub root: &'a Path,
 }
@@ -294,7 +264,7 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
         let classified = classify_file(path, request.config, request.root)?;
         if classified.ast_supported && classified.role == FileRole::Source {
             source_files.insert(key.clone());
-            source_contents.entry(key).or_insert(content.as_str());
+            source_contents.entry(key).or_insert(content.as_ref());
         }
     }
 
@@ -328,10 +298,14 @@ mod tests {
         selected_files: &[PathBuf],
         read_results: &[(PathBuf, String)],
     ) -> ChangedLineMap {
+        let shared = read_results
+            .iter()
+            .map(|(path, text)| (path.clone(), std::sync::Arc::from(text.as_str())))
+            .collect::<Vec<_>>();
         filter_changed_lines(ChangedLineFilter {
             changed_lines,
             selected_files,
-            read_results,
+            read_results: &shared,
             config: &HardgateConfig::default(),
             root: Path::new("."),
         })

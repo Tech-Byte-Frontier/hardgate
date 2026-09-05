@@ -1,4 +1,9 @@
+mod classification_gaps;
+use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
+use classification_gaps::record_classification_gaps;
 mod selection;
+#[cfg(test)]
+mod snapshot_tests;
 
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::{
@@ -7,17 +12,18 @@ use super::role_policy::{
     effective_file_budgets, effective_function_budgets, record_role_evidence_failure,
     run_clone_analysis,
 };
+use super::source_snapshot::{SharedSource, SourceSnapshot};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
-use crate::discovery::{ClassifiedFile, DiscoverOptions, FileRole, discover_files_with_exclusions};
+use crate::discovery::{ClassifiedFile, DiscoverOptions, FileRole, discover_paths};
 use crate::engines::{
     AntiGamingScanner, BudgetViolation, ComplexityAnalyzer, ComplexityViolation, FunctionMetrics,
     InvariantViolation, InvariantsChecker, SuppressionViolation, check_content_budgets,
 };
 use anyhow::Result;
 use rayon::prelude::*;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Artifacts of one static-gate run: the report plus the discovered files,
 /// their contents, and per-function metrics for downstream gates.
@@ -46,27 +52,48 @@ pub fn run_static_gate_snapshot(
     contents: &[(PathBuf, String)],
 ) -> Result<StaticSnapshotOutcome> {
     let root = Path::new(".");
-    let files: Vec<PathBuf> = contents.iter().map(|(path, _)| path.clone()).collect();
-    let classified: Vec<(ClassifiedFile, String)> = contents
+    let files = contents
         .iter()
-        .map(|(path, content)| Ok((classify_file(path, config, root)?, content.clone())))
-        .collect::<Result<_>>()?;
-    let mut report = GateReport::new(config.gate.name.clone());
-    let roles: Vec<ClassifiedFile> = classified.iter().map(|(file, _)| file.clone()).collect();
-    record_classification_gaps(&roles, config, root, &mut report);
-    let functions = analyze_loaded_files(&classified, config, root, &mut report);
-    let read_results = contents.to_vec();
-    run_clone_analysis(
-        CloneRun {
-            read_results: &read_results,
-            changed_files: &[],
-            config,
-            root,
-            diff: false,
-        },
-        &mut report,
-    )?;
-    Ok((report, files, read_results, functions))
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let classified = classify_files(&files, config, root)?;
+    let snapshot = SourceSnapshot::from_shared(
+        classified
+            .into_iter()
+            .zip(contents)
+            .map(|(file, (_, text))| (file, Arc::from(text.as_str())))
+            .collect(),
+    );
+    let request = StaticRequest {
+        config,
+        root,
+        paths: &[],
+        diff: false,
+        dead_code: false,
+    };
+    let outcome = analyze_snapshot(request, files, Vec::new(), snapshot)?;
+    Ok((
+        outcome.report,
+        outcome.files,
+        contents.to_vec(),
+        outcome.functions,
+    ))
+}
+
+pub(crate) struct StaticRequest<'a> {
+    pub config: &'a HardgateConfig,
+    pub root: &'a Path,
+    pub paths: &'a [PathBuf],
+    pub diff: bool,
+    pub dead_code: bool,
+}
+
+pub(crate) struct StaticAnalysis {
+    pub report: GateReport,
+    pub files: Vec<PathBuf>,
+    pub read_results: Vec<SharedSource>,
+    pub functions: Vec<FunctionMetrics>,
+    pub empty: bool,
 }
 
 /// Run the static gate, optionally scoped to explicit files or directories.
@@ -84,40 +111,155 @@ pub fn run_static_gate_at(
     paths: &[PathBuf],
     root: &Path,
 ) -> Result<StaticGateOutcome> {
-    let discovery = discover_files_with_exclusions(DiscoverOptions {
+    let run = run_shared_gate(StaticRequest {
+        config,
         root,
-        diff_only: diff,
-        exclusions: &config.budgets.files.exclusions.paths,
+        paths,
+        diff,
+        dead_code: false,
     })?;
-    let (files, excluded_files) = selection::select_files(
+    if run.empty {
+        return Ok(None);
+    }
+    let contents = run
+        .read_results
+        .into_iter()
+        .map(|(path, text)| (path, text.to_string()))
+        .collect();
+    Ok(Some((run.report, run.files, contents, run.functions)))
+}
+
+pub(crate) fn run_shared_gate(request: StaticRequest<'_>) -> Result<StaticAnalysis> {
+    let reference_context =
+        request.dead_code || (request.diff && clone_context_enabled(request.config));
+    let full = if reference_context || (request.diff && !request.paths.is_empty()) {
+        Some(discover_paths(DiscoverOptions {
+            root: request.root,
+            diff_only: false,
+            exclusions: &request.config.budgets.files.exclusions.paths,
+        })?)
+    } else {
+        None
+    };
+    let discovery = if !request.diff
+        && let Some(full) = &full
+    {
+        crate::discovery::DiscoveryResult {
+            files: full.files.clone(),
+            excluded_files: full.excluded_files.clone(),
+            classified_files: Vec::new(),
+        }
+    } else {
+        discover_paths(DiscoverOptions {
+            root: request.root,
+            diff_only: request.diff,
+            exclusions: &request.config.budgets.files.exclusions.paths,
+        })?
+    };
+    let (files, excluded) = selection::select_files(
         selection::Scope {
-            config,
-            diff,
-            paths,
-            root,
+            config: request.config,
+            diff: request.diff,
+            paths: request.paths,
+            root: request.root,
+            full: full.as_ref(),
         },
         discovery,
     )?;
     if files.is_empty() {
-        return Ok(None);
+        return analyze_snapshot(request, files, excluded, SourceSnapshot::default());
     }
+    let mut context_paths = if reference_context {
+        full.map(|full| full.files).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    context_paths.extend_from_slice(&files);
+    context_paths.sort();
+    context_paths.dedup();
+    let classified = classify_files(&context_paths, request.config, request.root)?;
+    analyze_snapshot(
+        request,
+        files,
+        excluded,
+        SourceSnapshot::capture(classified),
+    )
+}
 
-    let mut report = GateReport::new(config.gate.name.clone());
-    record_budget_exclusion_advisory(&excluded_files, &mut report);
-    let classified = classify_files(&files, config, root)?;
-    record_classification_gaps(&classified, config, root, &mut report);
-    let (read_results, all_functions) = run_file_analysis(&classified, config, root, &mut report);
+fn clone_context_enabled(config: &HardgateConfig) -> bool {
+    FileRole::POLICY_ROLES.into_iter().any(|role| {
+        let override_enabled = config
+            .roles
+            .for_role(role)
+            .and_then(|policy| policy.clone_enabled);
+        (role.receives_clone_analysis() || override_enabled == Some(true))
+            && override_enabled.unwrap_or(config.clones.enabled)
+    })
+}
+
+fn analyze_snapshot(
+    request: StaticRequest<'_>,
+    files: Vec<PathBuf>,
+    excluded: Vec<PathBuf>,
+    snapshot: SourceSnapshot,
+) -> Result<StaticAnalysis> {
+    let mut report = GateReport::new(request.config.gate.name.clone());
+    record_budget_exclusion_advisory(&excluded, &mut report);
+    let selected = files
+        .iter()
+        .filter_map(|path| snapshot.find(path))
+        .collect::<Vec<_>>();
+    let classified = selected
+        .iter()
+        .map(|file| &file.classified)
+        .collect::<Vec<_>>();
+    record_classification_gaps(&classified, request.config, request.root, &mut report);
+    let mut loaded = Vec::new();
+    for file in selected {
+        match &file.content {
+            Ok(text) => loaded.push((&file.classified, text.as_ref())),
+            Err(error) => record_role_evidence_failure(
+                &mut report,
+                RoleEvidence {
+                    config: request.config,
+                    role: file.classified.role,
+                    step: "read-source",
+                    target: &file.classified.path,
+                    message: format!("Unable to read classified file: {error}"),
+                },
+            ),
+        }
+    }
+    let functions = analyze_loaded_files(&loaded, request.config, request.root, &mut report);
     run_clone_analysis(
         CloneRun {
-            read_results: &read_results,
+            snapshot: &snapshot,
+            selected_ids: &snapshot.selected_ids(&files),
             changed_files: &files,
-            config,
-            root,
-            diff,
+            config: request.config,
+            root: request.root,
+            diff: request.diff,
         },
         &mut report,
     )?;
-    Ok(Some((report, files, read_results, all_functions)))
+    if request.dead_code {
+        run_scoped_dead_code_analysis(
+            DeadCodeScope {
+                config: request.config,
+                root: request.root,
+                selected: &files,
+                snapshot: &snapshot,
+            },
+            &mut report,
+        )?;
+    }
+    Ok(StaticAnalysis {
+        report,
+        read_results: snapshot.shared_contents(&files),
+        functions,
+        empty: files.is_empty(),
+        files,
+    })
 }
 
 fn record_budget_exclusion_advisory(excluded_files: &[PathBuf], report: &mut GateReport) {
@@ -132,19 +274,8 @@ fn record_budget_exclusion_advisory(excluded_files: &[PathBuf], report: &mut Gat
     ));
 }
 
-fn run_file_analysis(
-    files: &[ClassifiedFile],
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) -> (Vec<(PathBuf, String)>, Vec<FunctionMetrics>) {
-    let (read_results, analyzed_inputs) = read_classified_files(files, config, report);
-    let functions = analyze_loaded_files(&analyzed_inputs, config, root, report);
-    (read_results, functions)
-}
-
 fn analyze_loaded_files(
-    analyzed_inputs: &[(ClassifiedFile, String)],
+    analyzed_inputs: &[(&ClassifiedFile, &str)],
     config: &HardgateConfig,
     root: &Path,
     report: &mut GateReport,
@@ -159,43 +290,6 @@ fn analyze_loaded_files(
     };
     let analyzed = analyze_inputs(analyzed_inputs, &context);
     merge_file_analysis(analyzed, config, report)
-}
-
-type ReadInputs = (Vec<(PathBuf, String)>, Vec<(ClassifiedFile, String)>);
-
-fn read_classified_files(
-    files: &[ClassifiedFile],
-    config: &HardgateConfig,
-    report: &mut GateReport,
-) -> ReadInputs {
-    let attempts: Vec<(ClassifiedFile, std::result::Result<String, String>)> = files
-        .par_iter()
-        .map(|file| {
-            let result = fs::read_to_string(&file.path).map_err(|error| error.to_string());
-            (file.clone(), result)
-        })
-        .collect();
-    let mut read_results = Vec::new();
-    let mut analyzed_inputs = Vec::new();
-    for (file, result) in attempts {
-        match result {
-            Ok(content) => {
-                read_results.push((file.path.clone(), content.clone()));
-                analyzed_inputs.push((file, content));
-            }
-            Err(error) => record_role_evidence_failure(
-                report,
-                RoleEvidence {
-                    config,
-                    role: file.role,
-                    step: "read-source",
-                    target: &file.path,
-                    message: format!("Unable to read classified file: {error}"),
-                },
-            ),
-        }
-    }
-    (read_results, analyzed_inputs)
 }
 
 struct FileAnalysis {
@@ -217,13 +311,20 @@ struct FileAnalysisContext<'a> {
 }
 
 fn analyze_inputs(
-    inputs: &[(ClassifiedFile, String)],
+    inputs: &[(&ClassifiedFile, &str)],
     context: &FileAnalysisContext<'_>,
 ) -> Vec<FileAnalysis> {
-    inputs
-        .par_iter()
-        .map(|(file, content)| analyze_one(file, content, context))
-        .collect()
+    if inputs.len() < 8 {
+        inputs
+            .iter()
+            .map(|(file, content)| analyze_one(file, content, context))
+            .collect()
+    } else {
+        inputs
+            .par_iter()
+            .map(|(file, content)| analyze_one(file, content, context))
+            .collect()
+    }
 }
 
 fn analyze_one(
@@ -339,60 +440,6 @@ fn merge_file_analysis(
     all_functions
 }
 
-fn record_classification_gaps(
-    files: &[ClassifiedFile],
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) {
-    let generated = files
-        .iter()
-        .filter(|file| file.role == FileRole::Generated)
-        .count();
-    if generated > 0 {
-        report.advisories.push(format!(
-            "Classified {generated} generated file(s); inventoried without handwritten complexity or clone debt."
-        ));
-    }
-    for file in files {
-        record_classification_gap(file, config, root, report);
-    }
-}
-
-fn record_classification_gap(
-    file: &ClassifiedFile,
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) {
-    let rel = file.path.strip_prefix(root).unwrap_or(&file.path);
-    if file.role == FileRole::Unknown && config.gate.enforce_classified_sources {
-        record_evidence_failure(
-            report,
-            true,
-            EvidenceFailure {
-                step: "classify-source",
-                target: rel,
-                message: "No repository role matched this file.".to_string(),
-            },
-        );
-    } else if matches!(file.role, FileRole::Source | FileRole::Migration) && !file.ast_supported {
-        record_role_evidence_failure(
-            report,
-            RoleEvidence {
-                config,
-                role: file.role,
-                step: "unsupported-source",
-                target: rel,
-                message: format!(
-                    "File is classified as {:?}, but no AST engine supports its extension.",
-                    file.role
-                ),
-            },
-        );
-    }
-}
-
 /// Shared single-file analysis used by `scan` and the MCP server.
 pub struct AnalyzeInput<'a> {
     pub path: &'a Path,
@@ -419,12 +466,7 @@ pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec
             return Vec::new();
         }
     };
-    record_classification_gaps(
-        std::slice::from_ref(&classified),
-        input.config,
-        input.root,
-        report,
-    );
+    record_classification_gaps(&[&classified], input.config, input.root, report);
     let context = FileAnalysisContext {
         config: input.config,
         root: input.root,

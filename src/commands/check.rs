@@ -1,8 +1,8 @@
-use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use super::gate_evidence::{
     ChangedLineFilter, GateRun, empty_discovery_advisory, filter_changed_lines,
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
 };
+use super::static_gate::StaticRequest;
 use super::verify::{
     CoverageScope, CoverageVerification, SourceCoverageRequest, source_files_for_coverage,
     verify_coverage_with_scope, verify_mutation_at,
@@ -89,23 +89,17 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<(
         read_results,
         functions,
         empty,
-    } = run_static_gate_or_empty(config, static_diff, &opts.paths, root)?;
+    } = run_static_gate_or_empty(StaticRequest {
+        config,
+        root,
+        paths: &opts.paths,
+        diff: static_diff,
+        dead_code: opts.dead_code || config.analysis.dead_code.enabled,
+    })?;
     if empty {
         report
             .advisories
             .push(empty_discovery_advisory(opts.diff, !opts.paths.is_empty()));
-    }
-
-    if opts.dead_code || config.analysis.dead_code.enabled {
-        run_scoped_dead_code_analysis(
-            DeadCodeScope {
-                config,
-                root,
-                selected: &files,
-                read_results: &read_results,
-            },
-            &mut report,
-        )?;
     }
 
     let reference_evidence = if ratchet_enabled {
@@ -167,7 +161,7 @@ struct CheckCoverage<'a> {
     diff: bool,
     cli_report: Option<String>,
     files: &'a [PathBuf],
-    read_results: &'a [(PathBuf, String)],
+    read_results: &'a [super::source_snapshot::SharedSource],
     functions: &'a [crate::engines::FunctionMetrics],
     reference_evidence: Option<&'a ReferenceEvidence>,
     root: &'a Path,

@@ -1,11 +1,11 @@
 use super::check::{Emission, OutputOptions, emit_gate_report};
-use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::gate_evidence::{
     GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
     run_static_gate_or_empty,
 };
 use super::role_policy::classify_file;
+use super::static_gate::StaticRequest;
 use crate::config::{ConfigContext, HardgateConfig};
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
@@ -51,23 +51,17 @@ pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Result
         read_results,
         functions,
         ..
-    } = run_static_gate_or_empty(config, false, &opts.paths, root)?;
+    } = run_static_gate_or_empty(StaticRequest {
+        config,
+        root,
+        paths: &opts.paths,
+        diff: false,
+        dead_code: config.analysis.dead_code.enabled,
+    })?;
     if empty {
         report
             .advisories
             .push(empty_discovery_advisory(false, scoped));
-    }
-
-    if config.analysis.dead_code.enabled {
-        run_scoped_dead_code_analysis(
-            DeadCodeScope {
-                config,
-                root,
-                selected: &files,
-                read_results: &read_results,
-            },
-            &mut report,
-        )?;
     }
 
     run_legacy_ratchet(config, root, &mut report, config.analysis.dead_code.enabled);
