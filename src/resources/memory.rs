@@ -112,3 +112,7 @@ fn parse_decimal(value: &str, field: &str) -> io::Result<u64> {
 #[cfg(test)]
 #[path = "memory_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "memory/fixture_tests.rs"]
+pub(super) mod fixture_tests;

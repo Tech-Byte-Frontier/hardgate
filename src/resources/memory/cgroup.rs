@@ -196,3 +196,7 @@ fn merge_min(current: Option<u64>, next: Option<u64>) -> Option<u64> {
         (None, None) => None,
     }
 }
+
+#[cfg(test)]
+#[path = "cgroup_tests.rs"]
+mod tests;

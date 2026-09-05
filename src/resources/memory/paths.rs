@@ -176,3 +176,7 @@ fn absolute_path(components: &[OsString]) -> PathBuf {
     }
     path
 }
+
+#[cfg(test)]
+#[path = "paths_tests.rs"]
+mod tests;

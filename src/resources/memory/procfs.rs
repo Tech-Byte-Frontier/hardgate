@@ -171,3 +171,7 @@ pub(super) fn read_pressure(path: &Path) -> io::Result<Pressure> {
         None => Ok(Pressure::default()),
     }
 }
+
+#[cfg(test)]
+#[path = "procfs_tests.rs"]
+mod tests;
