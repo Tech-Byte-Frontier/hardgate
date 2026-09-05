@@ -53,9 +53,19 @@ pub(crate) fn parse_report(
 
     let mut records = LcovRecords::new(require_functions, require_branches);
     for (line_number, line) in content.lines().enumerate() {
+        let current_source = records.current.as_ref().map(|c| c.coverage.file_path.clone());
         records
             .ingest(line.trim())
-            .with_context(|| format!("Invalid LCOV record at line {}", line_number + 1))?;
+            .with_context(|| {
+                let source_info = match current_source {
+                    Some(ref p) => format!(" for source `{}`", p.display()),
+                    None => String::new(),
+                };
+                format!(
+                    "Invalid LCOV record at line {}{source_info}; supported producer formats include Coverage.py, cargo-llvm-cov, and lcov",
+                    line_number + 1
+                )
+            })?;
     }
     records.finish()
 }
@@ -269,16 +279,25 @@ impl RecordBuilder {
     }
 
     fn finish(self, require_functions: bool, require_branches: bool) -> Result<FileCoverage> {
-        validate_lines(&self)?;
-        validate_function_counts(&self, require_functions)?;
-        validate_branch_counts(&self, require_branches)?;
-        self.details.validate(DetailValidation {
-            seen_counts: &self.seen_counts,
-            functions_found: self.coverage.functions_found,
-            functions_hit: self.coverage.functions_hit,
-            require_functions,
-            require_branches,
-        })?;
+        let file_path = self.coverage.file_path.clone();
+        validate_lines(&self)
+            .and_then(|()| validate_function_counts(&self, require_functions))
+            .and_then(|()| validate_branch_counts(&self, require_branches))
+            .and_then(|()| {
+                self.details.validate(DetailValidation {
+                    seen_counts: &self.seen_counts,
+                    functions_found: self.coverage.functions_found,
+                    functions_hit: self.coverage.functions_hit,
+                    require_functions,
+                    require_branches,
+                })
+            })
+            .with_context(|| {
+                format!(
+                    "Failed to validate LCOV record for source `{}`; supported producer formats include Coverage.py, cargo-llvm-cov, and lcov",
+                    file_path.display()
+                )
+            })?;
         Ok(self.coverage)
     }
 }
@@ -309,6 +328,15 @@ fn ensure_unique_count(seen_counts: &mut HashSet<&'static str>, tag: &'static st
 }
 
 fn validate_lines(builder: &RecordBuilder) -> Result<()> {
+    let has_lf = builder.seen_counts.contains("LF");
+    let has_lh = builder.seen_counts.contains("LH");
+    let is_empty_module = builder.coverage.line_hits.is_empty()
+        && (builder.coverage.lines_found == 0 || (!has_lf && !has_lh));
+
+    if is_empty_module {
+        return Ok(());
+    }
+
     require_counts(&builder.seen_counts, &["LF", "LH"], "LF/LH line counts")?;
     if builder.coverage.line_hits.is_empty() {
         bail!("LCOV source record contains no DA line data");
@@ -347,6 +375,7 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
 }
 
 fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
+    let required = required && builder.coverage.lines_found > 0;
     validate_counter_pair(
         builder,
         required,
@@ -363,6 +392,7 @@ fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<(
 }
 
 fn validate_branch_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
+    let required = required && builder.coverage.lines_found > 0;
     validate_counter_pair(
         builder,
         required,
