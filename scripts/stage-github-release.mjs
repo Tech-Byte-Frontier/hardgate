@@ -14,6 +14,9 @@ import { expectedGithubAssets, remainingMs, stageGithubRelease } from "./github-
 
 const SUBPROCESS_TIMEOUT_MS = 60_000;
 const OVERALL_TIMEOUT_MS = 20 * 60 * 1000;
+const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
+const HASH_CHUNK_BYTES = 64 * 1024;
+const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
 
 function fail(message) {
   throw new Error(`stage-github-release: ${message}`);
@@ -61,8 +64,8 @@ function validateDist(directory, assets) {
 }
 
 function commandEnvironment(token) {
-  const environment = { GH_TOKEN: token };
-  for (const name of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "GH_HOST"]) {
+  const environment = { GH_TOKEN: token, GH_HOST: "github.com" };
+  for (const name of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]) {
     if (process.env[name]) environment[name] = process.env[name];
   }
   return environment;
@@ -90,18 +93,76 @@ function parseReleaseMetadata(output) {
   };
 }
 
-async function sha256File(filePath) {
+function hashStream(stream, policy) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(hash.digest("hex")));
+    let settled = false;
+    let timer;
+    const finish = (error, digest) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(digest);
+    };
+    try {
+      timer = setTimeout(() => {
+        const error = new Error("asset hash deadline exhausted");
+        stream.destroy(error);
+        finish(error);
+      }, remainingMs(policy));
+    } catch (error) {
+      finish(error);
+      return;
+    }
+    stream.on("data", (chunk) => {
+      try {
+        remainingMs(policy);
+        hash.update(chunk);
+      } catch (error) {
+        stream.destroy(error);
+        finish(error);
+      }
+    });
+    stream.once("error", (error) => finish(error));
+    stream.once("end", () => {
+      try {
+        remainingMs(policy);
+        finish(null, hash.digest("hex"));
+      } catch (error) {
+        finish(error);
+      }
+    });
   });
 }
 
-async function compareFiles(left, right) {
-  const [leftDigest, rightDigest] = await Promise.all([sha256File(left), sha256File(right)]);
+async function sha256File(filePath, policy) {
+  const handle = await fs.promises.open(filePath, READ_FLAGS);
+  let stream;
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) fail(`asset ${path.basename(filePath)} is not a regular file`);
+    if (stats.size > MAX_ASSET_BYTES) fail(`asset ${path.basename(filePath)} exceeds the maximum size`);
+    const options = { fd: handle.fd, autoClose: false, highWaterMark: HASH_CHUNK_BYTES };
+    if (stats.size > 0) options.end = stats.size - 1;
+    stream = fs.createReadStream(null, options);
+    const digest = await hashStream(stream, policy);
+    const finalStats = await handle.stat();
+    if (finalStats.size !== stats.size) fail(`asset ${path.basename(filePath)} changed while hashing`);
+    return digest;
+  } finally {
+    if (stream && !stream.readableEnded && !stream.destroyed) stream.destroy();
+    try {
+      await handle.close();
+    } catch (error) {
+      if (error.code !== "EBADF") throw error;
+    }
+  }
+}
+
+async function compareFiles(left, right, policy) {
+  const leftDigest = await sha256File(left, policy);
+  const rightDigest = await sha256File(right, policy);
   if (leftDigest !== rightDigest) fail(`remote asset bytes mismatch for ${path.basename(left)}`);
 }
 
@@ -142,7 +203,7 @@ async function buildOperations(options, request, token) {
           await runGh(["release", "download", request.tag, "--repo", request.repo, "--pattern", name, "--dir", directory]);
           const downloaded = path.join(directory, name);
           assertDownloadedFile(downloaded, name);
-          await compareFiles(path.join(options.dist, name), downloaded);
+          await compareFiles(path.join(options.dist, name), downloaded, request.policy);
         }
       } finally {
         await fs.promises.rm(directory, { recursive: true, force: true });

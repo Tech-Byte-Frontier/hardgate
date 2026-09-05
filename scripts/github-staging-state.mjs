@@ -36,8 +36,8 @@ function assertAssetName(value, label) {
   return value;
 }
 
-function assertAssetList(value, label) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 64) fail(`${label} must be a non-empty asset list`);
+function assertAssetList(value, label, { allowEmpty = false } = {}) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > 64) fail(`${label} must be ${allowEmpty ? "an asset list" : "a non-empty asset list"}`);
   const result = [];
   const names = new Set();
   for (const [index, name] of value.entries()) {
@@ -52,6 +52,11 @@ function assertAssetList(value, label) {
 export function expectedGithubAssets(version) {
   const checked = assertVersion(version, "version");
   return [...GITHUB_ARCHIVES, "SHA256SUMS", `hardgate-${checked}.sbom.cdx.json`];
+}
+
+function assertExpectedAssets(version, assets) {
+  const expected = expectedGithubAssets(version);
+  if (assets.length !== expected.length || expected.some((name) => !assets.includes(name))) fail("request.assets must exactly match the eight expected release assets");
 }
 
 function assertPolicy(policy) {
@@ -70,7 +75,8 @@ function assertRequest(request) {
   const version = assertVersion(request.version, "request.version");
   if (typeof request.tag !== "string" || request.tag !== `v${version}`) fail("request.tag must exactly match request.version");
   if (request.repo !== undefined && (typeof request.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(request.repo))) fail("request.repo must be OWNER/REPO");
-  assertAssetList(request.assets, "request.assets");
+  const assets = assertAssetList(request.assets, "request.assets");
+  assertExpectedAssets(version, assets);
   assertPolicy(request.policy);
   return request;
 }
@@ -92,7 +98,7 @@ function validateProbe(value) {
   }
   assertKeys(value, ["state", "tag", "isDraft", "isPrerelease", "assets"], "probe result");
   if (typeof value.tag !== "string" || typeof value.isDraft !== "boolean" || typeof value.isPrerelease !== "boolean") fail("probe result metadata is malformed");
-  return { state: "present", tag: value.tag, isDraft: value.isDraft, isPrerelease: value.isPrerelease, assets: assertAssetList(value.assets, "probe result.assets") };
+  return { state: "present", tag: value.tag, isDraft: value.isDraft, isPrerelease: value.isPrerelease, assets: assertAssetList(value.assets, "probe result.assets", { allowEmpty: true }) };
 }
 
 function remainingMs(policy) {
@@ -172,7 +178,10 @@ async function stageExisting(request, operations, initial) {
     await verifyAssets(request, operations, [name]);
     if (uploadError) ambiguous = true;
   }
-  if (missing.length === 0) return { publication: "existing", state: "immutable_verified", prerelease: initial.isPrerelease };
+  if (missing.length === 0) {
+    const current = await reconcileRelease(request, operations);
+    return { publication: "existing", state: "immutable_verified", prerelease: current.isPrerelease };
+  }
   const current = await reconcileRelease(request, operations);
   return { publication: ambiguous ? "ambiguous" : "existing", state: "immutable_verified", prerelease: current.isPrerelease };
 }

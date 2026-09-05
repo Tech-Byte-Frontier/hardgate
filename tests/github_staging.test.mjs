@@ -11,7 +11,7 @@ import { projectRoot } from "../scripts/release-support.mjs";
 import { expectedGithubAssets, stageGithubRelease } from "../scripts/github-staging-state.mjs";
 import "../scripts/stage-github-release.mjs";
 
-const assets = ["one.tar.gz", "two.tar.gz", "SHA256SUMS"];
+const assets = expectedGithubAssets("1.2.3");
 const request = (overrides = {}) => ({ tag: "v1.2.3", version: "1.2.3", assets, policy: { deadline: performance.now() + 10_000 }, ...overrides });
 
 function scenario(probes, overrides = {}) {
@@ -33,22 +33,32 @@ function scenario(probes, overrides = {}) {
 
 const present = (names = assets, prerelease = true) => ({ state: "present", tag: "v1.2.3", isDraft: false, isPrerelease: prerelease, assets: names });
 const reject = (action, pattern) => assert.rejects(action, pattern);
+const verifyEvent = (names) => `verify:${names.join(",")}`;
+const extendProbes = (initial) => {
+  const seen = [...initial];
+  return assets.filter((name) => !seen.includes(name)).map((name) => {
+    seen.push(name);
+    return present(seen);
+  });
+};
 
 const created = scenario([{ state: "missing" }, present()]);
 assert.deepEqual(await stageGithubRelease(request(), created.operations), { publication: "created", state: "immutable_verified", prerelease: true });
-assert.deepEqual(created.events, ["probe", "create", "probe", "verify:one.tar.gz,two.tar.gz,SHA256SUMS"]);
+assert.deepEqual(created.events, ["probe", "create", "probe", verifyEvent(assets)]);
 
-const stable = scenario([present(assets, false)]);
+const stable = scenario([present(assets, false), present(assets, false)]);
 assert.deepEqual(await stageGithubRelease(request(), stable.operations), { publication: "existing", state: "immutable_verified", prerelease: false });
-assert.deepEqual(stable.events, ["probe", "verify:one.tar.gz,two.tar.gz,SHA256SUMS"]);
+assert.deepEqual(stable.events, ["probe", verifyEvent(assets), "probe", verifyEvent(assets)]);
 
-const missingExisting = scenario([present([assets[0], assets[2]], true), present(assets, true), present(assets, true)]);
+const partialNames = [assets[0], assets[2]];
+const missingExisting = scenario([present(partialNames, true), ...extendProbes(partialNames), present(assets, true)]);
 assert.deepEqual(await stageGithubRelease(request(), missingExisting.operations), { publication: "existing", state: "immutable_verified", prerelease: true });
-assert.deepEqual(missingExisting.events, ["probe", "verify:one.tar.gz,SHA256SUMS", "upload:two.tar.gz", "probe", "verify:two.tar.gz", "probe", "verify:one.tar.gz,two.tar.gz,SHA256SUMS"]);
+assert.equal(missingExisting.events.filter((event) => event.startsWith("upload:")).length, assets.length - partialNames.length);
+assert.equal(missingExisting.events.at(-1), verifyEvent(assets));
 
-const uploadAmbiguous = scenario([present([assets[0]], false), present(assets, false), present(assets, false), present(assets, false)], { upload: () => { throw new Error("upload response lost"); } });
+const uploadAmbiguous = scenario([present([assets[0]], false), ...extendProbes([assets[0]]), present(assets, false)], { upload: () => { throw new Error("upload response lost"); } });
 assert.equal((await stageGithubRelease(request(), uploadAmbiguous.operations)).publication, "ambiguous");
-assert.equal(uploadAmbiguous.events.filter((event) => event === "upload:two.tar.gz").length, 1);
+assert.equal(uploadAmbiguous.events.filter((event) => event === `upload:${assets[1]}`).length, 1);
 
 const createAmbiguous = scenario([{ state: "missing" }, present(assets, true)], { create: () => { throw new Error("create response lost"); } });
 assert.equal((await stageGithubRelease(request(), createAmbiguous.operations)).publication, "ambiguous");
@@ -60,11 +70,26 @@ assert.equal(partialCreate.events.filter((event) => event === "create").length, 
 
 const uploadUnknown = scenario([present([assets[0]], true), new Error("authorization denied")], { upload: () => { throw new Error("upload response lost"); } });
 await reject(stageGithubRelease(request(), uploadUnknown.operations), /authorization denied/);
-assert.equal(uploadUnknown.events.filter((event) => event === "upload:two.tar.gz").length, 1);
+assert.equal(uploadUnknown.events.filter((event) => event === `upload:${assets[1]}`).length, 1);
 
 const mismatchBeforeUpload = scenario([present([assets[0]], true)], { verify: (names) => names.length === 1 ? (() => { throw new Error("existing bytes mismatch"); })() : undefined });
 await reject(stageGithubRelease(request(), mismatchBeforeUpload.operations), /existing bytes mismatch/);
 assert.equal(mismatchBeforeUpload.events.some((event) => event.startsWith("upload:")), false);
+
+const zeroAssetExisting = scenario([present([]), ...extendProbes([]), present(assets)]);
+assert.deepEqual(await stageGithubRelease(request(), zeroAssetExisting.operations), { publication: "existing", state: "immutable_verified", prerelease: true });
+assert.equal(zeroAssetExisting.events.filter((event) => event.startsWith("upload:")).length, assets.length);
+assert.equal(zeroAssetExisting.events.filter((event) => event.startsWith("verify:")).length, assets.length + 1);
+
+const createAckLostZero = scenario([{ state: "missing" }, present([])], { create: () => { throw new Error("create response lost"); } });
+await reject(stageGithubRelease(request(), createAckLostZero.operations), /exact expected asset set/);
+assert.equal(createAckLostZero.events.filter((event) => event === "create").length, 1);
+const resumedZero = scenario([present([]), ...extendProbes([]), present(assets)], { create: () => { throw new Error("resume must not create"); } });
+assert.deepEqual(await stageGithubRelease(request(), resumedZero.operations), { publication: "existing", state: "immutable_verified", prerelease: true });
+assert.equal(resumedZero.events.filter((event) => event === "create").length, 0);
+assert.equal(resumedZero.events.filter((event) => event.startsWith("upload:")).length, assets.length);
+
+await reject(stageGithubRelease(request({ assets: assets.slice(0, -1) }), scenario([{ state: "missing" }]).operations), /exactly match the eight expected/);
 
 for (const bad of [present(["unexpected.tgz"], true), { ...present([assets[0]], true), tag: "v9.9.9" }, { ...present([assets[0]], true), isDraft: true }]) {
   const invalid = scenario([bad]);
@@ -91,7 +116,7 @@ try {
   const fakeGh = `#!/usr/bin/env node
 const fs=require('node:fs'); const path=require('node:path');
 const args=process.argv.slice(2); const remote=${JSON.stringify(remote)}; const log=${JSON.stringify(log)};
-fs.appendFileSync(log, JSON.stringify({args,env:Object.fromEntries(['GH_TOKEN','GITHUB_TOKEN','NPM_TOKEN','CARGO_REGISTRY_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN'].map(k=>[k,process.env[k]??null]))})+'\\n');
+fs.appendFileSync(log, JSON.stringify({args,env:Object.fromEntries(['GH_TOKEN','GH_HOST','GITHUB_TOKEN','NPM_TOKEN','CARGO_REGISTRY_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN'].map(k=>[k,process.env[k]??null]))})+'\\n');
 const fail=(text)=>{process.stderr.write(text+'\\n');process.exit(1);}; const view=()=>{if(!fs.existsSync(path.join(remote,'created'))) fail('release not found'); const names=fs.readdirSync(remote).filter(n=>n!=='created'); process.stdout.write(JSON.stringify({tagName:'v1.2.3',isDraft:false,isPrerelease:true,assets:names.map(name=>({name}))}));};
 if(args[0]!=='release') fail('unexpected command'); if(args[1]==='view') view();
 else if(args[1]==='create'){const files=args.slice(3).filter(p=>fs.existsSync(p)); for(const file of files) fs.copyFileSync(file,path.join(remote,path.basename(file))); fs.writeFileSync(path.join(remote,'created'),'yes');}
@@ -112,6 +137,7 @@ else fail('unexpected release operation');
   for (const flag of ["--verify-tag", "--generate-notes", "--prerelease", "--latest=false"]) assert.ok(createCall.args.includes(flag), flag);
   assert.equal(createCall.args.includes("--clobber"), false);
   assert.equal(createCall.env.GH_TOKEN, "fixture-token");
+  assert.equal(createCall.env.GH_HOST, "github.com");
   for (const key of ["GITHUB_TOKEN", "NPM_TOKEN", "CARGO_REGISTRY_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"]) assert.equal(createCall.env[key], null, key);
 
   fs.writeFileSync(path.join(dist, "extra.txt"), "extra");
