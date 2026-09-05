@@ -199,9 +199,12 @@ fn invert_binary_op(op: &str) -> Option<&'static str> {
     None
 }
 
+fn is_boolean_node_kind(kind: &str) -> bool {
+    matches!(kind, "boolean_literal" | "true" | "false" | "boolean")
+}
+
 fn try_mutate_boolean(node: Node, source: &[u8], path: &Path, id: usize) -> Option<AstMutant> {
-    let kind = node.kind();
-    if kind != "boolean_literal" && kind != "true" && kind != "false" && kind != "boolean" {
+    if !is_boolean_node_kind(node.kind()) {
         return None;
     }
     let text = node.utf8_text(source).ok()?;

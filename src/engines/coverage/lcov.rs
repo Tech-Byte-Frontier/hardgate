@@ -374,12 +374,14 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
     Ok(())
 }
 
-fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
-    let required = required && builder.coverage.lines_found > 0;
-    validate_counter_pair(
-        builder,
-        required,
-        CounterPair {
+enum MetricCounterKind {
+    Function,
+    Branch,
+}
+
+fn validate_metric_counts(builder: &RecordBuilder, required: bool, kind: MetricCounterKind) -> Result<()> {
+    let pair = match kind {
+        MetricCounterKind::Function => CounterPair {
             found_tag: "FNF",
             hit_tag: "FNH",
             label: "function counts",
@@ -388,15 +390,7 @@ fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<(
             hit: builder.coverage.functions_hit,
             exceeds: "LCOV FNH exceeds FNF",
         },
-    )
-}
-
-fn validate_branch_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
-    let required = required && builder.coverage.lines_found > 0;
-    validate_counter_pair(
-        builder,
-        required,
-        CounterPair {
+        MetricCounterKind::Branch => CounterPair {
             found_tag: "BRF",
             hit_tag: "BRH",
             label: "branch counts",
@@ -405,7 +399,16 @@ fn validate_branch_counts(builder: &RecordBuilder, required: bool) -> Result<()>
             hit: builder.coverage.branches_hit,
             exceeds: "LCOV BRH exceeds BRF",
         },
-    )
+    };
+    validate_counter_pair(builder, required, pair)
+}
+
+fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
+    validate_metric_counts(builder, required, MetricCounterKind::Function)
+}
+
+fn validate_branch_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
+    validate_metric_counts(builder, required, MetricCounterKind::Branch)
 }
 
 struct CounterPair {

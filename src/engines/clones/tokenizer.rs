@@ -115,30 +115,13 @@ impl RoutineDeclFilter {
                 prev_backslash = true;
                 continue;
             }
-            if c == '\'' && !in_double && !in_backtick {
-                in_single = !in_single;
-                continue;
-            }
-            if c == '"' && !in_single && !in_backtick {
-                in_double = !in_double;
-                continue;
-            }
-            if c == '`' && !in_single && !in_double {
-                in_backtick = !in_backtick;
+            if update_quote_state(c, &mut in_single, &mut in_double, &mut in_backtick) {
                 continue;
             }
             if in_single || in_double || in_backtick {
                 continue;
             }
-            match c {
-                '{' => self.brace_depth += 1,
-                '}' => self.brace_depth = self.brace_depth.saturating_sub(1),
-                '(' => self.paren_depth += 1,
-                ')' => self.paren_depth = self.paren_depth.saturating_sub(1),
-                '[' => self.bracket_depth += 1,
-                ']' => self.bracket_depth = self.bracket_depth.saturating_sub(1),
-                _ => {}
-            }
+            adjust_delimiter_depths(self, c);
         }
     }
 
@@ -149,17 +132,10 @@ impl RoutineDeclFilter {
         if line.ends_with(';') {
             return true;
         }
-        if !line.ends_with('\\') {
-            if line.contains("import ") || line.starts_with("from ") || line.ends_with(')') {
-                return true;
-            }
-            if (line.contains(" from ") || line.starts_with("import "))
-                && (line.ends_with('\'') || line.ends_with('"') || line.ends_with('`'))
-            {
-                return true;
-            }
+        if line.ends_with('\\') {
+            return false;
         }
-        false
+        is_routine_terminal_line(line)
     }
 
     fn reset(&mut self) {
@@ -168,6 +144,45 @@ impl RoutineDeclFilter {
         self.paren_depth = 0;
         self.bracket_depth = 0;
     }
+}
+
+fn update_quote_state(c: char, in_single: &mut bool, in_double: &mut bool, in_backtick: &mut bool) -> bool {
+    match c {
+        '\'' if !*in_double && !*in_backtick => {
+            *in_single = !*in_single;
+            true
+        }
+        '"' if !*in_single && !*in_backtick => {
+            *in_double = !*in_double;
+            true
+        }
+        '`' if !*in_single && !*in_double => {
+            *in_backtick = !*in_backtick;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn adjust_delimiter_depths(tracker: &mut RoutineDeclFilter, c: char) {
+    match c {
+        '{' => tracker.brace_depth += 1,
+        '}' => tracker.brace_depth = tracker.brace_depth.saturating_sub(1),
+        '(' => tracker.paren_depth += 1,
+        ')' => tracker.paren_depth = tracker.paren_depth.saturating_sub(1),
+        '[' => tracker.bracket_depth += 1,
+        ']' => tracker.bracket_depth = tracker.bracket_depth.saturating_sub(1),
+        _ => {}
+    }
+}
+
+fn is_routine_terminal_line(line: &str) -> bool {
+    if line.contains("import ") || line.starts_with("from ") || line.ends_with(')') {
+        return true;
+    }
+    let has_import_pattern = line.contains(" from ") || line.starts_with("import ");
+    let ends_with_quote = line.ends_with('\'') || line.ends_with('"') || line.ends_with('`');
+    has_import_pattern && ends_with_quote
 }
 
 fn starts_routine_declaration(trimmed: &str) -> Option<bool> {
@@ -204,21 +219,13 @@ fn is_use_declaration(trimmed: &str) -> bool {
 }
 
 fn is_import_declaration(trimmed: &str) -> bool {
-    if trimmed.starts_with("import ")
-        || trimmed.starts_with("import\t")
-        || trimmed.starts_with("import{")
-        || trimmed.starts_with("import\"")
-        || trimmed.starts_with("import'")
-        || trimmed.starts_with("import (")
-        || trimmed == "import ("
-        || trimmed == "import"
-    {
+    const IMPORT_PREFIXES: &[&str] = &[
+        "import ", "import\t", "import{", "import\"", "import'", "import (",
+    ];
+    if IMPORT_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) || trimmed == "import (" || trimmed == "import" {
         return true;
     }
-    if trimmed.starts_with("from ") && trimmed.contains("import") {
-        return true;
-    }
-    false
+    trimmed.starts_with("from ") && trimmed.contains("import")
 }
 
 fn is_export_reexport_or_type(trimmed: &str) -> bool {
@@ -235,42 +242,42 @@ fn is_export_reexport_or_type(trimmed: &str) -> bool {
 }
 
 fn is_type_alias_declaration(trimmed: &str) -> bool {
-    let s = if let Some(rest) = trimmed.strip_prefix("export ") {
-        rest.trim_start()
-    } else if let Some(rest) = trimmed.strip_prefix("pub") {
-        let rest = rest.trim_start();
-        if rest.starts_with('(') {
-            if let Some(after_paren) = rest.find(')') {
-                rest[after_paren + 1..].trim_start()
-            } else {
-                rest
-            }
-        } else {
-            rest
-        }
-    } else {
-        trimmed
+    let s = strip_export_and_pub(trimmed);
+    let Some(after_type) = s.strip_prefix("type ") else {
+        return false;
     };
+    let after_type = after_type.trim_start();
+    if after_type.starts_with('{') {
+        return true;
+    }
+    if let Some(eq_pos) = after_type.find('=') {
+        let before_eq = after_type[..eq_pos].trim();
+        return is_valid_type_alias_name(before_eq);
+    }
+    s.ends_with(';') || s.contains('{')
+}
 
-    if let Some(after_type) = s.strip_prefix("type ") {
-        let after_type = after_type.trim_start();
-        if after_type.starts_with('{') {
-            return true;
-        }
-        if let Some(eq_pos) = after_type.find('=') {
-            let before_eq = after_type[..eq_pos].trim();
-            if !before_eq.is_empty()
-                && before_eq
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']'))
-            {
-                return true;
-            }
-        } else if s.ends_with(';') || s.contains('{') {
-            return true;
+fn strip_export_and_pub(trimmed: &str) -> &str {
+    if let Some(rest) = trimmed.strip_prefix("export ") {
+        return rest.trim_start();
+    }
+    let Some(rest) = trimmed.strip_prefix("pub") else {
+        return trimmed;
+    };
+    let rest = rest.trim_start();
+    if let Some(stripped) = rest.strip_prefix('(') {
+        if let Some(after_paren) = stripped.find(')') {
+            return stripped[after_paren + 1..].trim_start();
         }
     }
-    false
+    rest
+}
+
+fn is_valid_type_alias_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']'))
 }
 
 fn is_comment_start(trimmed: &str) -> bool {

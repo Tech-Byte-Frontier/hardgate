@@ -29,35 +29,9 @@ use std::time::Instant;
 pub const FULL_SUITE_TIMEOUT_SECS: u64 = 60;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 10;
 
-#[derive(Debug)]
-pub(crate) enum MutationRunnerError {
-    Resolution(String),
-    Integrity(String),
-}
-
-impl MutationRunnerError {
-    pub(crate) fn resolution(error: impl std::fmt::Display) -> Self {
-        Self::Resolution(error.to_string())
-    }
-
-    pub(crate) fn integrity(message: impl Into<String>) -> Self {
-        Self::Integrity(message.into())
-    }
-
-    fn source_intact(&self) -> bool {
-        matches!(self, Self::Resolution(_))
-    }
-}
-
-impl std::fmt::Display for MutationRunnerError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Resolution(message) | Self::Integrity(message) => formatter.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for MutationRunnerError {}
+#[path = "error.rs"]
+mod error;
+pub(crate) use error::MutationRunnerError;
 
 pub(crate) type MutationRunnerResult<T> = std::result::Result<T, MutationRunnerError>;
 

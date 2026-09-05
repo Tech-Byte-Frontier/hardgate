@@ -248,8 +248,29 @@ fn explicit_js_family_imports_keep_module_files_reachable() {
     }));
 }
 
+
+fn assert_referenced_and_unreferenced(
+    files: Vec<PathBuf>,
+    contents: Vec<(PathBuf, String)>,
+    referenced_path: &str,
+    unreferenced_path: &str,
+) {
+    let violations = find_dead_code(files, contents);
+    let unref = unreferenced_files(&violations);
+    assert!(
+        !unref.contains(&PathBuf::from(referenced_path)),
+        "{} must be recognized as referenced",
+        referenced_path
+    );
+    assert!(
+        unref.contains(&PathBuf::from(unreferenced_path)),
+        "{} should be reported unreferenced",
+        unreferenced_path
+    );
+}
+
 #[test]
-fn test_dead_code_python_imports() {
+fn test_dead_code_python_imports_recognized() {
     let files = vec![
         PathBuf::from("main.py"),
         PathBuf::from("calculator.py"),
@@ -271,12 +292,7 @@ fn test_dead_code_python_imports() {
         ),
     ];
 
-    let violations = find_dead_code(files, contents);
-    let unref = unreferenced_files(&violations);
-    // calculator.py is imported in main.py, so it must NOT be unreferenced!
-    assert!(!unref.contains(&PathBuf::from("calculator.py")), "calculator.py must be recognized as referenced");
-    // parameters.py is not imported or referenced anywhere, so it MUST be reported!
-    assert!(unref.contains(&PathBuf::from("parameters.py")), "parameters.py should be reported unreferenced");
+    assert_referenced_and_unreferenced(files, contents, "calculator.py", "parameters.py");
 }
 
 #[test]
@@ -302,9 +318,6 @@ fn test_dead_code_html_and_runtime_references() {
         ),
     ];
 
-    let violations = find_dead_code(files, contents);
-    let unref = unreferenced_files(&violations);
-    assert!(!unref.contains(&PathBuf::from("src/runtime_bundle.js")), "runtime_bundle.js should be recognized via script tag");
-    assert!(unref.contains(&PathBuf::from("src/orphan.js")), "orphan.js should be reported unreferenced");
+    assert_referenced_and_unreferenced(files, contents, "src/runtime_bundle.js", "src/orphan.js");
 }
 

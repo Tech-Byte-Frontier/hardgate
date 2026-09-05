@@ -77,17 +77,27 @@ impl DeadCodeAnalyzer {
 
         let referenced_stems = collect_referenced_stems(file_contents);
         let references = ReferenceIndex::build(file_contents);
-        self.detect_unreferenced_files(&ctx, &referenced_stems, &references, &mut violations);
+        let ref_bundle = FileReferenceBundle {
+            referenced_stems: &referenced_stems,
+            references: &references,
+        };
+        self.detect_unreferenced_files(&ctx, &ref_bundle, &mut violations);
         self.detect_unused_exports(&ctx, &references, &mut violations);
 
         violations
     }
+}
 
+struct FileReferenceBundle<'a> {
+    referenced_stems: &'a HashSet<String>,
+    references: &'a ReferenceIndex<'a>,
+}
+
+impl DeadCodeAnalyzer {
     fn detect_unreferenced_files(
         &self,
         ctx: &AnalysisContext,
-        referenced_stems: &HashSet<String>,
-        references: &ReferenceIndex<'_>,
+        refs: &FileReferenceBundle<'_>,
         violations: &mut Vec<DeadCodeViolation>,
     ) {
         for path in ctx.files {
@@ -102,8 +112,8 @@ impl DeadCodeAnalyzer {
             };
 
             if is_index_or_entry_stem(stem)
-                || referenced_stems.contains(stem)
-                || references.is_referenced(stem, path)
+                || refs.referenced_stems.contains(stem)
+                || refs.references.is_referenced(stem, path)
             {
                 continue;
             }
@@ -228,56 +238,37 @@ fn build_exclude_globs(user_excludes: &[String]) -> GlobSet {
     builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
-fn import_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?:import|from|require)\s*\(?['"]([^'"]+)['"]"#).expect("valid import regex")
-    })
+macro_rules! static_regex {
+    ($name:ident, $pattern:literal) => {
+        fn $name() -> &'static Regex {
+            static RE: OnceLock<Regex> = OnceLock::new();
+            RE.get_or_init(|| Regex::new($pattern).expect(concat!("valid regex: ", $pattern)))
+        }
+    };
 }
 
-fn python_from_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?m)^\s*from\s+([a-zA-Z0-9_.]+)\s+import\s+([a-zA-Z0-9_*,\s]+)"#)
-            .expect("valid python from regex")
-    })
-}
-
-fn python_import_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?m)^\s*import\s+([a-zA-Z0-9_.,\s]+)"#).expect("valid python import regex")
-    })
-}
-
-fn html_script_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?:src|href)\s*=\s*['"]([^'"]+)['"]"#).expect("valid html script regex")
-    })
-}
-
-fn rust_mod_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"\bmod\s+([a-zA-Z0-9_]+);"#).expect("valid mod regex"))
-}
-
-fn rust_path_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r#"#\[path\s*=\s*["']([^"']+)["']\]\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[a-zA-Z0-9_]+\s*;"#,
-        )
-        .expect("valid path module regex")
-    })
-}
-
-fn rust_use_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"\buse\s+(?:crate::|super::)?([a-zA-Z0-9_]+)"#).expect("valid use regex")
-    })
-}
+static_regex!(
+    import_regex,
+    r#"(?:import|from|require)\s*\(?['"]([^'"]+)['"]"#
+);
+static_regex!(
+    python_from_regex,
+    r#"(?m)^\s*from\s+([a-zA-Z0-9_.]+)\s+import\s+([a-zA-Z0-9_*,\s]+)"#
+);
+static_regex!(
+    python_import_regex,
+    r#"(?m)^\s*import\s+([a-zA-Z0-9_.,\s]+)"#
+);
+static_regex!(html_script_regex, r#"(?:src|href)\s*=\s*['"]([^'"]+)['"]"#);
+static_regex!(rust_mod_regex, r#"\bmod\s+([a-zA-Z0-9_]+);"#);
+static_regex!(
+    rust_path_regex,
+    r#"#\[path\s*=\s*["']([^"']+)["']\]\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[a-zA-Z0-9_]+\s*;"#
+);
+static_regex!(
+    rust_use_regex,
+    r#"\buse\s+(?:crate::|super::)?([a-zA-Z0-9_]+)"#
+);
 
 fn export_fn_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -333,39 +324,41 @@ fn scan_import_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
     }
 }
 
+fn insert_dotted_parts(dotted: &str, stems: &mut HashSet<String>) {
+    for part in dotted.split('.') {
+        let trimmed = part.trim().trim_start_matches('.');
+        if !trimmed.is_empty() {
+            stems.insert(trimmed.to_string());
+        }
+    }
+}
+
+fn insert_imported_symbols(symbols: &str, stems: &mut HashSet<String>) {
+    for item in symbols.split(',') {
+        let symbol = item.split_whitespace().next().unwrap_or_default();
+        if !symbol.is_empty() && symbol != "*" {
+            stems.insert(symbol.to_string());
+        }
+    }
+}
+
 fn scan_python_from_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
     for cap in re.captures_iter(content) {
         if let Some(module) = cap.get(1) {
-            for part in module.as_str().split('.') {
-                let trimmed = part.trim().trim_start_matches('.');
-                if !trimmed.is_empty() {
-                    stems.insert(trimmed.to_string());
-                }
-            }
+            insert_dotted_parts(module.as_str(), stems);
         }
         if let Some(imported) = cap.get(2) {
-            for item in imported.as_str().split(',') {
-                let symbol = item.split_whitespace().next().unwrap_or_default();
-                if !symbol.is_empty() && symbol != "*" {
-                    stems.insert(symbol.to_string());
-                }
-            }
+            insert_imported_symbols(imported.as_str(), stems);
         }
     }
 }
 
 fn scan_python_import_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
     for cap in re.captures_iter(content) {
-        if let Some(modules) = cap.get(1) {
-            for item in modules.as_str().split(',') {
-                let module = item.split_whitespace().next().unwrap_or_default();
-                for part in module.split('.') {
-                    let trimmed = part.trim().trim_start_matches('.');
-                    if !trimmed.is_empty() {
-                        stems.insert(trimmed.to_string());
-                    }
-                }
-            }
+        let Some(modules) = cap.get(1) else { continue };
+        for item in modules.as_str().split(',') {
+            let module = item.split_whitespace().next().unwrap_or_default();
+            insert_dotted_parts(module, stems);
         }
     }
 }
