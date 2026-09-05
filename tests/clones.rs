@@ -90,6 +90,7 @@ fn test_repeated_windows_are_bounded_and_deterministic() {
     assert!(matches!(
         first,
         CloneIndexError::HashWindowCapacityExceeded { .. }
+            | CloneIndexError::RawMatchCapacityExceeded { .. }
     ));
 }
 
@@ -110,8 +111,8 @@ fn cap_test_detector() -> CloneDetector {
 fn checked_detector_reports_hash_window_truncation_deterministically() {
     let detector = cap_test_detector();
     let files = vec![
-        (PathBuf::from("src/a.rs"), "same\n".repeat(65)),
-        (PathBuf::from("src/b.rs"), "same\n".repeat(65)),
+        (PathBuf::from("src/a.rs"), "same\n".repeat(513)),
+        (PathBuf::from("src/b.rs"), "same\n".repeat(513)),
     ];
 
     let first = detector
@@ -123,14 +124,14 @@ fn checked_detector_reports_hash_window_truncation_deterministically() {
     assert_eq!(first, second);
     assert!(matches!(
         first,
-        CloneIndexError::HashWindowCapacityExceeded { limit: 64, .. }
+        CloneIndexError::HashWindowCapacityExceeded { limit: 512, .. }
     ));
 }
 
 #[test]
 fn checked_detector_reports_raw_match_truncation() {
     let detector = cap_test_detector();
-    let content = one_token_lines(50_001, "token_");
+    let content = one_token_lines(200_001, "token_");
     let files = vec![
         (PathBuf::from("src/a.rs"), content.clone()),
         (PathBuf::from("src/b.rs"), content),
@@ -141,7 +142,7 @@ fn checked_detector_reports_raw_match_truncation() {
         .unwrap_err();
     assert_eq!(
         error,
-        CloneIndexError::RawMatchCapacityExceeded { limit: 50_000 }
+        CloneIndexError::RawMatchCapacityExceeded { limit: 200_000 }
     );
 }
 
@@ -150,7 +151,7 @@ fn static_snapshot_turns_raw_truncation_into_required_evidence() {
     let mut config = HardgateConfig::default();
     config.roles.fixture.clone_min_lines = Some(1);
     config.roles.fixture.clone_min_tokens = Some(1);
-    let content = one_token_lines(50_001, "token_");
+    let content = one_token_lines(200_001, "token_");
     let files = vec![
         (PathBuf::from("tests/a.snap"), content.clone()),
         (PathBuf::from("tests/b.snap"), content),
@@ -213,7 +214,7 @@ fn absolute_changed_paths_are_normalized_and_prioritized() {
     let files = vec![
         (changed_path.clone(), copied.clone()),
         (original_path, copied),
-        (unchanged_path, "same\n".repeat(65)),
+        (unchanged_path, "same\n".repeat(513)),
     ];
 
     let error = detector
@@ -281,7 +282,7 @@ fn static_snapshot_turns_hash_truncation_into_required_evidence() {
     config.roles.source.clone_min_tokens = Some(1);
     let repeated = format!(
         "fn repeated() {{\n{}\n}}\n",
-        "    let same = 0;\n".repeat(65)
+        "    let same = 0;\n".repeat(513)
     );
     let files = vec![
         (PathBuf::from("src/a.rs"), repeated.clone()),
@@ -358,7 +359,7 @@ min_tokens = 1
     );
     let unchanged = format!(
         "fn repeated() {{\n{}\n}}\n",
-        "    let same = 0;\n".repeat(65)
+        "    let same = 0;\n".repeat(513)
     );
     let copied = "fn copied() {\n    let total = 0;\n    total\n}\n";
     write_fixture(&root, "src/a-unchanged.rs", &unchanged);
@@ -470,4 +471,92 @@ fn test_fingerprint_is_serialized_and_legacy_payloads_default() {
     let decoded: hardgate::engines::CloneViolation =
         serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
     assert!(decoded.fingerprint.is_empty());
+}
+
+#[test]
+fn routine_declarations_such_as_imports_and_type_aliases_are_ignored() {
+    let detector = CloneDetector::new(&clone_config());
+
+    // Matching Python import blocks must not be flagged as clones
+    let py_a = r#"
+import os
+import sys
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+
+def calculate_area(radius):
+    pi = 3.14159
+    return pi * radius * radius
+"#;
+    let py_b = r#"
+import os
+import sys
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+
+def calculate_perimeter(length, width):
+    return 2 * (length + width)
+"#;
+    let files = vec![
+        (PathBuf::from("src/a.py"), py_a.to_string()),
+        (PathBuf::from("src/b.py"), py_b.to_string()),
+    ];
+    let violations = detector.detect_clones(&files, Path::new(".")).unwrap();
+    assert!(violations.is_empty(), "Python imports should not produce clone violations: {violations:?}");
+
+    // Matching TypeScript import blocks and type aliases must not be flagged as clones
+    let ts_a = r#"
+import { useState, useEffect, useCallback } from 'react';
+import type { FC, ReactNode } from 'react';
+export type UserId = string;
+export type UserProps = {
+    id: UserId;
+    name: string;
+};
+
+export function render_a(name: string) {
+    const greeting = "hello " + name;
+    return greeting.toUpperCase();
+}
+"#;
+    let ts_b = r#"
+import { useState, useEffect, useCallback } from 'react';
+import type { FC, ReactNode } from 'react';
+export type UserId = string;
+export type UserProps = {
+    id: UserId;
+    name: string;
+};
+
+export function render_b(items: number[]) {
+    let sum = 0;
+    for (const item of items) {
+        sum += item;
+    }
+    return sum;
+}
+"#;
+    let files = vec![
+        (PathBuf::from("src/a.tsx"), ts_a.to_string()),
+        (PathBuf::from("src/b.tsx"), ts_b.to_string()),
+    ];
+    let violations = detector.detect_clones(&files, Path::new(".")).unwrap();
+    assert!(violations.is_empty(), "TypeScript imports and type aliases should not produce clone violations: {violations:?}");
+}
+
+#[test]
+fn schema_literal_repetitions_complete_without_capacity_error() {
+    let detector = CloneDetector::new(&clone_config());
+    // Repetitive schema fields up to 200 repetitions should complete without HashWindowCapacityExceeded
+    let schema_content = (0..200)
+        .map(|i| format!("field_{i}: string;\n"))
+        .collect::<String>();
+    let file_a = format!("export interface SchemaA {{\n{schema_content}}}\n");
+    let file_b = format!("export interface SchemaB {{\n{schema_content}}}\n");
+    let files = vec![
+        (PathBuf::from("src/schema_a.ts"), file_a),
+        (PathBuf::from("src/schema_b.ts"), file_b),
+    ];
+    let result = detector.detect_clones_checked(&files, Path::new("."));
+    assert!(result.is_ok(), "200-repetition schema must not exceed capacity under limit 512: {:?}", result.err());
 }

@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub(super) const MAX_WINDOWS_PER_HASH: usize = 64;
-pub(super) const MAX_RAW_MATCHES: usize = 50_000;
+pub(super) const MAX_WINDOWS_PER_HASH: usize = 512;
+pub(super) const MAX_RAW_MATCHES: usize = 200_000;
 
 /// Failure raised when a bounded clone index would discard evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,7 +217,6 @@ fn index_file_windows(
 impl CloneIndexState<'_> {
     fn check_and_record(&mut self, check: WindowCheck<'_>) -> Result<(), CloneIndexError> {
         if let Some(existing) = self.window_map.get_mut(&check.hash) {
-            compare_existing_windows(existing, &check, self.raw_matches)?;
             if existing.len() >= MAX_WINDOWS_PER_HASH {
                 return Err(CloneIndexError::HashWindowCapacityExceeded {
                     file: stream_path(check.location.stream_idx, check.token_streams).to_path_buf(),
@@ -225,6 +224,7 @@ impl CloneIndexState<'_> {
                     limit: MAX_WINDOWS_PER_HASH,
                 });
             }
+            compare_existing_windows(existing, &check, self.raw_matches)?;
             existing.push(*check.location);
         } else {
             self.window_map.insert(check.hash, vec![*check.location]);

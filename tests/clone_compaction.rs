@@ -92,7 +92,7 @@ fn duplicate_paths_keep_spaced_streams_and_same_line_suppression() {
             .is_empty()
     );
 
-    let repeated = "same\n".repeat(65);
+    let repeated = "same\n".repeat(513);
     let copied = "copied_alpha copied_beta copied_gamma\n";
     let files = vec![
         (PathBuf::from("z-changed.rs"), copied.to_owned()),
@@ -108,7 +108,7 @@ fn duplicate_paths_keep_spaced_streams_and_same_line_suppression() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CloneIndexError::HashWindowCapacityExceeded { ref file, line: 65, limit: 64 }
+        CloneIndexError::HashWindowCapacityExceeded { ref file, line: 513, limit: 512 }
             if file == Path::new("m-unchanged.rs")
     ));
 }
@@ -165,7 +165,7 @@ fn aligned_and_shifted_windows_coalesce_without_rechecking_the_verified_prefix()
 
 #[test]
 fn repeated_cross_products_keep_the_explicit_capacity_error() {
-    let repeated = "same\n".repeat(65);
+    let repeated = "same\n".repeat(513);
     let error = detector(1, 3)
         .detect_clones_checked(
             &[
@@ -177,7 +177,7 @@ fn repeated_cross_products_keep_the_explicit_capacity_error() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CloneIndexError::HashWindowCapacityExceeded { limit: 64, .. }
+        CloneIndexError::HashWindowCapacityExceeded { limit: 512, .. }
     ));
 }
 
