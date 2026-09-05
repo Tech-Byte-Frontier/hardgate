@@ -61,49 +61,64 @@ function tarballForPath(artifacts, pathname) {
   return [...artifacts.values()].find((artifact) => artifactKey(artifact.name) === key) ?? false;
 }
 
-function requestHandler({ artifacts, requests, server, request, response, maxRequests, requestTimeoutMs }) {
-  if (requests.length >= maxRequests) {
-    request.resume();
-    sendResponse(response, 429, "registry request limit exceeded\n");
-    return;
-  }
-  request.setTimeout(requestTimeoutMs, () => request.destroy());
-  let pathname;
+function requestPath(request) {
   try {
-    pathname = decodeURIComponent(new URL(request.url, "http://127.0.0.1").pathname);
+    return decodeURIComponent(new URL(request.url, "http://127.0.0.1").pathname);
   } catch {
-    recordRequest(requests, request, request.url, 400);
-    sendResponse(response, 400, "invalid request path\n");
-    return;
+    return null;
   }
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    recordRequest(requests, request, pathname, 405);
-    sendResponse(response, 405, "method not allowed\n");
-    return;
-  }
-  const tarball = tarballForPath(artifacts, pathname);
-  if (tarball === false) {
-    recordRequest(requests, request, pathname, 404);
-    sendResponse(response, 404, "not found\n");
-    return;
-  }
+}
+
+function respondInvalidPath({ request, response, requests }) {
+  recordRequest(requests, request, request.url, 400);
+  sendResponse(response, 400, "invalid request path\n");
+}
+
+function respondMethodNotAllowed({ request, response, requests, pathname }) {
+  recordRequest(requests, request, pathname, 405);
+  sendResponse(response, 405, "method not allowed\n");
+}
+
+function respondArtifact({ request, response, requests, pathname, artifact, server, tarball = false }) {
+  recordRequest(requests, request, pathname, 200);
   if (tarball) {
-    recordRequest(requests, request, pathname, 200);
-    sendResponse(response, 200, tarball.archiveBytes, "application/octet-stream");
-    return;
-  }
-  const artifact = packageForPath(artifacts, pathname);
-  if (!artifact) {
-    recordRequest(requests, request, pathname, 404);
-    sendResponse(response, 404, "not found\n");
+    sendResponse(response, 200, artifact.archiveBytes, "application/octet-stream");
     return;
   }
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/`;
-  recordRequest(requests, request, pathname, 200);
   const exactVersion = pathname === `/${artifact.name}/${artifact.version}`;
   const body = exactVersion ? JSON.stringify(registryManifest(artifact, baseUrl)) : packageMetadata(artifact, baseUrl);
   sendResponse(response, 200, body, "application/json; charset=utf-8");
+}
+
+function respondPath(context) {
+  const { request, response, requests, artifacts, server, pathname } = context;
+  if (request.method !== "GET" && request.method !== "HEAD") return respondMethodNotAllowed(context);
+  const tarball = tarballForPath(artifacts, pathname);
+  if (tarball === false) {
+    recordRequest(requests, request, pathname, 404);
+    return sendResponse(response, 404, "not found\n");
+  }
+  if (tarball) return respondArtifact({ ...context, artifact: tarball, tarball: true });
+  const artifact = packageForPath(artifacts, pathname);
+  if (!artifact) {
+    recordRequest(requests, request, pathname, 404);
+    return sendResponse(response, 404, "not found\n");
+  }
+  return respondArtifact({ ...context, artifact, server });
+}
+
+function requestHandler(context) {
+  const { requests, maxRequests, request, response, requestTimeoutMs } = context;
+  if (requests.length >= maxRequests) {
+    request.resume();
+    return sendResponse(response, 429, "registry request limit exceeded\n");
+  }
+  request.setTimeout(requestTimeoutMs, () => request.destroy());
+  const pathname = requestPath(request);
+  if (pathname === null) return respondInvalidPath(context);
+  return respondPath({ ...context, pathname });
 }
 
 export async function startLocalRegistry(artifacts, { maxRequests = DEFAULT_MAX_REGISTRY_REQUESTS, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {

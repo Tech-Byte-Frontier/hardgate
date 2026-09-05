@@ -57,58 +57,57 @@ function writeNpmConfig(file, registryUrl, cache) {
   ].join("\n"));
 }
 
+function environmentPaths(root, cache, store) {
+  const nodeDirectory = path.dirname(process.execPath);
+  return {
+    PATH: [nodeDirectory, "/usr/local/bin", "/usr/bin", "/bin"].join(path.delimiter),
+    HOME: path.join(root, "home"),
+    XDG_CONFIG_HOME: path.join(root, "config"),
+    PNPM_HOME: path.join(root, "pnpm-home"),
+    NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"),
+    NPM_CONFIG_CACHE: cache,
+    PNPM_STORE_DIR: store,
+  };
+}
+
+function configureNpmEnvironment(env, registryUrl, cache) {
+  const values = {
+    NPM_CONFIG_REGISTRY: registryUrl, NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false",
+    NPM_CONFIG_UPDATE_NOTIFIER: "false", NPM_CONFIG_FETCH_RETRIES: "0", NPM_CONFIG_FETCH_TIMEOUT: "10000",
+    NPM_CONFIG_INCLUDE: "optional", NPM_CONFIG_OMIT: "", NPM_CONFIG_OPTIONAL: "true",
+    NPM_CONFIG_IGNORE_SCRIPTS: "false", NPM_CONFIG_PROXY: "", NPM_CONFIG_HTTPS_PROXY: "",
+    NPM_CONFIG_NO_PROXY: "127.0.0.1,localhost", npm_config_registry: registryUrl,
+    npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false",
+    npm_config_fetch_retries: "0", npm_config_fetch_timeout: "10000", npm_config_include: "optional",
+    npm_config_omit: "", npm_config_optional: "true", npm_config_ignore_scripts: "false",
+    npm_config_proxy: "", npm_config_https_proxy: "", npm_config_no_proxy: "127.0.0.1,localhost",
+    npm_config_cache: cache,
+  };
+  Object.assign(env, values, { npm_config_userconfig: env.NPM_CONFIG_USERCONFIG });
+}
+
+function configurePnpmEnvironment(env, registryUrl, store) {
+  Object.assign(env, {
+    PNPM_CONFIG_REGISTRY: registryUrl, PNPM_CONFIG_IGNORE_SCRIPTS: "false", PNPM_CONFIG_OPTIONAL: "true",
+    pnpm_config_registry: registryUrl, pnpm_config_ignore_scripts: "false", pnpm_config_optional: "true",
+    pnpm_store_dir: store,
+  });
+}
+
+function prepareConsumerDirectories(env, cache, store) {
+  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.PNPM_HOME, cache, store]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+}
+
 function cleanConsumerEnvironment(root, registryUrl, cache, store) {
   const env = { ...process.env };
   clearAmbientConfig(env);
-  const nodeDirectory = path.dirname(process.execPath);
-  env.PATH = [nodeDirectory, "/usr/local/bin", "/usr/bin", "/bin"].join(path.delimiter);
-  env.HOME = path.join(root, "home");
-  env.XDG_CONFIG_HOME = path.join(root, "config");
-  env.PNPM_HOME = path.join(root, "pnpm-home");
-  env.NPM_CONFIG_USERCONFIG = path.join(root, "npmrc");
-  env.NPM_CONFIG_CACHE = cache;
-  env.NPM_CONFIG_REGISTRY = registryUrl;
-  env.NPM_CONFIG_AUDIT = "false";
-  env.NPM_CONFIG_FUND = "false";
-  env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
-  env.NPM_CONFIG_FETCH_RETRIES = "0";
-  env.NPM_CONFIG_FETCH_TIMEOUT = "10000";
-  env.NPM_CONFIG_INCLUDE = "optional";
-  env.NPM_CONFIG_OMIT = "";
-  env.NPM_CONFIG_OPTIONAL = "true";
-  env.NPM_CONFIG_IGNORE_SCRIPTS = "false";
-  env.NPM_CONFIG_PROXY = "";
-  env.NPM_CONFIG_HTTPS_PROXY = "";
-  env.NPM_CONFIG_NO_PROXY = "127.0.0.1,localhost";
-  env.PNPM_STORE_DIR = store;
-  env.PNPM_CONFIG_REGISTRY = registryUrl;
-  env.PNPM_CONFIG_IGNORE_SCRIPTS = "false";
-  env.PNPM_CONFIG_OPTIONAL = "true";
-  env.npm_config_userconfig = env.NPM_CONFIG_USERCONFIG;
-  env.npm_config_cache = cache;
-  env.npm_config_registry = registryUrl;
-  env.npm_config_audit = "false";
-  env.npm_config_fund = "false";
-  env.npm_config_update_notifier = "false";
-  env.npm_config_fetch_retries = "0";
-  env.npm_config_fetch_timeout = "10000";
-  env.npm_config_include = "optional";
-  env.npm_config_omit = "";
-  env.npm_config_optional = "true";
-  env.npm_config_ignore_scripts = "false";
-  env.npm_config_proxy = "";
-  env.npm_config_https_proxy = "";
-  env.npm_config_no_proxy = "127.0.0.1,localhost";
-  env.pnpm_store_dir = store;
-  env.pnpm_config_registry = registryUrl;
-  env.pnpm_config_ignore_scripts = "false";
-  env.pnpm_config_optional = "true";
+  Object.assign(env, environmentPaths(root, cache, store));
+  configureNpmEnvironment(env, registryUrl, cache);
+  configurePnpmEnvironment(env, registryUrl, store);
   env.CI = "1";
-  fs.mkdirSync(env.HOME, { recursive: true });
-  fs.mkdirSync(env.XDG_CONFIG_HOME, { recursive: true });
-  fs.mkdirSync(env.PNPM_HOME, { recursive: true });
-  fs.mkdirSync(cache, { recursive: true });
-  fs.mkdirSync(store, { recursive: true });
+  prepareConsumerDirectories(env, cache, store);
   writeNpmConfig(env.NPM_CONFIG_USERCONFIG, registryUrl, cache);
   return env;
 }
@@ -238,27 +237,31 @@ function verifyInstalledPackage(packageValue, expectedName, expectedVersion, lab
   }
 }
 
-export async function installAndVerify({ manager, root, registry, version, host, wrapperLauncherBytes, expectedOutput, expectedHash, tempRoot }) {
-  const cache = path.join(tempRoot, `${manager}-cache`);
-  const store = path.join(tempRoot, `${manager}-store`);
-  const env = cleanConsumerEnvironment(root, registry.baseUrl, cache, store);
-  const managerExecutable = managerPath(manager);
-  const spec = `${WRAPPER_NAME}@${version}`;
-  const args = manager === "npm"
-    ? ["install", "--no-audit", "--no-fund", "--include=optional", "--registry", registry.baseUrl, spec]
-    : ["add", "--registry", registry.baseUrl, "--store-dir", store, spec];
-  await boundedProcess(managerExecutable, args, { cwd: root, env }, `${manager} packed consumer install`);
+function installArguments(manager, registry, store, spec) {
+  if (manager === "npm") return ["install", "--no-audit", "--no-fund", "--include=optional", "--registry", registry, spec];
+  return ["add", "--registry", registry, "--store-dir", store, spec];
+}
+
+function verifyWrapperInstall({ manager, root, version, wrapperLauncherBytes }) {
   const wrapper = resolveInstalledPackage(root, WRAPPER_NAME);
   verifyInstalledPackage(wrapper, WRAPPER_NAME, version, `${manager} installed wrapper`);
-  const installedLauncher = installedPath(root, path.join(path.dirname(wrapper.path), "bin", "hardgate.js"), `${manager} installed wrapper launcher`);
-  if (!fs.readFileSync(installedLauncher).equals(wrapperLauncherBytes)) fail(`${manager} installed wrapper launcher bytes differ from the packed wrapper archive`);
+  const launcher = installedPath(root, path.join(path.dirname(wrapper.path), "bin", "hardgate.js"), `${manager} installed wrapper launcher`);
+  if (!fs.readFileSync(launcher).equals(wrapperLauncherBytes)) fail(`${manager} installed wrapper launcher bytes differ from the packed wrapper archive`);
+  return { wrapper, launcher };
+}
+
+function verifyNativeInstall({ manager, root, host, expectedHash, wrapper }) {
   const nativePackage = installedPackageBinary(root, host, wrapper.path);
-  verifyInstalledPackage(nativePackage, host, version, `${manager} installed native`);
+  verifyInstalledPackage(nativePackage, host, wrapper.manifest.version, `${manager} installed native`);
   const installedHash = crypto.createHash("sha256").update(fs.readFileSync(nativePackage.binary)).digest("hex");
   if (installedHash !== expectedHash) fail(`${manager} resolved ${host} digest ${installedHash} does not match expected ${expectedHash}`);
+  return { nativePackage, installedHash };
+}
+
+function verifyWrapperEntry({ manager, root, launcher }) {
   const wrapperBinary = path.join(root, "node_modules", ".bin", "hardgate");
   const installedWrapperBinary = installedPath(root, wrapperBinary, `${manager} installed wrapper .bin entry`);
-  wrapperBinTarget(root, installedWrapperBinary, installedLauncher);
+  wrapperBinTarget(root, installedWrapperBinary, launcher);
   let wrapperStat;
   try {
     wrapperStat = fs.statSync(installedWrapperBinary);
@@ -266,8 +269,20 @@ export async function installAndVerify({ manager, root, registry, version, host,
     fail(`${manager} installed wrapper .bin entry is missing: ${error.message}`);
   }
   if (!wrapperStat.isFile() || (wrapperStat.mode & 0o111) === 0) fail(`${manager} installed wrapper .bin entry is not executable`);
+  return installedWrapperBinary;
+}
+
+export async function installAndVerify({ manager, root, registry, version, host, wrapperLauncherBytes, expectedOutput, expectedHash, tempRoot }) {
+  const cache = path.join(tempRoot, `${manager}-cache`);
+  const store = path.join(tempRoot, `${manager}-store`);
+  const env = cleanConsumerEnvironment(root, registry.baseUrl, cache, store);
+  const spec = `${WRAPPER_NAME}@${version}`;
+  await boundedProcess(managerPath(manager), installArguments(manager, registry.baseUrl, store, spec), { cwd: root, env }, `${manager} packed consumer install`);
+  const { wrapper, launcher } = verifyWrapperInstall({ manager, root, version, wrapperLauncherBytes });
+  const { nativePackage, installedHash } = verifyNativeInstall({ manager, root, host, expectedHash, wrapper });
+  const installedWrapperBinary = verifyWrapperEntry({ manager, root, launcher });
   const invocationEnv = invocationEnvironment(root, env);
-  const resolvedNative = resolveWrapperBinary({ launcherPath: installedLauncher, environment: invocationEnv });
+  const resolvedNative = resolveWrapperBinary({ launcherPath: launcher, environment: invocationEnv });
   verifyResolvedNative({ root, resolved: resolvedNative, expectedNative: nativePackage.binary, label: `${manager} wrapper` });
   const output = (await boundedProcess(installedWrapperBinary, ["--version"], { cwd: root, env: invocationEnv }, `${manager} packed consumer invocation`)).trim();
   if (output !== expectedOutput) fail(`${manager} installed wrapper reported ${JSON.stringify(output)}; expected ${JSON.stringify(expectedOutput)}`);

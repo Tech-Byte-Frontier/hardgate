@@ -85,33 +85,35 @@ export async function checkPackedConsumers({ packagesDir, binary, version }) {
   return finalizePackedCheck({ snapshot, registry, tempRoot, result, primaryError });
 }
 
+const VALUE_OPTIONS = { "--packages-dir": "packagesDir", "--binary": "binary", "--version": "version" };
+
+function inlineOption(argument, options) {
+  const match = argument.match(/^(--packages-dir|--binary|--version)=(.*)$/);
+  if (!match) return false;
+  if (!match[2]) throw new Error(`${match[1]} requires a value`);
+  options[VALUE_OPTIONS[match[1]]] = match[2];
+  return true;
+}
+
+function parseArgument(argument, next, options) {
+  if (argument === "--help" || argument === "-h") {
+    options.help = true;
+    return 0;
+  }
+  if (argument === "--json") {
+    options.json = true;
+    return 0;
+  }
+  if (inlineOption(argument, options)) return 0;
+  if (!Object.hasOwn(VALUE_OPTIONS, argument)) throw new Error(`unknown argument: ${argument}`);
+  if (!next || next.startsWith("--")) throw new Error(`${argument} requires a value`);
+  options[VALUE_OPTIONS[argument]] = next;
+  return 1;
+}
+
 function parseArgs(argv) {
   const options = {};
-  const keys = { "--packages-dir": "packagesDir", "--binary": "binary", "--version": "version" };
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === "--help" || argument === "-h") {
-      options.help = true;
-      continue;
-    }
-    if (argument === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (Object.hasOwn(keys, argument)) {
-      const value = argv[++index];
-      if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
-      options[keys[argument]] = value;
-      continue;
-    }
-    const match = argument.match(/^(--packages-dir|--binary|--version)=(.*)$/);
-    if (match) {
-      if (!match[2]) throw new Error(`${match[1]} requires a value`);
-      options[keys[match[1]]] = match[2];
-      continue;
-    }
-    throw new Error(`unknown argument: ${argument}`);
-  }
+  for (let index = 0; index < argv.length; index += 1) index += parseArgument(argv[index], argv[index + 1], options);
   return options;
 }
 
