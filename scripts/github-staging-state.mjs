@@ -2,8 +2,13 @@
 "use strict";
 
 import { performance } from "node:perf_hooks";
-import { compareReleaseTags } from "./release-order.mjs";
 import { assertExactKeys as assertKeys, assertPlainObject as assertObject } from "./release-receipt-validation.mjs";
+import {
+  assertByteProof,
+  assertOperations as assertOperationCallbacks,
+  assertSemanticVersion,
+  validateProbeEnvelope,
+} from "./release-state-validation.mjs";
 
 const GITHUB_ARCHIVES = Object.freeze([
   "hardgate-linux-x64.tar.gz",
@@ -14,21 +19,15 @@ const GITHUB_ARCHIVES = Object.freeze([
   "hardgate-darwin-arm64.tar.gz",
 ]);
 
-const PROBE_STATES = new Set(["missing", "present"]);
 const SAFE_ASSET = /^[A-Za-z0-9][A-Za-z0-9._+@-]*$/;
+const OPERATION_METHODS = ["probe", "create", "upload", "verify"];
 
 function fail(message) {
   throw new Error(`GitHub staging: ${message}`);
 }
 
 function assertVersion(value, label) {
-  if (typeof value !== "string" || value.length === 0) fail(`${label} must be a semantic version`);
-  try {
-    compareReleaseTags(`v${value}`, `v${value}`);
-  } catch {
-    fail(`${label} must be a valid repository semantic version`);
-  }
-  return value;
+  return assertSemanticVersion(value, label, fail);
 }
 
 function assertAssetName(value, label) {
@@ -82,23 +81,22 @@ function assertRequest(request) {
 }
 
 function assertOperations(operations) {
-  assertObject(operations, "operations");
-  for (const name of ["probe", "create", "upload", "verify"]) {
-    if (typeof operations[name] !== "function") fail(`operations.${name} must be a function`);
-  }
-  return operations;
+  return assertOperationCallbacks(operations, OPERATION_METHODS, { assertObject, fail });
+}
+
+function validatePresentProbe(value) {
+  if (typeof value.tag !== "string" || typeof value.isDraft !== "boolean" || typeof value.isPrerelease !== "boolean") fail("probe result metadata is malformed");
+  return { state: "present", tag: value.tag, isDraft: value.isDraft, isPrerelease: value.isPrerelease, assets: assertAssetList(value.assets, "probe result.assets", { allowEmpty: true }) };
 }
 
 function validateProbe(value) {
-  assertObject(value, "probe result");
-  if (!PROBE_STATES.has(value.state)) fail("probe result.state is unknown");
-  if (value.state === "missing") {
-    assertKeys(value, ["state"], "probe result");
-    return { state: "missing" };
-  }
-  assertKeys(value, ["state", "tag", "isDraft", "isPrerelease", "assets"], "probe result");
-  if (typeof value.tag !== "string" || typeof value.isDraft !== "boolean" || typeof value.isPrerelease !== "boolean") fail("probe result metadata is malformed");
-  return { state: "present", tag: value.tag, isDraft: value.isDraft, isPrerelease: value.isPrerelease, assets: assertAssetList(value.assets, "probe result.assets", { allowEmpty: true }) };
+  return validateProbeEnvelope(value, {
+    assertObject,
+    assertKeys,
+    fail,
+    presentKeys: ["state", "tag", "isDraft", "isPrerelease", "assets"],
+    validatePresent: validatePresentProbe,
+  });
 }
 
 function remainingMs(policy) {
@@ -131,7 +129,7 @@ function assertExactAssets(request, current) {
 }
 
 function assertProof(result, label) {
-  if (result === false || (result && typeof result === "object" && result.verified === false)) fail(`${label} did not verify expected bytes`);
+  assertByteProof(result, fail, `${label} did not verify expected bytes`);
 }
 
 async function verifyAssets(request, operations, names) {

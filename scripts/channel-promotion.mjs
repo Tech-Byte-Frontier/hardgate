@@ -4,8 +4,14 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { compareReleaseTags } from "./release-order.mjs";
+import {
+  assertByteProof,
+  assertOperations as assertOperationCallbacks,
+  assertSemanticVersion,
+  validateProbeEnvelope,
+} from "./release-state-validation.mjs";
 
-const PROBE_STATES = new Set(["missing", "present"]);
+const OPERATION_METHODS = ["probe", "promote", "verifyDefault", "verifyImmutable"];
 
 function fail(message) {
   throw new Error(`channel promotion: ${message}`);
@@ -24,13 +30,7 @@ function assertKeys(value, expected, label) {
 }
 
 function assertVersion(value, label) {
-  if (typeof value !== "string" || value.length === 0) fail(`${label} must be a semantic version`);
-  try {
-    compareReleaseTags(`v${value}`, `v${value}`);
-  } catch {
-    fail(`${label} must be a valid repository semantic version`);
-  }
-  return value;
+  return assertSemanticVersion(value, label, fail);
 }
 
 function assertPolicy(policy) {
@@ -51,22 +51,17 @@ function assertRequest(request) {
 }
 
 function assertOperations(operations) {
-  assertPlainObject(operations, "operations");
-  for (const name of ["probe", "promote", "verifyDefault", "verifyImmutable"]) {
-    if (typeof operations[name] !== "function") fail(`operations.${name} must be a function`);
-  }
-  return operations;
+  return assertOperationCallbacks(operations, OPERATION_METHODS, { assertObject: assertPlainObject, fail });
 }
 
 function validateProbe(value) {
-  assertPlainObject(value, "probe result");
-  if (!PROBE_STATES.has(value.state)) fail("probe result.state is unknown");
-  if (value.state === "missing") {
-    assertKeys(value, ["state"], "probe result");
-    return { state: "missing" };
-  }
-  assertKeys(value, ["state", "version"], "probe result");
-  return { state: "present", version: assertVersion(value.version, "probe result.version") };
+  return validateProbeEnvelope(value, {
+    assertObject: assertPlainObject,
+    assertKeys,
+    fail,
+    presentKeys: ["state", "version"],
+    validatePresent: (result) => ({ state: "present", version: assertVersion(result.version, "probe result.version") }),
+  });
 }
 
 function remainingMs(policy) {
@@ -141,7 +136,7 @@ async function observeTarget(request, operations) {
 }
 
 function assertProof(result, label) {
-  if (result === false || (result && typeof result === "object" && result.verified === false)) fail(`${label} did not verify the expected bytes`);
+  assertByteProof(result, fail, `${label} did not verify the expected bytes`);
 }
 
 async function verifyDefault(request, operations) {
