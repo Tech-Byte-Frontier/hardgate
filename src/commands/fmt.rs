@@ -1,57 +1,51 @@
+use super::outcome::{CommandOutcome, CommandResult, write_stdout};
 use crate::config::ConfigContext;
 use crate::engines::OrchestrationEngine;
-use anyhow::Result;
 use colored::*;
+use std::io::Write;
 
-/// Format the project with the configured `[orchestration]` formatter.
-/// With `check_only`, verify formatting without writing changes.
-pub fn cmd_fmt(check_only: bool) -> Result<()> {
+/// Run the explicitly configured formatter, optionally checking without writes.
+pub fn cmd_fmt(check_only: bool) -> CommandResult {
     cmd_fmt_in(check_only, &ConfigContext::load(None)?)
 }
 
-pub fn cmd_fmt_in(check_only: bool, context: &ConfigContext) -> Result<()> {
-    let config = &context.config;
-    let engine = OrchestrationEngine::new(&config.orchestration);
-    let root = context.root.as_path();
-
-    let res = if check_only {
-        engine.run_format_check(root)
+pub fn cmd_fmt_in(check_only: bool, context: &ConfigContext) -> CommandResult {
+    let engine = OrchestrationEngine::new(&context.config.orchestration);
+    let result = if check_only {
+        engine.run_format_check(&context.root)
     } else {
-        engine.run_format(root)
+        engine.run_format(&context.root)
     };
-
-    let Some(res) = res else {
-        println!(
-            "{} no format or format_check command configured in [orchestration].",
-            "warning:".yellow().bold()
-        );
-        return Ok(());
-    };
-
-    match res {
-        Ok(ok) => {
-            println!(
-                "{} format [{}] passed ({}ms)",
+    let result = result.ok_or_else(|| {
+        anyhow::anyhow!("Configure [orchestration].format or format_check before running fmt")
+    })?;
+    match result {
+        Ok(result) => {
+            write_stdout(&format!(
+                "{} format [{}] passed ({}ms)\n{}\n",
                 "ok:".green().bold(),
-                ok.command.bold(),
-                ok.duration_ms
-            );
-            if !ok.output.is_empty() {
-                println!("{}", ok.output.dimmed());
-            }
-            Ok(())
+                result.command,
+                result.duration_ms,
+                result.output
+            ))?;
+            Ok(CommandOutcome::Passed)
         }
-        Err(err) => {
-            eprintln!(
-                "{} format [{}] failed (exit: {:?})",
+        Err(failure) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "{} format [{}] failed (exit: {:?})\n{}",
                 "error:".red().bold(),
-                err.command.bold(),
-                err.exit_code
-            );
-            if !err.output.is_empty() {
-                eprintln!("{}", err.output);
-            }
-            std::process::exit(1);
+                failure.command,
+                failure.exit_code,
+                failure.output
+            )?;
+            Ok(
+                if failure.exit_code.is_none() || matches!(failure.exit_code, Some(126 | 127)) {
+                    CommandOutcome::Incomplete
+                } else {
+                    CommandOutcome::Violations
+                },
+            )
         }
     }
 }

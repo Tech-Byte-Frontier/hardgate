@@ -2,6 +2,7 @@ use super::gate_evidence::{
     ChangedLineFilter, GateRun, empty_discovery_advisory, filter_changed_lines,
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
 };
+use super::outcome::{CommandOutcome, CommandResult, write_stdout};
 use super::static_gate::StaticRequest;
 use super::verify::{
     CoverageScope, CoverageVerification, SourceCoverageRequest, source_files_for_coverage,
@@ -12,7 +13,6 @@ use crate::diagnostics::GateReport;
 use crate::engines::OrchestrationEngine;
 use crate::git_evidence::{ReferenceEvidence, load_reference};
 use anyhow::Result;
-use colored::*;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -71,11 +71,11 @@ impl OutputOptions {
 /// Run the fast deterministic static gate: budgets, suppressions,
 /// invariants, complexity, clones, and optional dead-code, coverage, and
 /// orchestration checks. Exits non-zero when violations are found.
-pub fn cmd_check(opts: CheckOptions) -> Result<()> {
+pub fn cmd_check(opts: CheckOptions) -> CommandResult {
     cmd_check_in(opts, &ConfigContext::load(None)?)
 }
 
-pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<()> {
+pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandResult {
     let ratchet_enabled = context.config.legacy.ratchet;
     let start_time = Instant::now();
     let root = context.root.as_path();
@@ -146,8 +146,7 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<(
             elapsed,
             opts: &opts.output_options(),
         },
-    )?;
-    Ok(())
+    )
 }
 
 fn run_orchestration(config: &HardgateConfig, root: &Path, report: &mut GateReport) {
@@ -285,28 +284,15 @@ fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String 
 }
 
 /// Print the "nothing to check" note, distinguishing scoped runs from diffs.
-pub fn print_empty_discovery(diff: bool, scoped: bool) {
-    if scoped {
-        println!(
-            "{} no matching source files detected for the given path(s).",
-            "warning:".yellow().bold()
-        );
-    } else if diff {
-        println!(
-            "{} no git-modified source files detected to check.",
-            "note:".green().bold()
-        );
-    } else {
-        println!(
-            "{} no matching source files detected.",
-            "warning:".yellow().bold()
-        );
-    }
+pub fn print_empty_discovery(diff: bool, scoped: bool) -> Result<()> {
+    let note = super::gate_evidence::empty_discovery_advisory(diff, scoped);
+    write_stdout(&format!("{note}\n"))?;
+    Ok(())
 }
 
 /// Render `report` with a legacy `format` name (`agent`, `json`, terminal).
 /// Prefer [`output_report_with_opts`] for the full flag matrix.
-pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<(), serde_json::Error> {
+pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<()> {
     output_report_with_opts(
         report,
         &OutputOptions {
@@ -320,29 +306,39 @@ pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<(), se
 }
 
 /// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
-pub fn output_report_with_opts(
-    report: &GateReport,
-    opts: &OutputOptions,
-) -> Result<(), serde_json::Error> {
-    if opts.is_json() {
-        if opts.is_summary() {
-            println!("{}", report.render_summary_json()?);
-        } else {
-            println!("{}", report.render_json()?);
-        }
-        return Ok(());
+pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<()> {
+    let mut output = if opts.is_json() {
+        json_report(report, opts)?
+    } else {
+        human_report(report, opts)
+    };
+    if !opts.is_json() {
+        super::outcome::append_scan_metrics(&mut output, &report.functions);
     }
-    match opts.format.as_deref() {
-        Some("agent") => print!("{}", report.render_agent()),
-        _ if opts.is_summary() => print!("{}", report.render_summary()),
-        _ if opts.is_compact() => print!("{}", report.render_compact()),
-        _ => print!("{}", report.render_terminal()),
-    }
+    write_stdout(&output)?;
     Ok(())
 }
 
+fn human_report(report: &GateReport, opts: &OutputOptions) -> String {
+    match opts.format.as_deref() {
+        Some("agent") => report.render_agent(),
+        _ if opts.is_summary() => report.render_summary(),
+        _ if opts.is_compact() => report.render_compact(),
+        _ => report.render_terminal(),
+    }
+}
+
+fn json_report(report: &GateReport, opts: &OutputOptions) -> Result<String> {
+    let json = if opts.is_summary() {
+        report.render_summary_json()?
+    } else {
+        report.render_json()?
+    };
+    Ok(format!("{json}\n"))
+}
+
 /// Finalize counts, render via [`OutputOptions`], and exit non-zero on
-/// failure. Shared by `check`, `scan`, and `verify` so the tail of every
+/// failure through a typed outcome. Shared by `check`, `scan`, and `verify` so the tail of every
 /// gate command stays a single call instead of a duplicated clone block.
 pub struct Emission<'a> {
     pub read_len: usize,
@@ -351,12 +347,9 @@ pub struct Emission<'a> {
     pub opts: &'a OutputOptions,
 }
 
-/// Finalize `report` from `emission` counts, render it, and exit(1) on failure.
-pub fn emit_gate_report(report: &mut GateReport, emission: Emission) -> anyhow::Result<()> {
+/// Finalize and render without terminating the caller process.
+pub fn emit_gate_report(report: &mut GateReport, emission: Emission) -> CommandResult {
     report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
     output_report_with_opts(report, emission.opts)?;
-    if !report.passed {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(CommandOutcome::from_report(report))
 }

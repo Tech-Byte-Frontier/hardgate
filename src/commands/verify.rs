@@ -4,6 +4,7 @@ use super::gate_evidence::{
     GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
     run_static_gate_or_empty,
 };
+use super::outcome::CommandResult;
 use super::role_policy::classify_file;
 use super::static_gate::StaticRequest;
 use crate::config::{ConfigContext, HardgateConfig};
@@ -12,7 +13,6 @@ use crate::discovery::FileRole;
 use crate::engines::coverage::{CoverageEvaluationScope, normalized_repository_key};
 use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
 use crate::git_evidence::ChangedLineMap;
-use anyhow::Result;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -32,11 +32,11 @@ pub struct VerifyOptions {
 
 /// Run static gates plus coverage and mutation report evaluation.
 /// Exits non-zero when violations are found.
-pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
+pub fn cmd_verify(opts: VerifyOptions) -> CommandResult {
     cmd_verify_in(opts, &ConfigContext::load(None)?)
 }
 
-pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Result<()> {
+pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> CommandResult {
     let start_time = Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
@@ -107,8 +107,7 @@ pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Result
                 summary: opts.summary,
             },
         },
-    )?;
-    Ok(())
+    )
 }
 
 /// Backwards-compatible shim for callers using the pre-struct signature.
@@ -116,7 +115,7 @@ pub fn cmd_verify_legacy(
     coverage_report: Option<String>,
     mutation_report: Option<String>,
     format: Option<&str>,
-) -> Result<()> {
+) -> CommandResult {
     cmd_verify(VerifyOptions {
         coverage_report,
         mutation_report,

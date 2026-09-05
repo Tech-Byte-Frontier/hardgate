@@ -1,10 +1,10 @@
 use clap::{Args, Parser, Subcommand};
 use hardgate::commands;
 use hardgate::mcp;
-use serde::Serialize;
 use std::path::PathBuf;
 
 mod build_info;
+mod cli_runtime;
 
 #[derive(Parser)]
 #[command(name = "hardgate")]
@@ -17,6 +17,15 @@ struct Cli {
     /// Explicit policy file; its directory is the configuration root
     #[arg(long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
+    /// Limit analysis worker threads (positive integer; defaults to Rayon settings)
+    #[arg(long, global = true, value_name = "N")]
+    threads: Option<std::num::NonZeroUsize>,
+    /// Terminal colors; auto respects TTY, NO_COLOR and CLICOLOR conventions
+    #[arg(long, global = true, default_value = "auto")]
+    color: clap::ColorChoice,
+    /// Print total command timing to stderr
+    #[arg(long, global = true)]
+    timing: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -62,7 +71,7 @@ enum Commands {
     /// Initialize hardgate.toml in the current repository
     Init {
         /// Config preset: strict-agent (AI agents), balanced (hybrid teams),
-        /// legacy-migration (burn down tech debt), or custom (empty shell)
+        /// legacy-migration (reference ratchet), or custom (ordinary defaults)
         #[arg(
             short,
             long,
@@ -79,7 +88,7 @@ enum Commands {
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
-        /// Run full orchestration (format check + linter) alongside static gates
+        /// Run configured format-check, linter, and test commands alongside static gates
         #[arg(short, long)]
         all: bool,
         /// Run dead code and unused export analysis
@@ -129,7 +138,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Run complete verification including coverage and mutation
+    /// Evaluate static policy and configured coverage/mutation reports
     Verify {
         /// Path to coverage report (e.g., coverage/lcov.info)
         #[arg(long)]
@@ -152,119 +161,39 @@ enum Commands {
     Mcp,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> std::process::ExitCode {
+    cli_runtime::main_exit()
+}
+
+fn run_cli(cli: Cli) -> commands::CommandResult {
     let _ = build_info::identity();
     let _ = std::hint::black_box(build_info::TARGET);
     let _ = std::hint::black_box(build_info::BUILD_TARGET_MARKER);
-    let cli = Cli::parse();
     if matches!(cli.command, Commands::Mutate { .. }) {
         hardgate::cancellation::install()?;
     }
-    let result = execute_with_json_errors(cli.command, cli.config.as_deref());
-    if let Some(signal) = hardgate::cancellation::signal() {
-        std::process::exit(128 + signal);
-    }
-    result
-}
-
-fn execute_with_json_errors(
-    command: Commands,
-    config: Option<&std::path::Path>,
-) -> anyhow::Result<()> {
-    let json_context = JsonContext::from_command(&command);
-    let result = execute_command(command, config);
-    if let (Some(context), Err(error)) = (json_context, &result) {
-        emit_json_error(context, error);
-    }
-    result
-}
-
-fn emit_json_error(context: JsonContext, error: &anyhow::Error) {
-    match serde_json::to_string_pretty(&JsonFailure::from_error(context, error)) {
-        Ok(payload) => println!("{payload}"),
-        Err(serialization_error) => {
-            eprintln!("hardgate: failed to render JSON error: {serialization_error}");
-        }
+    if let Some(threads) = cli.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.get())
+            .build()?
+            .install(|| execute_command(cli.command, cli.config.as_deref()))
+    } else {
+        execute_command(cli.command, cli.config.as_deref())
     }
 }
 
-#[derive(Clone, Copy)]
-struct JsonContext {
-    stage: &'static str,
-}
-
-impl JsonContext {
-    fn from_command(command: &Commands) -> Option<Self> {
-        let json = match command {
-            Commands::Check { output, .. } | Commands::Verify { output, .. } => {
-                output.json || matches!(output.format.as_deref(), Some("json"))
-            }
-            Commands::Scan { output, .. } => {
-                output.json || matches!(output.format.as_deref(), Some("json"))
-            }
-            Commands::Mutate { format, json, .. } => {
-                *json || matches!(format.as_deref(), Some("json"))
-            }
-            Commands::Config { format } => format == "json",
-            Commands::Init { .. } | Commands::Fmt { .. } | Commands::Mcp => false,
-        };
-        json.then(|| Self {
-            stage: command_stage(command),
-        })
-    }
-}
-
-fn command_stage(command: &Commands) -> &'static str {
-    match command {
-        Commands::Check { .. } => "check",
-        Commands::Scan { .. } => "scan",
-        Commands::Mutate { .. } => "mutation",
-        Commands::Verify { .. } => "verify",
-        Commands::Config { .. } => "config",
-        _ => "command",
-    }
-}
-
-#[derive(Serialize)]
-struct JsonFailure {
-    passed: bool,
-    stage: &'static str,
-    kind: &'static str,
-    message: String,
-}
-
-impl JsonFailure {
-    fn from_error(context: JsonContext, error: &anyhow::Error) -> Self {
-        if let Some(mutation) = error.downcast_ref::<commands::MutationFailure>() {
-            return Self {
-                passed: false,
-                stage: mutation.stage,
-                kind: mutation.kind,
-                message: mutation.message.clone(),
-            };
-        }
-        let kind = error
-            .downcast_ref::<serde_json::Error>()
-            .map_or("command-error", |_| "serialization-error");
-        Self {
-            passed: false,
-            stage: context.stage,
-            kind,
-            message: format!("{error:#}"),
-        }
-    }
-}
-
-fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> anyhow::Result<()> {
+fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> commands::CommandResult {
     match cmd {
         Commands::Init { preset } => {
             anyhow::ensure!(
                 config.is_none(),
                 "init writes hardgate.toml in the current directory; --config selects an existing policy"
             );
-            commands::cmd_init(&preset)
+            commands::cmd_init(&preset).map(|()| commands::CommandOutcome::Passed)
         }
-        Commands::Mcp => mcp::run_mcp_server_with_config(config),
+        Commands::Mcp => {
+            mcp::run_mcp_server_with_config(config).map(|()| commands::CommandOutcome::Passed)
+        }
         command => {
             let context = hardgate::config::ConfigContext::load(config)?;
             execute_resolved_command(command, &context)
@@ -275,10 +204,11 @@ fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> anyhow::R
 fn execute_resolved_command(
     cmd: Commands,
     context: &hardgate::config::ConfigContext,
-) -> anyhow::Result<()> {
+) -> commands::CommandResult {
     match cmd {
         Commands::Fmt { check } => commands::cmd_fmt_in(check, context),
-        Commands::Config { format } => commands::inspect::cmd_config(context, &format),
+        Commands::Config { format } => commands::inspect::cmd_config(context, &format)
+            .map(|()| commands::CommandOutcome::Passed),
         gate => execute_gate_command(gate, context),
     }
 }
@@ -286,7 +216,7 @@ fn execute_resolved_command(
 fn execute_gate_command(
     cmd: Commands,
     context: &hardgate::config::ConfigContext,
-) -> anyhow::Result<()> {
+) -> commands::CommandResult {
     match cmd {
         Commands::Check {
             output,

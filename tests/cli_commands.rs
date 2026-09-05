@@ -77,13 +77,13 @@ timeout_secs = 2
 }
 
 #[test]
-fn fmt_without_command_warns_and_exits_successfully() {
+fn fmt_without_command_reports_incomplete_configuration() {
     let fixture = Fixture::new("cli-commands", "fmt-none", None);
     fixture.write("hardgate.toml", CUSTOM_CONFIG);
 
     let output = run(fixture.as_ref(), &["fmt", "--check"]);
-    assert_status(&output, true, "fmt --check without command");
-    assert!(output_text(&output).contains("no format or format_check command configured"));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr_text(&output).contains("Configure [orchestration].format or format_check"));
 }
 
 #[test]

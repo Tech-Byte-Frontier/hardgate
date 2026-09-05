@@ -272,9 +272,9 @@ fn public_output_entrypoints_cover_legacy_and_combined_modes() {
 
 #[test]
 fn public_empty_discovery_printer_distinguishes_scope_and_diff() {
-    print_empty_discovery(false, false);
-    print_empty_discovery(true, false);
-    print_empty_discovery(false, true);
+    print_empty_discovery(false, false).unwrap();
+    print_empty_discovery(true, false).unwrap();
+    print_empty_discovery(false, true).unwrap();
 }
 
 #[test]

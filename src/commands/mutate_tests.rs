@@ -144,7 +144,7 @@ fn mutation_outcome_helpers_cover_all_variants() {
         MutantOutcome::Equivalent,
         MutantOutcome::Unviable,
     ] {
-        print_outcome(&mut styled, outcome);
+        print_outcome(&mut styled, outcome).unwrap();
     }
     assert_eq!(styled.killed, 1);
     assert_eq!(styled.unviable, 1);

@@ -1,6 +1,11 @@
 # Configuration specification
 
-Hardgate reads `hardgate.toml` from the current directory. If the file is absent, `HardgateConfig::load_or_default` uses the `strict-agent` preset object. `hardgate init --preset …` serializes that same preset object as a commented template.
+Hardgate finds the nearest `hardgate.toml` while searching upward to the first
+Git boundary. `--config FILE` selects an explicit policy; missing or invalid
+explicit files fail. Without a discovered policy, strict-agent defaults apply.
+Policy paths use the configuration root, while CLI paths use the invocation
+directory. `hardgate config` displays the merged, validated effective policy.
+See [configuration authority](CLI_AND_INTEGRATION.md) for monorepo details.
 
 ## Presets and presence-based merging
 

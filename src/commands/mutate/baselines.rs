@@ -4,6 +4,7 @@ use crate::engines::{BaselineOutcome, NativeMutationRunner};
 use anyhow::Result;
 use colored::*;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub(super) struct BaselineRun<'a> {
@@ -35,20 +36,22 @@ pub(super) fn run_unmutated_baselines(run: BaselineRun<'_>) -> Result<()> {
     }
 
     if !run.json {
-        println!(
+        writeln!(
+            std::io::stdout().lock(),
             "{} running {} unmutated baseline command(s)...",
             "note:".bold(),
             commands.len().to_string().cyan()
-        );
+        )?;
     }
     for ((working_dir, command), (file, plan)) in commands {
         if !run.json {
-            println!(
+            writeln!(
+                std::io::stdout().lock(),
                 "   {} ({}) in {}",
                 command.dimmed(),
                 plan.selection.description().dimmed(),
                 working_dir.display()
-            );
+            )?;
         }
         let result = run
             .runner
@@ -57,7 +60,11 @@ pub(super) fn run_unmutated_baselines(run: BaselineRun<'_>) -> Result<()> {
             ));
         if result.outcome == BaselineOutcome::Passed {
             if !run.json {
-                println!("      ... {}", "passed".green().bold());
+                writeln!(
+                    std::io::stdout().lock(),
+                    "      ... {}",
+                    "passed".green().bold()
+                )?;
             }
             continue;
         }

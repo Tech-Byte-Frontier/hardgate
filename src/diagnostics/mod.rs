@@ -21,6 +21,9 @@ pub struct GateReport {
     pub functions_analyzed: usize,
     pub duration_ms: u128,
     pub passed: bool,
+    /// Per-function observations emitted by scan, including passing functions.
+    #[serde(default)]
+    pub functions: Vec<crate::engines::FunctionMetrics>,
     #[serde(default)]
     pub advisories: Vec<String>,
     pub budget_violations: Vec<BudgetViolation>,

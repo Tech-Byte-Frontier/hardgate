@@ -2,6 +2,8 @@ use super::mutation_output::{
     MutationFailure, MutationSummaryContext, finish_disabled_mutation, handle_no_targets,
     render_mutation_output, runtime_failure,
 };
+use super::outcome::{CommandOutcome, CommandResult};
+use std::io::Write;
 #[path = "mutate/baselines.rs"]
 mod baselines;
 #[cfg(test)]
@@ -48,31 +50,32 @@ struct MutationRun<'a> {
 /// Run native Tree-sitter AST mutation testing: generate mutants, execute the
 /// test suite per mutant with timeouts and RAII rollbacks, then report the
 /// kill score. Exits non-zero below the configured floor.
-pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
+pub fn cmd_mutate(opts: MutateOptions) -> CommandResult {
     let context = ConfigContext::load(None)
         .map_err(|error| MutationFailure::new("setup", "setup-error", format!("{error:#}")))?;
     cmd_mutate_in(opts, &context)
 }
 
-pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> Result<()> {
+pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> CommandResult {
     let start_time = Instant::now();
     let config = &context.config;
     let root = context.root.as_path();
     opts.scoped = opts.scoped.map(|path| context.input_path(&path));
     if !config.mutation.enabled {
-        return finish_disabled_mutation(opts.format.as_deref());
+        return finish_disabled_mutation(opts.format.as_deref()).map(|()| CommandOutcome::Passed);
     }
     let target_files = discover_targets(&opts, config, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if target_files.is_empty() {
-        return handle_no_targets(opts.diff, opts.format.as_deref());
+        return handle_no_targets(opts.diff, opts.format.as_deref())
+            .map(|()| CommandOutcome::Passed);
     }
     let workspace = workspace::MutationWorkspace::create(root, &target_files)
         .map_err(|error| MutationFailure::new("setup", "snapshot-error", format!("{error:#}")))?;
     let root = workspace.root();
     let json = opts.format.as_deref() == Some("json");
     if !json {
-        print_generation_notice(&target_files, opts.diff);
+        print_generation_notice(&target_files, opts.diff)?;
     }
     let test_cmd = opts
         .test_cmd
@@ -101,7 +104,7 @@ pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> Result
         json,
     })?;
     if !json {
-        print_mutant_notice(mutants.len(), timeout);
+        print_mutant_notice(mutants.len(), timeout)?;
     }
     let (results, stats) = run_mutant_batch(&mutants, &runner, root, json)?;
     workspace.close()?;
@@ -115,13 +118,15 @@ pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> Result
     })
 }
 
-fn print_generation_notice(files: &[PathBuf], diff: bool) {
-    println!(
+fn print_generation_notice(files: &[PathBuf], diff: bool) -> Result<()> {
+    writeln!(
+        std::io::stdout().lock(),
         "{} generating AST mutations across {} source files (diff: {})...",
         "note:".bold(),
         files.len().to_string().cyan(),
         diff
-    );
+    )?;
+    Ok(())
 }
 fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<usize> {
     let max_count = opts
@@ -196,15 +201,17 @@ fn automatic_full_suite_timeout(
     }
     Ok(recommended)
 }
-fn print_mutant_notice(count: usize, timeout: u64) {
-    println!(
+fn print_mutant_notice(count: usize, timeout: u64) -> Result<()> {
+    writeln!(
+        std::io::stdout().lock(),
         "{} running {} mutants (timeout: {}s per mutant)...",
         "note:".bold(),
         count.to_string().cyan(),
         timeout
-    );
+    )?;
+    Ok(())
 }
-fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
+fn finish_mutation_run(run: MutationRun<'_>) -> CommandResult {
     let score = run.stats.score_percent();
     let min_score = run.config.mutation.min_score.unwrap_or(85.0);
     let passed = mutation_run_passed(run.stats, score, min_score);
@@ -218,13 +225,19 @@ fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
             elapsed: run.start_time.elapsed().as_millis(),
         },
         run.opts.format.as_deref(),
-    )
-    .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
-    if passed {
-        Ok(())
+    )?;
+    Ok(if passed {
+        CommandOutcome::Passed
+    } else if run.stats.runner_error > 0
+        || run.stats.timeout > 0
+        || run.stats.compile_error > 0
+        || run.stats.unviable > 0
+        || run.stats.killed + run.stats.survived == 0
+    {
+        CommandOutcome::Incomplete
     } else {
-        std::process::exit(1)
-    }
+        CommandOutcome::Violations
+    })
 }
 /// Resolve whether a path is an effective native mutation target under the
 /// built-in role default and any configured role policy override.
@@ -375,14 +388,15 @@ fn run_mutant_batch(
     for (idx, mutant) in mutants.iter().enumerate() {
         crate::cancellation::check()?;
         if !json {
-            print!(
+            write!(
+                std::io::stdout().lock(),
                 "   [{}/{}] {}:{} {} ... ",
                 idx + 1,
                 mutants.len(),
                 mutant.file.display().to_string().bold(),
                 mutant.line.to_string().yellow(),
                 mutant.description.dimmed()
-            );
+            )?;
             std::io::Write::flush(&mut std::io::stdout())?;
         }
 
@@ -413,7 +427,7 @@ fn run_mutant_batch(
             }
             increment_stats(&mut stats, res.outcome);
         } else {
-            print_outcome(&mut stats, res.outcome);
+            print_outcome(&mut stats, res.outcome)?;
         }
         results.push(res);
     }
@@ -421,14 +435,16 @@ fn run_mutant_batch(
     Ok((results, stats))
 }
 
-fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) {
+fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) -> Result<()> {
     let (label, style) = outcome_label(outcome);
     increment_stats(stats, outcome);
-    match style {
-        OutcomeStyle::Green => println!("{}", label.green().bold()),
-        OutcomeStyle::Red => println!("{}", label.red().bold()),
-        OutcomeStyle::Yellow => println!("{}", label.yellow().bold()),
-    }
+    let label = match style {
+        OutcomeStyle::Green => label.green().bold(),
+        OutcomeStyle::Red => label.red().bold(),
+        OutcomeStyle::Yellow => label.yellow().bold(),
+    };
+    writeln!(std::io::stdout().lock(), "{label}")?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

@@ -227,6 +227,11 @@ hardgate scan --format json --summary src/services/auth.ts
 
 Unsupported inventory formats can still receive applicable file/safety checks but do not produce function metrics. Missing or unreadable paths fail closed.
 
+Scan includes every analyzed function, including those within budget. Full JSON
+exposes `functions` with locations, cyclomatic/cognitive complexity, parameters,
+size, nesting, statements, Halstead difficulty and ABC score. Human formats show
+the same measurements; summary JSON keeps its smaller aggregate shape.
+
 ## `hardgate fmt`
 
 ```sh
@@ -236,9 +241,31 @@ hardgate fmt --check
 
 `fmt --check` runs `[orchestration].format_check`; `fmt` runs `format`, falling back to `format_check` when no write command is configured. Commands run from the repository root with local Node binaries available. A configured command failure is blocking for this command.
 
+An unconfigured formatter is a setup failure with exit 2.
+
 ## Output modes
 
 `check`, `scan`, and `verify` accept `--format terminal|agent|json|compact|summary`, plus `--json`, `--compact`/`--no-snippets`, and `--summary`. `mutate` accepts terminal, agent, or JSON output. JSON is a single machine-readable report; agent output is structured Markdown with actionable locations.
+
+Exit codes are **0** for success or an explicit no-op, **1** for policy
+violations, and **2** when arguments, configuration, runtime failures or missing
+required evidence prevent evaluation. Signal cancellation retains 130/143.
+Closing stdout intentionally (for example, piping to `head`) exits 0 without a
+panic. Native mutation stops and releases its isolated workspace if progress
+output cannot be written. Command APIs return `CommandOutcome` instead of
+terminating the calling process.
+
+Argument and runtime errors requested with `--json`, `--format json` or
+`--format=json` emit one JSON document on stdout and no duplicate stderr error.
+The error document includes `schema_version: 1`, command/stage, kind, message,
+status and exit code. Help/version retain their normal text output.
+
+`--threads N` selects a positive analysis worker count without changing policy;
+otherwise Rayon settings apply. Small source captures and AST batches run
+sequentially below eight files. `--timing` adds total elapsed time to stderr.
+`--color auto|always|never` applies to human output. Explicit choices override
+environment; auto honors `NO_COLOR`, then nonzero `CLICOLOR_FORCE`, then TTY,
+`CLICOLOR=0` and `TERM=dumb`. JSON does not contain terminal styling.
 
 ## `hardgate mcp`
 

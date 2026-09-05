@@ -11,6 +11,8 @@ pub mod init;
 pub mod inspect;
 pub mod mutate;
 mod mutation_output;
+pub mod outcome;
+pub use outcome::{CommandOutcome, CommandResult};
 mod role_policy;
 pub mod scan;
 mod source_snapshot;

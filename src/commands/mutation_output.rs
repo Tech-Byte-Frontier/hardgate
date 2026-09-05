@@ -4,6 +4,7 @@ use crate::engines::{MutantExecutionResult, MutantOutcome, MutationStats};
 use colored::*;
 use serde::Serialize;
 use std::fmt;
+use std::io::Write;
 use std::path::Path;
 
 /// Borrowed inputs for rendering one mutation run in any output mode.
@@ -55,22 +56,24 @@ impl std::error::Error for MutationFailure {}
 pub(crate) fn render_mutation_output(
     ctx: &MutationSummaryContext,
     format: Option<&str>,
-) -> Result<(), serde_json::Error> {
+) -> anyhow::Result<()> {
     match format {
-        Some("agent") => {
-            render_agent_output(ctx);
-            Ok(())
-        }
+        Some("agent") => render_agent_output(ctx),
         Some("json") => render_json_output(ctx),
         _ => {
-            print!("{}", format_mutation_terminal(ctx));
+            write!(
+                std::io::stdout().lock(),
+                "{}",
+                format_mutation_terminal(ctx)
+            )?;
             Ok(())
         }
     }
 }
 
-fn render_json_output(ctx: &MutationSummaryContext) -> Result<(), serde_json::Error> {
-    println!(
+fn render_json_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
+    writeln!(
+        std::io::stdout().lock(),
         "{}",
         serde_json::to_string_pretty(&MutationJson {
             stats: ctx.stats,
@@ -80,11 +83,11 @@ fn render_json_output(ctx: &MutationSummaryContext) -> Result<(), serde_json::Er
             duration_ms: ctx.elapsed,
             results: ctx.results,
         })?
-    );
+    )?;
     Ok(())
 }
 
-fn render_agent_output(ctx: &MutationSummaryContext) {
+fn render_agent_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
     let mut out = format!(
         "### 🧬 Native AST Mutation Results ({}ms)\n- Evaluated: {}\n- Killed: {}\n- Survived: {}\n- Timed Out: {}\n- Compile Errors: {}\n- Runner Errors: {}\n- Equivalent: {}\n- Unviable: {}\n- Mutation Score: {:.1}% (Floor: {:.1}%)\n- Verdict: {}\n\n",
         ctx.elapsed,
@@ -114,7 +117,8 @@ fn render_agent_output(ctx: &MutationSummaryContext) {
             result.mutant.replacement
         ));
     }
-    print!("{out}");
+    write!(std::io::stdout().lock(), "{out}")?;
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -163,9 +167,13 @@ struct MutationNoopNotice {
 pub(crate) fn render_mutation_noop(
     noop: MutationNoop<'_>,
     format: Option<&str>,
-) -> Result<(), serde_json::Error> {
+) -> anyhow::Result<()> {
     if format == Some("json") {
-        println!("{}", serde_json::to_string_pretty(&noop)?);
+        writeln!(
+            std::io::stdout().lock(),
+            "{}",
+            serde_json::to_string_pretty(&noop)?
+        )?;
     }
     Ok(())
 }
@@ -197,10 +205,14 @@ fn render_noop_or_note(format: Option<&str>, notice: MutationNoopNotice) -> anyh
                 message: notice.message,
             },
             format,
-        )
-        .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
+        )?;
     } else {
-        println!("{} {}", "note:".green().bold(), notice.note);
+        writeln!(
+            std::io::stdout().lock(),
+            "{} {}",
+            "note:".green().bold(),
+            notice.note
+        )?;
     }
     Ok(())
 }
