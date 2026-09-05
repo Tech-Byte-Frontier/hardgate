@@ -2,6 +2,16 @@
 
 ## 0.6.0 (unreleased)
 
+- `init` defaults to balanced structural adoption; explicit strict-agent and
+  no-config execution retain required 95/95/90 coverage and 85% mutation evidence.
+  Strict-agent allows five parameters; balanced/legacy allow 50 statements.
+  Test size and duplication are visible advisories while complexity and safety
+  still block. Source clone detection remains sensitive, with separate blocking
+  minimums (strict 10 lines/100 tokens; balanced/legacy 15/150). Category severity
+  overrides preserve deliberate stricter policies. Existing explicit settings
+  win; omitted preset fields inherit these updated defaults. Legacy verdicts
+  identify adoption scope and do not certify removal of historical debt.
+
 - Machine-readable gate, mutation, no-op, config, and error outputs use
   `schema_version: 1`; execution records distinguish `disabled`, `skipped`,
   `incomplete`, `failed`, and `completed` evidence.

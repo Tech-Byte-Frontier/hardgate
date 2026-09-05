@@ -14,11 +14,12 @@ inspect.
 
 ## 1. Initialize a policy
 
-Start with the balanced preset when you want structural feedback before adding
-coverage and mutation-report producers:
+`init` defaults to balanced: structural feedback before adding coverage and
+mutation-report producers. Select `--preset strict-agent` explicitly when those
+required evidence producers are ready:
 
 ```sh
-hardgate init --preset balanced
+hardgate init
 hardgate config
 ```
 
@@ -57,6 +58,40 @@ reference](../docs/CONFIGURATION_SPEC.md) for the fields and preset behavior.
 | `strict-agent` | Strict structural policy with required LCOV and mutation-report evidence |
 | `legacy-migration` | Structural adoption with a trusted reference and merge base |
 | `custom` | Ordinary deserialized defaults for an explicitly authored policy |
+
+Strict-agent retains 95% line/function coverage, 90% branch coverage, and an
+85% mutation floor. Balanced does not claim test adequacy. Running without a
+policy still uses strict-agent; initialize deliberately rather than relying on
+an implicit adoption mode.
+
+Tests remain analyzed. Their size and duplication findings are advisories;
+complexity and safety findings still block. Source clones below the blocking
+minimum also remain visible as advisories. The [policy reference](CONFIGURATION_SPEC.md)
+lists detection and blocking thresholds and explicit enforcement overrides.
+
+### Adopt an existing codebase
+
+For a repository with historical debt, initialize explicitly with:
+
+```sh
+hardgate init --preset legacy-migration
+hardgate config
+hardgate check --diff --json --summary
+```
+
+The default reference is `origin/main`. Fetch it if needed, or configure
+`[legacy].reference_branch` to a trusted reference with a merge base. Init never
+fetches or rewrites an existing policy; for an existing `hardgate.toml`, review
+`init --preset legacy-migration --preview` and intentionally merge the policy.
+
+The ratchet retains old non-worsened static debt as advisories and blocks new
+or worsened error-severity findings. Its verdict states the reference and
+merge base and does not certify a debt-free repository. An unusable reference
+is a blocking evidence failure. Enabled coverage, mutation, generated freshness,
+and orchestration remain current requirements. With `--diff`, enabled coverage
+uses changed executable source lines; static comparison uses the selected
+current scope against the reference snapshot. A full `check` without a ratchet
+is the separate assessment of all configured debt.
 
 No preset decides project-specific commands for every ecosystem. Mixed
 repositories, nested packages, or ambiguous scripts need explicit commands or

@@ -94,11 +94,15 @@ fn preset_guidance(preset: Preset) -> String {
         Preset::Balanced => {
             "# balanced is the structural starting point: coverage and mutation evidence\n\
              # are disabled until the project is ready to configure them.\n\
+             # A pass covers configured structural checks, not test adequacy.\n\
+             # For existing debt, choose legacy-migration with a trusted Git reference.\n\
              # Next step: run hardgate check and then add project evidence deliberately.\n"
                 .to_string()
         }
         Preset::LegacyMigration => {
             "# legacy-migration keeps a non-strict static ratchet against origin/main.\n\
+             # Existing non-worsened debt stays visible; new or worsened blocking findings fail.\n\
+             # A passing adoption check does not mean the repository is debt-free.\n\
              # The reference must resolve to a merge-base before the ratchet is useful.\n\
              # Fetch the reference branch when it is missing; current evidence remains required.\n"
                 .to_string()

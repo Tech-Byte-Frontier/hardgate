@@ -30,7 +30,7 @@ pub struct InitOptions {
 impl Default for InitOptions {
     fn default() -> Self {
         Self {
-            preset: "strict-agent".to_string(),
+            preset: "balanced".to_string(),
             preview: false,
             full: false,
             format_check: None,

@@ -25,13 +25,17 @@ config (preset + presence merge) -> discovery -> role classification
 
 `HardgateConfig::load_or_default` loads `hardgate.toml`, or the `strict-agent` preset when no file exists. `hardgate init --preset strict-agent` serializes the same object. For non-custom presets, a TOML section/key overlays the preset only when that key is present. Explicit `false` and empty values remain explicit; omitted keys retain preset values.
 
+Initialization defaults to balanced structural adoption; this does not change
+the no-config fallback or overwrite an existing policy. Category severities and
+clone blocking minimums participate in the same effective-policy merge and hash.
+
 The walker inventories source and text/data extensions while pruning dependency/build directories (`node_modules`, `target`, `dist`, `build`, `vendor`, `.venv`, `venv`, `__pycache__`). User budget or clone exclusions are not discovery pruning. Those excluded files remain visible to classification and other engines and produce an advisory from the owning engine; dead-code exclusions are local to that analyzer and silent.
 
 Each file becomes a `ClassifiedFile` with a role and AST-support flag. Ordered custom classification rules run before built-ins; vendor/build pruning cannot be overridden by a user rule.
 
 ## Role policy
 
-The first-class policy roles are source, test, generated, fixture, and migration. Each has independent severity, file/function thresholds, and clone settings; native mutation is source-role-only and source eligibility is configurable:
+The first-class policy roles are source, test, generated, fixture, and migration. Each has independent severity, file/function thresholds, and clone settings; native mutation is source-role-only and source eligibility is configurable. Category severity overrides separate size and clone findings from complexity/safety and evidence failures. Presets make test size and duplication advisory. Clone blocking minimums are applied after detection, preserving small matches as advisories:
 
 - **Source:** safety, invariants, AST complexity when supported, role-group clones, and native mutation targets.
 - **Test:** safety, invariants, AST complexity, role-group clones, never native mutation.

@@ -89,12 +89,12 @@ enum Commands {
     },
     /// Initialize hardgate.toml in the current repository
     Init {
-        /// Config preset: strict-agent (AI agents), balanced (hybrid teams),
+        /// Config preset: balanced (structural adoption), strict-agent (required evidence),
         /// legacy-migration (reference ratchet), or custom (ordinary defaults)
         #[arg(
             short,
             long,
-            default_value = "strict-agent",
+            default_value = "balanced",
             value_parser = ["strict-agent", "balanced", "legacy-migration", "custom"],
             ignore_case = true
         )]

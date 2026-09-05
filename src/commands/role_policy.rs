@@ -1,4 +1,5 @@
 mod clone_analysis;
+mod finding_policy;
 mod findings;
 
 pub(crate) use clone_analysis::{CloneRun, run_clone_analysis};

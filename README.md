@@ -21,7 +21,7 @@ the project you want to check:
 ```sh
 cargo install hardgate --locked
 cd /path/to/your/project
-hardgate init --preset balanced
+hardgate init
 hardgate check
 ```
 

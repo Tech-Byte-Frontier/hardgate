@@ -111,9 +111,9 @@ timeout_secs = 2
 }
 
 #[test]
-fn init_uses_strict_agent_by_default_and_supports_each_preset() {
+fn init_uses_balanced_by_default_and_supports_each_preset() {
     let cases = [
-        ("default", None, "strict-agent"),
+        ("default", None, "balanced"),
         ("strict", Some("strict-agent"), "strict-agent"),
         ("balanced", Some("balanced"), "balanced"),
         ("legacy", Some("legacy-migration"), "legacy-migration"),

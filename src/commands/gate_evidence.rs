@@ -238,7 +238,7 @@ fn record_legacy_failure(report: &mut GateReport, reference: &str, message: Stri
 
 fn push_legacy_summary(report: &mut GateReport, summary: &LegacySummary) {
     report.advisories.push(format!(
-        "legacy ratchet: reference=`{}` merge-base=`{}` grandfathered={} retained={}",
+        "legacy ratchet: reference=`{}` merge-base=`{}` grandfathered={} retained={}; verdict covers new or worsened blocking static findings in the selected current scope, not a debt-free repository. Enabled current evidence is still required.",
         summary.reference, summary.merge_base, summary.grandfathered, summary.retained,
     ));
 }

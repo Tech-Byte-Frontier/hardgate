@@ -22,6 +22,24 @@ fn clone_body(name: &str) -> String {
     )
 }
 
+fn assert_source_clone_advisory(report: &hardgate::diagnostics::GateReport) {
+    assert!(report.clone_violations.is_empty());
+    let clones = report
+        .advisories
+        .iter()
+        .filter(|item| item.contains("advisory: clone"))
+        .collect::<Vec<_>>();
+    assert!(
+        !clones.is_empty(),
+        "source clone detection must remain visible"
+    );
+    assert!(
+        clones
+            .iter()
+            .all(|item| item.contains("role Source") && !item.contains("tests/"))
+    );
+}
+
 #[test]
 fn ordered_custom_classification_drives_runtime_policy() {
     let mut config = HardgateConfig::default();
@@ -68,10 +86,7 @@ fn source_and_test_clone_thresholds_are_independent() {
             ("tests/test_b.rs", &test_b),
         ],
     );
-    assert!(!report.clone_violations.is_empty());
-    assert!(report.clone_violations.iter().all(|finding| {
-        finding.file_a.starts_with("src/") && finding.file_b.starts_with("src/")
-    }));
+    assert_source_clone_advisory(&report);
 }
 
 #[test]
@@ -96,6 +111,12 @@ fn global_clone_disable_is_inherited_when_source_override_is_omitted() {
         report.clone_violations.is_empty(),
         "an omitted role override must inherit the disabled global clone policy"
     );
+    assert!(
+        !report
+            .advisories
+            .iter()
+            .any(|item| item.contains("advisory: clone"))
+    );
 }
 
 #[test]
@@ -116,13 +137,7 @@ fn source_clone_override_reenables_analysis_when_global_is_disabled() {
         ],
     );
 
-    assert!(
-        !report.clone_violations.is_empty(),
-        "an explicit source override must re-enable clone analysis"
-    );
-    assert!(report.clone_violations.iter().all(|finding| {
-        finding.file_a.starts_with("src/") && finding.file_b.starts_with("src/")
-    }));
+    assert_source_clone_advisory(&report);
 }
 
 #[test]
@@ -258,11 +273,17 @@ fn recognized_non_ast_inventory_sources_such_as_sql_and_css_validate_truthfully(
         report.orchestration_violations
     );
     assert!(
-        report.advisories.iter().any(|adv| adv.contains("styles.css")),
+        report
+            .advisories
+            .iter()
+            .any(|adv| adv.contains("styles.css")),
         "advisories must mention styles.css was validated without AST"
     );
     assert!(
-        report.advisories.iter().any(|adv| adv.contains("queries.sql")),
+        report
+            .advisories
+            .iter()
+            .any(|adv| adv.contains("queries.sql")),
         "advisories must mention queries.sql was validated without AST"
     );
 

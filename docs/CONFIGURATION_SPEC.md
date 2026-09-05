@@ -3,6 +3,8 @@
 Hardgate finds the nearest `hardgate.toml` while searching upward to the first
 Git boundary. `--config FILE` selects an explicit policy; missing or invalid
 explicit files fail. Without a discovered policy, strict-agent defaults apply.
+`hardgate init` creates a balanced policy by default; it never replaces an
+existing policy. This initialization choice does not change no-config fallback.
 Policy paths use the configuration root, while CLI paths use the invocation
 directory. `hardgate config` displays the merged, validated effective policy.
 See [configuration authority](CLI_AND_INTEGRATION.md) for monorepo details.
@@ -22,6 +24,26 @@ strict = true
 - `balanced` scales structural budgets and disables coverage/mutation report policies.
 - `legacy-migration` scales structural budgets, disables coverage/mutation report policies, and enables a static reference/merge-base ratchet. It defaults to `reference_branch = "origin/main"` and `strict = false`.
 - `custom` uses values explicitly present in the file plus serde defaults.
+
+The preset ceilings below apply to handwritten production code. Values are
+policy choices, not proof that every finding warrants a refactor.
+
+| Budget | strict-agent | balanced / legacy-migration |
+| --- | --- | --- |
+| Cyclomatic / cognitive complexity | 10 / 15 | 15 / 22 |
+| Nesting / parameters | 4 / 5 | 6 / 6 |
+| Function lines / statements | 80 / 30 | 120 / 50 |
+| File lines: Rust / JS, TS, Python, Go / fallback | 499 / 400 / 350 | 600 / 500 / 500 |
+| File bytes | 32,768 | 65,536 |
+| Halstead difficulty / ABC | 80 / 100 | 120 / 100 |
+| Coverage: lines, functions, branches | Required: 95%, 95%, 90% | Disabled; configured floors 80%, 80%, 75% |
+| Mutation score | Required: 85% | Disabled; configured floor 75% |
+| CRAP ceiling when coverage is enabled | 25 | 30 |
+
+All non-custom presets keep tests in analysis. Test file size, function lines,
+statement counts, and duplication are advisories by default; other test
+complexity, anti-gaming, invariants, and parser/classification failures retain
+error severity. Native mutation still targets source only.
 
 For every non-custom preset, merging is presence-based. Hardgate inspects the TOML table and overlays only keys that are actually present; omitted sections and keys retain the preset value. An explicit `false`, empty array, or other explicit value is not treated as omission. This lets a project change one field without copying the rest of the preset.
 
@@ -119,11 +141,15 @@ max_cyclomatic = 10
 clone_enabled = true # explicitly enable this role, even when [clones].enabled = false
 clone_min_lines = 5
 clone_min_tokens = 50
+clone_block_min_lines = 10
+clone_block_min_tokens = 100
 mutation_target = true
 
 [roles.test]
-severity = "warning"
-max_function_lines = 120
+severity = "error"
+file_size_severity = "warning"
+function_size_severity = "warning"
+clone_severity = "warning"
 clone_min_lines = 8
 clone_min_tokens = 80
 mutation_target = false
@@ -144,6 +170,15 @@ mutation_target = false
 ```
 
 The five first-class sections (`source`, `test`, `generated`, `fixture`, `migration`) are independent. `severity` is `error`, `warning`, or `ignore`; omitted thresholds inherit global budgets. Role policy can override file bytes/lines, function ceilings, clone enablement/thresholds, and native mutation eligibility. A role cannot opt a non-source file into native mutation.
+
+`file_size_severity`, `function_size_severity`, and `clone_severity` override
+severity only for their finding category. Function size includes function lines
+and statement counts; it does not include cyclomatic/cognitive complexity,
+nesting, parameters, Halstead, or ABC. Omitted category severities inherit the
+role severity. A category override takes precedence even when `severity` is
+explicitly set. These keys never change parser/read/classification or clone
+index failure severity. Use category-specific `error` overrides when the
+project needs test size or duplication to block.
 
 `clone_enabled` is tri-state: `true` explicitly enables clone analysis for that role, `false` disables it, and an omitted key inherits `[clones].enabled`. Presets leave `source`, `test`, and `fixture` omitted so the global clone setting remains the master-like default; `generated` and `migration` are explicitly disabled.
 
@@ -171,7 +206,7 @@ max_cyclomatic = 10
 max_cognitive = 15
 max_halstead_difficulty = 80.0
 max_abc = 100.0
-max_parameters = 4
+max_parameters = 5
 max_lines = 80
 max_statements = 30
 max_nesting_depth = 4
@@ -223,6 +258,30 @@ excludes = ["tests/fixtures/**"]
 ```
 
 Eligible source, test, and fixture files are analyzed in separate role groups using normalized lexical token streams and bounded rolling-hash windows. `excludes` belongs only to clone detection and emits an advisory when matching files are present. In `check --diff`, Git-changed/staged inventory is selected by default, explicit existing paths add to static/clone selection, and Hardgate indexes the full repository to retain clone pairs touching Git-changed/staged files or explicitly selected existing paths. Every current clone violation has a stable fingerprint over normalized token kinds; it excludes paths and physical line numbers, allowing rename lineage to preserve identity.
+
+Detection and failure thresholds are separate:
+
+| Role | strict-agent detection | balanced / legacy detection | Default failure policy |
+| --- | --- | --- | --- |
+| Source | 5 lines and 50 tokens | 8 lines and 80 tokens | At least 10 lines and 100 tokens (strict), 15 lines and 150 tokens (balanced/legacy) |
+| Test | 8 lines and 80 tokens | 12 lines and 120 tokens | Advisory |
+| Fixture | 20 lines and 200 tokens | 30 lines and 300 tokens | Advisory |
+
+`roles.<role>.clone_block_min_lines` and `clone_block_min_tokens` are positive,
+inclusive blocking minimums. A detected clone below either minimum becomes an
+advisory containing both files, size, and fingerprint. Both configured minimums
+must be met before an error-severity clone blocks. Omitted blocking minimums add
+no restriction beyond detection; setting them below detection makes every
+detected clone eligible to block. Warning/ignore clone severity remains
+warning/ignore regardless of size. No clone input is removed by these minimums;
+an incomplete clone index still follows the role's evidence-failure severity.
+
+Custom policies retain severity inheritance without preset category overrides.
+To retain the earlier all-detected-clones-block behavior under strict-agent,
+set source blocking minimums to 5/50; for test enforcement, explicitly set its
+three category severities to `error`. Existing explicit numeric overrides
+remain authoritative. Review `hardgate config` after upgrading a preset-based
+policy because omitted fields inherit the new defaults.
 
 ## Generated-artifact freshness
 

@@ -1,3 +1,4 @@
+use super::finding_policy::{clone_severity, complexity_severity, file_size_severity, partition};
 use super::{Advisory, push_advisory, severity};
 use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
@@ -20,7 +21,7 @@ pub(crate) fn apply_budget_findings(
     role: super::FileRole,
     findings: Vec<BudgetViolation>,
 ) {
-    match severity(config, role) {
+    match file_size_severity(config, role) {
         Severity::Error => report.budget_violations.extend(findings),
         Severity::Warning => apply_warning(
             report,
@@ -119,31 +120,31 @@ pub(crate) fn apply_complexity_findings(
     role: super::FileRole,
     findings: Vec<ComplexityViolation>,
 ) {
-    match severity(config, role) {
-        Severity::Error => report.complexity_violations.extend(findings),
-        Severity::Warning => apply_warning(
-            report,
-            WarningBatch {
-                role,
-                category: "complexity",
-                findings,
-                detail: |finding: &ComplexityViolation| {
-                    (
-                        finding.file.clone(),
-                        format!(
-                            "{} `{}` at line {} (actual {:.0}, limit {:.0})",
-                            finding.metric,
-                            finding.function_name,
-                            finding.line_number,
-                            finding.actual,
-                            finding.limit
-                        ),
-                    )
-                },
+    let (errors, warnings) = partition(findings, |finding| {
+        complexity_severity(config, role, finding)
+    });
+    report.complexity_violations.extend(errors);
+    apply_warning(
+        report,
+        WarningBatch {
+            role,
+            category: "complexity",
+            findings: warnings,
+            detail: |finding: &ComplexityViolation| {
+                (
+                    finding.file.clone(),
+                    format!(
+                        "{} `{}` at line {} (actual {:.0}, limit {:.0})",
+                        finding.metric,
+                        finding.function_name,
+                        finding.line_number,
+                        finding.actual,
+                        finding.limit
+                    ),
+                )
             },
-        ),
-        Severity::Ignore => {}
-    }
+        },
+    );
 }
 
 pub(crate) fn apply_clone_findings(
@@ -152,27 +153,32 @@ pub(crate) fn apply_clone_findings(
     role: super::FileRole,
     findings: Vec<CloneViolation>,
 ) {
-    match severity(config, role) {
-        Severity::Error => report.clone_violations.extend(findings),
-        Severity::Warning => apply_warning(
-            report,
-            WarningBatch {
-                role,
-                category: "clone",
-                findings,
-                detail: |finding: &CloneViolation| {
-                    (
-                        finding.file_a.clone(),
-                        format!(
-                            "{} ({} and {} lines, {} tokens)",
-                            finding.message, finding.lines_a.0, finding.lines_b.0, finding.tokens
-                        ),
-                    )
-                },
+    let (errors, warnings) = partition(findings, |finding| clone_severity(config, role, finding));
+    report.clone_violations.extend(errors);
+    apply_warning(
+        report,
+        WarningBatch {
+            role,
+            category: "clone",
+            findings: warnings,
+            detail: |finding: &CloneViolation| {
+                (
+                    finding.file_a.clone(),
+                    format!(
+                        "Detected duplication at lines {}-{} with `{}:{}-{}` ({} lines, {} tokens, fingerprint {}); advisory under the configured clone policy.",
+                        finding.lines_a.0,
+                        finding.lines_a.1,
+                        finding.file_b.display(),
+                        finding.lines_b.0,
+                        finding.lines_b.1,
+                        finding.lines,
+                        finding.tokens,
+                        finding.fingerprint
+                    ),
+                )
             },
-        ),
-        Severity::Ignore => {}
-    }
+        },
+    );
 }
 
 pub(crate) fn apply_dead_code_findings(

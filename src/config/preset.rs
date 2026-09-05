@@ -156,6 +156,7 @@ struct FuncThresholds {
     halstead: f64,
     params: usize,
     lines: usize,
+    statements: usize,
     depth: usize,
 }
 
@@ -167,7 +168,7 @@ fn make_func_budgets(t: FuncThresholds) -> FunctionBudgets {
         max_abc: Some(100.0),
         max_parameters: Some(t.params),
         max_lines: Some(t.lines),
-        max_statements: Some(30),
+        max_statements: Some(t.statements),
         max_nesting_depth: Some(t.depth),
     }
 }
@@ -194,8 +195,9 @@ fn get_preset_bundle(strict: bool) -> PresetBundle {
             cyclo: (10.0 * scale) as u32,
             cogn: (15.0 * scale) as u32,
             halstead: 80.0 * scale,
-            params: if strict { 4 } else { 6 },
+            params: if strict { 5 } else { 6 },
             lines: if strict { 80 } else { 120 },
+            statements: if strict { 30 } else { 50 },
             depth: if strict { 4 } else { 6 },
         },
         clones: if strict { (5, 50) } else { (8, 80) },

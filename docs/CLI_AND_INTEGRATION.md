@@ -69,12 +69,22 @@ config-based tool fallbacks require repository-local executables. Python tools
 must be installed in the invoking environment; Go format checks require POSIX
 `sh`. No preset assigns JavaScript tools to every ecosystem.
 
-Strict-agent keeps its thresholds and requires real LCOV and mutation reports
+`init` defaults to balanced and leaves existing policies untouched. No-config
+execution still defaults to strict-agent; adoption is an explicit policy choice.
+Strict-agent requires real LCOV and mutation reports
 for both `check` and `verify`; start with `hardgate config` to inspect missing
 setup. Balanced is a structural starting point with those evidence engines
 disabled. Custom uses ordinary defaults, including clone and safety policies.
 Legacy-migration enables the static ratchet and requires a resolvable trusted
 reference with a merge-base; init checks `origin/main` but does not fetch it.
+
+Preset test size and duplication findings, and source clones below the blocking
+minimum, are advisories. They remain in report output without contributing to
+blocking violation totals. Test complexity/safety and role evidence failures
+remain blocking. See [category severity and preset budgets](CONFIGURATION_SPEC.md)
+before interpreting a reduced violation total as code remediation. A legacy
+ratchet verdict explicitly describes acceptance of new/worsened blocking debt
+in its selected scope, not a debt-free repository.
 
 ### Reference context and dead-code limits
 

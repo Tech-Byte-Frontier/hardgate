@@ -34,6 +34,11 @@ pub enum Severity {
 #[serde(deny_unknown_fields)]
 pub struct RolePolicy {
     pub severity: Option<Severity>,
+    /// Size diagnostics can be advisory without weakening safety or parsing.
+    pub file_size_severity: Option<Severity>,
+    pub function_size_severity: Option<Severity>,
+    /// Clone severity is independent of analysis completeness and detection.
+    pub clone_severity: Option<Severity>,
     pub max_bytes: Option<u64>,
     pub max_lines: Option<usize>,
     pub max_cyclomatic: Option<u32>,
@@ -48,6 +53,9 @@ pub struct RolePolicy {
     pub clone_enabled: Option<bool>,
     pub clone_min_lines: Option<usize>,
     pub clone_min_tokens: Option<usize>,
+    /// Detected clones below either blocking minimum remain advisories.
+    pub clone_block_min_lines: Option<usize>,
+    pub clone_block_min_tokens: Option<usize>,
     pub mutation_target: Option<bool>,
 }
 
@@ -55,6 +63,12 @@ impl RolePolicy {
     /// Overlay explicitly configured fields onto this policy.
     pub fn merge_from(&mut self, overrides: &Self) {
         merge_option(&mut self.severity, &overrides.severity);
+        merge_option(&mut self.file_size_severity, &overrides.file_size_severity);
+        merge_option(
+            &mut self.function_size_severity,
+            &overrides.function_size_severity,
+        );
+        merge_option(&mut self.clone_severity, &overrides.clone_severity);
         merge_option(&mut self.max_bytes, &overrides.max_bytes);
         merge_option(&mut self.max_lines, &overrides.max_lines);
         merge_option(&mut self.max_cyclomatic, &overrides.max_cyclomatic);
@@ -71,6 +85,14 @@ impl RolePolicy {
         merge_option(&mut self.clone_enabled, &overrides.clone_enabled);
         merge_option(&mut self.clone_min_lines, &overrides.clone_min_lines);
         merge_option(&mut self.clone_min_tokens, &overrides.clone_min_tokens);
+        merge_option(
+            &mut self.clone_block_min_lines,
+            &overrides.clone_block_min_lines,
+        );
+        merge_option(
+            &mut self.clone_block_min_tokens,
+            &overrides.clone_block_min_tokens,
+        );
         merge_option(&mut self.mutation_target, &overrides.mutation_target);
     }
 
@@ -91,6 +113,14 @@ impl RolePolicy {
 fn validate_integer_thresholds(policy: &RolePolicy, role: &str) -> Result<()> {
     for (value, field) in [
         (policy.max_bytes, "max_bytes"),
+        (
+            policy.clone_block_min_lines.map(|value| value as u64),
+            "clone_block_min_lines",
+        ),
+        (
+            policy.clone_block_min_tokens.map(|value| value as u64),
+            "clone_block_min_tokens",
+        ),
         (policy.max_lines.map(|value| value as u64), "max_lines"),
         (policy.max_cyclomatic.map(u64::from), "max_cyclomatic"),
         (policy.max_cognitive.map(u64::from), "max_cognitive"),
@@ -165,6 +195,8 @@ impl RolePoliciesConfig {
         Self {
             source: RolePolicy {
                 severity: Some(Severity::Error),
+                clone_block_min_lines: Some(if strict { 10 } else { 15 }),
+                clone_block_min_tokens: Some(if strict { 100 } else { 150 }),
                 clone_min_lines: Some(if strict { 5 } else { 8 }),
                 clone_min_tokens: Some(if strict { 50 } else { 80 }),
                 mutation_target: Some(true),
@@ -172,6 +204,9 @@ impl RolePoliciesConfig {
             },
             test: RolePolicy {
                 severity: Some(Severity::Error),
+                file_size_severity: Some(Severity::Warning),
+                function_size_severity: Some(Severity::Warning),
+                clone_severity: Some(Severity::Warning),
                 clone_min_lines: Some(test_lines),
                 clone_min_tokens: Some(test_tokens),
                 mutation_target: Some(false),
