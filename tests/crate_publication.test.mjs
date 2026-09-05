@@ -34,11 +34,13 @@ function runTar(args) {
   assert.equal(result.status, 0, result.stderr);
 }
 
-function fixture() {
+function fixture({ dirty = false, includeDirty = true } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-crate-publication-test-"));
   const source = path.join(directory, "hardgate-" + version);
   fs.mkdirSync(source, { recursive: true });
-  fs.writeFileSync(path.join(source, ".cargo_vcs_info.json"), JSON.stringify({ git: { sha1: sourceSha, dirty: false }, path_in_vcs: "" }));
+  const git = { sha1: sourceSha };
+  if (includeDirty) git.dirty = dirty;
+  fs.writeFileSync(path.join(source, ".cargo_vcs_info.json"), JSON.stringify({ git, path_in_vcs: "" }));
   fs.writeFileSync(path.join(source, "Cargo.toml"), "[package]\nname = \"hardgate\"\n");
   const expected = path.join(directory, "hardgate.crate");
   runTar(["-czf", expected, "-C", directory, "hardgate-" + version]);
@@ -64,8 +66,10 @@ function fakeRunner(fixtureData, options = {}) {
     apiCalls += 1;
     const status = options.apiStatuses?.[apiCalls - 1] ?? 200;
     if (status !== 200) return "{}\n" + status;
+    if (args.at(-1) === "https://crates.io/api/v1/crates/hardgate") {
+      return JSON.stringify({ crate: { max_stable_version: options.defaultVersion ?? version } }) + "\n200";
+    }
     const metadata = {
-      crate: { max_stable_version: options.defaultVersion ?? version },
       version: {
         num: options.metadataVersion ?? version,
         yanked: options.yanked ?? false,
@@ -130,10 +134,31 @@ async function defaultProof() {
       const fake = fakeRunner(data, options);
       if (options.defaultVersion) {
         await assert.rejects(verify(data, fake, { request: { requireDefault: true } }), /default stable/);
-        assert.equal(fake.apiCalls, 1);
+        assert.equal(fake.apiCalls, 2);
       } else {
         await verify(data, fake, { request: { requireDefault: true } });
+        assert.equal(fake.apiCalls, 2);
       }
+      const apiCalls = fake.calls.filter((call) => call.command === "/fake/curl");
+      assert.equal(apiCalls[0].args.at(-1), "https://crates.io/api/v1/crates/hardgate/0.5.0");
+      assert.equal(apiCalls[1].args.at(-1), "https://crates.io/api/v1/crates/hardgate");
+    } finally {
+      fs.rmSync(data.directory, { recursive: true, force: true });
+    }
+  }
+}
+
+async function dirtyIdentityCases() {
+  const cleanWithoutDirty = fixture({ includeDirty: false });
+  try {
+    await verify(cleanWithoutDirty, fakeRunner(cleanWithoutDirty));
+  } finally {
+    fs.rmSync(cleanWithoutDirty.directory, { recursive: true, force: true });
+  }
+  for (const dirty of [true, "false", null, 0]) {
+    const data = fixture({ dirty });
+    try {
+      await assert.rejects(verify(data, fakeRunner(data)), /dirty or malformed Cargo VCS identity/);
     } finally {
       fs.rmSync(data.directory, { recursive: true, force: true });
     }
@@ -223,6 +248,7 @@ async function boundedChildAndCleanup() {
 
 await successfulProof();
 await defaultProof();
+await dirtyIdentityCases();
 await retryAndFailureCases();
 await archiveAndInputFailures();
 await boundedChildAndCleanup();

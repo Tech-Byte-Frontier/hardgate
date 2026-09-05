@@ -220,6 +220,7 @@ export async function retryRequest(policy, operation, unavailableMessage) {
 }
 
 export function apiRequestArgs(version, timeoutMs) {
+  const endpoint = version === undefined ? API_ROOT : API_ROOT + "/" + encodeURIComponent(version);
   return [
     "-q", "--silent", "--show-error", "--max-redirs", "0",
     "--connect-timeout", curlTimeoutSeconds(Math.min(timeoutMs, 10_000)),
@@ -227,9 +228,10 @@ export function apiRequestArgs(version, timeoutMs) {
     "--user-agent", USER_AGENT,
     "--header", "Accept: application/json",
     "--write-out", "\n%{http_code}",
-    API_ROOT + "/" + encodeURIComponent(version),
+    endpoint,
   ];
 }
+export function crateRequestArgs(timeoutMs) { return apiRequestArgs(undefined, timeoutMs); }
 
 export function staticRequestArgs(version, destination, timeoutMs) {
   return [
@@ -265,18 +267,14 @@ function assertMetadataChecksum(published, expectedSha256) {
     fail("crates.io checksum does not match the local archive");
   }
 }
-
-export function validateMetadata(body, version, expectedSha256, requireDefault) {
+export function validateMetadata(body, version, expectedSha256) {
   const metadata = parseMetadata(body);
   const published = metadata?.version;
   assertMetadataVersion(published, version);
   assertMetadataChecksum(published, expectedSha256);
-  if (requireDefault && metadata?.crate?.max_stable_version !== version) {
-    fail("crates.io default stable version does not match the requested version");
-  }
   return published;
 }
-
+export function validateDefaultMetadata(body, version) { const metadata = parseMetadata(body); if (metadata?.crate?.max_stable_version !== version) fail("crates.io default stable version does not match the requested version"); return metadata.crate; }
 function parseCargoInfo(output) {
   try {
     return JSON.parse(normalizeOutput(output));
@@ -284,7 +282,9 @@ function parseCargoInfo(output) {
     fail("local Cargo archive has malformed or duplicate .cargo_vcs_info.json data");
   }
 }
-
+function assertCleanCargoInfo(git) {
+  if (git.dirty !== undefined && git.dirty !== false) fail("local Cargo archive has a dirty or malformed Cargo VCS identity");
+}
 function assertCargoInfo(info, sourceSha) {
   const git = info?.git;
   if (!info || Array.isArray(info) || typeof info !== "object" || !git || Array.isArray(git) || typeof git !== "object") {
@@ -293,8 +293,8 @@ function assertCargoInfo(info, sourceSha) {
   if (git.sha1 !== sourceSha || typeof git.sha1 !== "string" || !SOURCE_SHA_PATTERN.test(git.sha1)) {
     fail("local Cargo archive source identity does not match --source-sha");
   }
+  assertCleanCargoInfo(git);
 }
-
 export async function readCargoVcsInfo({ archivePath, version, sourceSha, policy, run, tarCommand }) {
   const member = CRATE_NAME + "-" + version + "/.cargo_vcs_info.json";
   let listing;

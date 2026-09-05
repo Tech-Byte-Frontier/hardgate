@@ -14,6 +14,7 @@ import {
   TAR_COMMAND,
   VerificationError,
   apiRequestArgs,
+  crateRequestArgs,
   assertExpectedPath,
   assertSourceSha,
   assertVersion,
@@ -28,14 +29,15 @@ import {
   retryableStatus,
   safeRunner,
   staticRequestArgs,
+  validateDefaultMetadata,
   validateMetadata,
 } from "./verify-crate-publication-support.mjs";
 
-async function probeCratesIo({ version, expectedSha256, requireDefault = false, policy, run = defaultRunner, curlCommand = CURL_COMMAND }) {
+async function probeEndpoint({ policy, run, curlCommand, requestArgs, validate, unavailableMessage }) {
   return retryRequest(policy, async (timeoutMs) => {
     let output;
     try {
-      output = await safeRunner(run, curlCommand, apiRequestArgs(version, timeoutMs), {
+      output = await safeRunner(run, curlCommand, requestArgs(timeoutMs), {
         timeoutMs,
         maxBuffer: MAX_API_OUTPUT_BYTES,
       });
@@ -45,11 +47,33 @@ async function probeCratesIo({ version, expectedSha256, requireDefault = false, 
     }
     const response = parseCurlResponse(output);
     if (response.status === 200) {
-      return { retryable: false, metadata: validateMetadata(response.body, version, expectedSha256, requireDefault) };
+      return { retryable: false, metadata: validate(response.body) };
     }
     if (retryableStatus(response.status)) return { retryable: true };
     fail("crates.io returned HTTP " + response.status);
-  }, "crates.io did not provide a stable public version");
+  }, unavailableMessage);
+}
+
+async function probeCratesIo({ version, expectedSha256, requireDefault = false, policy, run = defaultRunner, curlCommand = CURL_COMMAND }) {
+  const exact = await probeEndpoint({
+    policy,
+    run,
+    curlCommand,
+    requestArgs: (timeoutMs) => apiRequestArgs(version, timeoutMs),
+    validate: (body) => validateMetadata(body, version, expectedSha256),
+    unavailableMessage: "crates.io did not provide a stable public version",
+  });
+  if (requireDefault) {
+    await probeEndpoint({
+      policy,
+      run,
+      curlCommand,
+      requestArgs: crateRequestArgs,
+      validate: (body) => validateDefaultMetadata(body, version),
+      unavailableMessage: "crates.io did not provide a stable default version",
+    });
+  }
+  return exact;
 }
 
 async function downloadOnce({ version, policy, destination, run, curlCommand }) {
