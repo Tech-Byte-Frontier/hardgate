@@ -37,13 +37,15 @@ awk '
   section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
   { print }
 ' "$CONFIG_BACKUP" > hardgate.toml
-# The bound includes a clean stable test-harness build on a fresh CI runner,
-# not only test execution after a warm local cache.
+# These integration targets exercise the production budget engine without
+# recursively starting mutation CLI tests inside an active mutation lease.
+# The complete Rust suite runs separately in CI. The bound includes a cold
+# stable build with the mutation runner's conservative worker limits.
 "$BINARY" mutate \
   --scoped src/engines/budgets.rs \
-  --test-cmd "cargo test --all-targets --all-features --locked" \
+  --test-cmd "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked" \
   --max-mutants 1 \
-  --timeout 180 \
+  --timeout 300 \
   --format agent
 
 cp "$CONFIG_BACKUP" hardgate.toml

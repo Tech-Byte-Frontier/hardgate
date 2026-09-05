@@ -1,7 +1,8 @@
 name: Release
 
-# A release is an immutable, tag-addressed transaction. It promotes the exact
-# successful main-CI receipt and waits for the verified six-archive bundle.
+# A release uses an immutable signed source and verified archive bundle.
+# Registry staging, default promotion, and consumer verification are separate
+# checkpoints; publication across registries is not atomic.
 on:
   push:
     tags: ["v*"]
@@ -31,6 +32,8 @@ env:
   RUST_TOOLCHAIN: 1.98.1
   NODE_VERSION: 26.8.1
   NPM_VERSION: 12.0.2
+  # Explicit repository setting; token mode remains the migration default.
+  HARDGATE_NPM_AUTH_MODE: ${{ vars.NPM_PUBLISH_AUTH_MODE || 'token' }}
   PNPM_VERSION: 11.25.0
   YARN_VERSION: 4.18.0
   BUN_VERSION: 1.4.0
@@ -50,6 +53,7 @@ jobs:
   version-check:
     name: Validate tag and every version source
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -307,6 +311,7 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -376,6 +381,7 @@ jobs:
         )
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       bundle_artifact_id: ${{ steps.upload_bundle.outputs.artifact-id }}
     steps:
@@ -384,9 +390,21 @@ jobs:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --global "npm@${NPM_VERSION}"
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
       - if: needs.version-check.outputs.resume != 'true'
         uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
@@ -442,6 +460,32 @@ jobs:
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
+      - name: Install the actual seven packed npm artifacts before publication
+        env:
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(npm --version)" = "$NPM_VERSION"
+          test "$(pnpm --version)" = "$PNPM_VERSION"
+          packed_root=$(mktemp -d)
+          trap 'rm -rf -- "$packed_root"' EXIT
+          mkdir -p "$packed_root/packages" "$packed_root/source"
+          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
+            cp -R "npm/$pkg" "$packed_root/source/$pkg"
+            tar xOf "dist/$pkg.tar.gz" "$pkg/hardgate" > "$packed_root/source/$pkg/bin/hardgate"
+            chmod 755 "$packed_root/source/$pkg/bin/hardgate"
+            cp LICENSE-MIT LICENSE-APACHE "$packed_root/source/$pkg/"
+            (cd "$packed_root/source/$pkg" && npm pack --ignore-scripts --pack-destination "$packed_root/packages")
+          done
+          cp -R npm/hardgate "$packed_root/source/hardgate"
+          cp LICENSE-MIT LICENSE-APACHE "$packed_root/source/hardgate/"
+          (cd "$packed_root/source/hardgate" && npm pack --ignore-scripts --pack-destination "$packed_root/packages")
+          binary="$packed_root/source/hardgate-linux-x64/bin/hardgate"
+          test "$("$binary" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          node release-tooling/scripts/check-packed-consumers.mjs --json \
+            --packages-dir "$packed_root/packages" --binary "$binary" --version "$RELEASE_VERSION"
       # Use "Re-run failed jobs" for ordinary recovery so this immutable
       # checkpoint remains available. If the workflow definition itself needs
       # repair, dispatch the fixed workflow with the failed run's
@@ -468,6 +512,7 @@ jobs:
         needs.package.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
@@ -515,8 +560,10 @@ jobs:
     name: Validate publication prerequisites
     needs: [version-check]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -596,31 +643,89 @@ jobs:
             echo "CARGO_REGISTRY_TOKEN is required for crates.io publication" >&2
             exit 1
           fi
-      - name: Authenticate the npm publication credential
+      - name: Validate the selected npm publisher authentication mode
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/npm-publisher-preflight.mjs
+      - name: Validate npm channel promotion authentication
+        if: env.HARDGATE_NPM_AUTH_MODE == 'trusted'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/npm-publisher-preflight.mjs --auth-mode token
+
+  receipt-init:
+    name: Record the verified release identity
+    needs: [version-check, package]
+    if: >-
+      ${{ always() && needs.version-check.result == 'success' && needs.package.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Bind the receipt to signed source and verified bundle
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+          BUNDLE_ARTIFACT_ID: ${{ needs.package.outputs.bundle_artifact_id }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is required for npm publication" >&2
-            exit 1
-          fi
-          # This proves registry authentication. Granular write scope and 2FA
-          # eligibility are authoritatively checked only by npm publish.
-          npm whoami --registry=https://registry.npmjs.org >/dev/null
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+          mkdir -p receipt
+          node release-tooling/scripts/release-receipt-cli.mjs create --output receipt/release.json \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --tooling-sha "$GITHUB_SHA" \
+            --tag-object "$(git rev-parse "$RELEASE_TAG")" --build-run-id "$GITHUB_RUN_ID" \
+            --artifact-id "$BUNDLE_ARTIFACT_ID" --dist dist
+      - id: upload_receipt
+        name: Retain the initial release receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-seed-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
 
   github-release:
     name: Publish verified GitHub Release
-    needs: [version-check, package, attest, publication-preflight]
+    needs: [version-check, package, attest, publication-preflight, receipt-init]
     if: >-
       ${{
         always() &&
         needs.version-check.result == 'success' &&
         needs.package.result == 'success' &&
         needs.attest.result == 'success' &&
-        needs.publication-preflight.result == 'success'
+        needs.publication-preflight.result == 'success' &&
+        needs.receipt-init.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
     permissions:
       contents: write
       actions: read
@@ -629,6 +734,13 @@ jobs:
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
           persist-credentials: false
       - name: Recheck signed tag immediately before GitHub publication
         env:
@@ -639,6 +751,9 @@ jobs:
           test "$(git cat-file -t "$RELEASE_TAG")" = tag
           git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
@@ -646,6 +761,24 @@ jobs:
           digest-mismatch: error
       - name: Recheck checksums immediately before publication
         run: cd dist && sha256sum --check --strict SHA256SUMS
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.receipt-init.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - name: Verify receipt identity before publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test -f receipt/release.json
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs create --output receipt/release.json \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --tooling-sha "$GITHUB_SHA" \
+            --tag-object "$(git rev-parse "$RELEASE_TAG")" --build-run-id "$GITHUB_RUN_ID" \
+            --artifact-id '${{ needs.package.outputs.bundle_artifact_id }}' --dist dist
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -653,72 +786,22 @@ jobs:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(
-            hardgate-linux-x64.tar.gz
-            hardgate-linux-x64-musl.tar.gz
-            hardgate-linux-arm64.tar.gz
-            hardgate-linux-arm64-musl.tar.gz
-            hardgate-darwin-x64.tar.gz
-            hardgate-darwin-arm64.tar.gz
-            SHA256SUMS
-            "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
-          )
-          release_error=$(mktemp)
-          release_metadata=""
-          if release_metadata=$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease 2>"$release_error"); then
-            release_exists=1
-          else
-            status=$?
-            # gh exits 1 for both a missing release and API failures, so only
-            # an explicit not-found response may take the create path.
-            if [ "$status" -eq 1 ] && grep -Eiq 'release[[:space:]]+not found|HTTP[[:space:]]+404|404[[:space:]]+Not Found' "$release_error"; then
-              release_exists=0
-            else
-              cat "$release_error" >&2
-              rm -f "$release_error"
-              echo "unable to determine whether GitHub release $RELEASE_TAG exists; refusing to create or mutate it" >&2
-              exit 1
-            fi
-          fi
-          rm -f "$release_error"
-          if [ "$release_exists" -eq 1 ]; then
-            release_tag=$(printf '%s\n' "$release_metadata" | jq -r '.tagName')
-            release_is_draft=$(printf '%s\n' "$release_metadata" | jq -r '.isDraft')
-            release_is_prerelease=$(printf '%s\n' "$release_metadata" | jq -r '.isPrerelease')
-            test "$release_tag" = "$RELEASE_TAG"
-            if ! test "$release_is_draft" = false; then
-              echo "existing GitHub release $RELEASE_TAG is a draft; refusing to mutate it" >&2
-              exit 1
-            fi
-            if ! test "$release_is_prerelease" = false; then
-              echo "existing GitHub release $RELEASE_TAG is a prerelease; refusing to mutate it" >&2
-              exit 1
-            fi
-            existing=$(mktemp -d)
-            trap 'rm -rf "$existing"' EXIT
-            asset_names=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
-            for existing_name in $asset_names; do
-              case " ${assets[*]} " in
-                *" $existing_name "*) ;;
-                *) echo "unexpected immutable release asset: $existing_name" >&2; exit 1 ;;
-              esac
-            done
-            for asset in "${assets[@]}"; do
-              if printf '%s\n' "$asset_names" | grep -Fqx "$asset"; then
-                gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$existing"
-                cmp -- "dist/$asset" "$existing/$asset"
-              else
-                gh release upload "$RELEASE_TAG" "dist/$asset"
-              fi
-            done
-          elif [ "$release_exists" -eq 0 ]; then
-            paths=()
-            for asset in "${assets[@]}"; do paths+=("dist/$asset"); done
-            gh release create "$RELEASE_TAG" "${paths[@]}" --verify-tag --generate-notes
-          else
-            echo "unknown GitHub release existence state; refusing to publish" >&2
-            exit 1
-          fi
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel github-assets --to staged
+          node release-tooling/scripts/stage-github-release.mjs --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --dist dist
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel github-assets --to immutable_verified
+      - name: Record GitHub staging failure
+        if: failure() && hashFiles('receipt/release.json') != ''
+        run: node release-tooling/scripts/release-receipt-cli.mjs failure --receipt receipt/release.json --channel github-assets --code github-staging-failed --message 'GitHub staging or immutable verification failed; inspect the job before recovery.'
+      - id: upload_receipt
+        name: Retain the GitHub staging receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-github-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
 
   publish-crates:
     name: Publish verified crate
@@ -731,12 +814,48 @@ jobs:
         needs.github-release.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version-check.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.github-release.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Verify receipt identity before publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test -f receipt/release.json
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs create --output receipt/release.json \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --tooling-sha "$GITHUB_SHA" \
+            --tag-object "$(git rev-parse "$RELEASE_TAG")" --build-run-id "$GITHUB_RUN_ID" \
+            --artifact-id '${{ needs.package.outputs.bundle_artifact_id }}' --dist dist
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -749,6 +868,12 @@ jobs:
           test "$(git cat-file -t "$RELEASE_TAG")" = tag
           git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+      - name: Prepare the immutable crate and staging checkpoint
+        run: |
+          set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          cargo package --locked --no-verify
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel hardgate --to staged
       - id: crate-state
         name: Check crate publication state
         env:
@@ -800,7 +925,7 @@ jobs:
           if current=$(crate_version 0); then
             test "$current" = "$RELEASE_VERSION"
             already_published=1
-            echo "hardgate@$current already verified on crates.io"
+            echo "hardgate@$current is present; immutable verification follows"
           else
             status=$?
             if [ "$status" -ne 1 ]; then
@@ -835,55 +960,12 @@ jobs:
           # crates.io permits at most one API request per second. Keep an
           # explicit gap before the identity probe on every publication path.
           sleep 1
-          api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
-          crate_probe() {
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --user-agent "$HARDGATE_CRATES_IO_USER_AGENT" --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          crate_version() {
-            retry_absent="$1"
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
-              if actual=$(crate_probe); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
-              fi
-            done
-            return "$status"
-          }
-          actual=$(crate_version 1) || {
-            status=$?
-            echo "crates.io exact-version verification failed with status $status" >&2
-            exit "$status"
-          }
-          test "$actual" = "$RELEASE_VERSION"
-          echo "hardgate@$actual verified on crates.io"
+          node release-tooling/scripts/verify-crate-publication.mjs \
+            --expected "target/package/hardgate-${RELEASE_VERSION}.crate" \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT"
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel hardgate --to immutable_verified
           crate_root=$(mktemp -d)
+          trap 'rm -rf -- "$crate_root"' EXIT
           crate_installed=0
           for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
             if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
@@ -895,6 +977,19 @@ jobs:
           test "$crate_installed" -eq 1
           test -x "$crate_root/bin/hardgate"
           test "$("$crate_root/bin/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel hardgate --to exact_consumer_verified --consumer "$crate_root/bin/hardgate"
+      - name: Record crate failure
+        if: failure() && hashFiles('receipt/release.json') != ''
+        run: node release-tooling/scripts/release-receipt-cli.mjs failure --receipt receipt/release.json --channel hardgate --code crate-failed --message 'Publication or verification failed; inspect the job before recovery.'
+      - id: upload_receipt
+        name: Retain the crate receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-crate-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
 
   publish-npm:
     name: Publish platform packages, then wrapper
@@ -908,6 +1003,9 @@ jobs:
         needs.publish-crates.result == 'success'
       }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
     permissions:
       contents: read
       actions: read
@@ -946,6 +1044,24 @@ jobs:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
           digest-mismatch: error
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.publish-crates.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - name: Verify receipt identity before publication
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test -f receipt/release.json
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs create --output receipt/release.json \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --tooling-sha "$GITHUB_SHA" \
+            --tag-object "$(git rev-parse "$RELEASE_TAG")" --build-run-id "$GITHUB_RUN_ID" \
+            --artifact-id '${{ needs.package.outputs.bundle_artifact_id }}' --dist dist
       - name: Verify release bundle and prepare npm packages
         env:
           RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
@@ -972,181 +1088,469 @@ jobs:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
-          # Keep the token out of probes, package verification, and helper
-          # processes. It is reintroduced only for the single npm publish
-          # process that needs it.
+          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
+            printf '%s' "$pkg" > receipt/active-channel
+            node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel "$pkg" --to staged
+            node release-tooling/scripts/publish-npm-package.mjs --package-dir "./npm/$pkg" --version "$RELEASE_VERSION" --dist dist
+            node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel "$pkg" --to immutable_verified
+          done
           unset NODE_AUTH_TOKEN
-          npm_registry_probe() {
-            name="$1"
-            wanted="$2"
-            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_registry_version() {
-            retry_absent="$1"
-            shift
-            name="$1"
-            wanted="$2"
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_registry_probe "$name" "$wanted"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                  return "$status"
-                fi
-                remaining=$((deadline - SECONDS))
-                delay="$HARDGATE_REGISTRY_DELAY"
-                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-                [ "$delay" -gt 0 ] && sleep "$delay"
-              fi
-            done
-          }
-          publish_platform() {
-            pkg="$1"
-            wanted=$(node -p "require('./npm/$pkg/package.json').version")
-            current=""
-            if current=$(wait_for_registry_version 0 "$pkg" "$wanted"); then
-              test "$current" = "$wanted"
-              echo "$pkg@$wanted already verified on npm"
-            else
-              status=$?
-              if [ "$status" -ne 1 ]; then
-                echo "npm registry version probe failed for $pkg@$wanted; refusing to publish" >&2
-                return "$status"
-              fi
-              NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public "./npm/$pkg"
-              current=$(wait_for_registry_version 1 "$pkg" "$wanted")
-              test "$current" = "$wanted"
-              echo "$pkg@$wanted published and exact-version verified"
-            fi
-          }
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            publish_platform "$pkg"
-            env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only --package "$pkg"
-          done
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            wanted=$(node -p "require('./npm/$pkg/package.json').version")
-            test "$(wait_for_registry_version 0 "$pkg" "$wanted")" = "$wanted"
-          done
-          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
-          unset publish_token
+          printf '%s' '@tech-byte-frontier/hardgate' > receipt/active-channel
+          node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist --platform-only
       - name: Publish wrapper only after all platforms are verified
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          publish_token="${NODE_AUTH_TOKEN:?NPM_TOKEN is required for npm publication}"
+          printf '%s' '@tech-byte-frontier/hardgate' > receipt/active-channel
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel '@tech-byte-frontier/hardgate' --to staged
+          node release-tooling/scripts/publish-npm-package.mjs --package-dir ./npm/hardgate --version "$RELEASE_VERSION" --dist dist
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel '@tech-byte-frontier/hardgate' --to immutable_verified
           unset NODE_AUTH_TOKEN
-          wanted=$(node -p "require('./npm/hardgate/package.json').version")
-          current=""
-          npm_registry_probe() {
-            encoded_name=$(printf '%s' "$1" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/$2") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_registry_version() {
-            retry_absent="$1"
-            shift
-            name="$1"
-            wanted="$2"
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_registry_probe "$name" "$wanted"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                  return "$status"
-                fi
-                remaining=$((deadline - SECONDS))
-                delay="$HARDGATE_REGISTRY_DELAY"
-                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-                [ "$delay" -gt 0 ] && sleep "$delay"
-              fi
-            done
-          }
-          if current=$(wait_for_registry_version 0 "@tech-byte-frontier/hardgate" "$wanted"); then
-            test "$current" = "$wanted"
-          else
-            status=$?
-            if [ "$status" -ne 1 ]; then
-              echo "npm registry version probe failed for @tech-byte-frontier/hardgate@$wanted; refusing to publish" >&2
-              exit "$status"
-            fi
-            NODE_AUTH_TOKEN="$publish_token" npm publish --provenance --access public ./npm/hardgate
-          fi
-          test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$wanted")" = "$wanted"
-          env -u NODE_AUTH_TOKEN node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
-          unset publish_token
-          echo "@tech-byte-frontier/hardgate@$wanted published and exact-version verified"
+          node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+      - name: Record npm staging failure
+        if: failure() && hashFiles('receipt/release.json') != ''
+        run: |
+          set -euo pipefail
+          channel='@tech-byte-frontier/hardgate'
+          if [ -f receipt/active-channel ]; then channel=$(cat receipt/active-channel); fi
+          node release-tooling/scripts/release-receipt-cli.mjs failure --receipt receipt/release.json \
+            --channel "$channel" --code npm-staging-failed \
+            --message 'npm preparation or verification failed; this channel is blocked. Inspect the job for the failing package before recovery.'
+      - id: upload_receipt
+        name: Retain the npm staging receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-npm-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
 
-  verify-channels:
-    name: Verify all published channels
-    needs: [version-check, github-release, publish-crates, publish-npm]
+  verify-native-exact:
+    name: Verify exact native ${{ matrix.package }}
+    needs: [version-check, package, publish-npm]
     if: >-
       ${{
         always() &&
         needs.version-check.result == 'success' &&
-        needs.github-release.result == 'success' &&
-        needs.publish-crates.result == 'success' &&
+        needs.package.result == 'success' &&
         needs.publish-npm.result == 'success'
       }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: hardgate-linux-x64
+            runner: ubuntu-24.04
+          - package: hardgate-linux-x64-musl
+            runner: ubuntu-24.04
+          - package: hardgate-linux-arm64
+            runner: ubuntu-24.04-arm
+          - package: hardgate-linux-arm64-musl
+            runner: ubuntu-24.04-arm
+          - package: hardgate-darwin-x64
+            runner: macos-15-intel
+          - package: hardgate-darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      NATIVE_MODE: exact
+      MATRIX_PACKAGE: ${{ matrix.package }}
+      RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+      EXPECTED_TOOLING_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --global "npm@${NPM_VERSION}"
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Download the publish receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.publish-npm.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - name: Verify signed source, tooling, and receipt identity
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          test "$(git -C release-tooling rev-parse HEAD)" = "$EXPECTED_TOOLING_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs assert --receipt receipt/release.json
+          jq -e \
+            --arg version "$RELEASE_VERSION" \
+            --arg source "$RELEASE_COMMIT" \
+            --arg tooling "$EXPECTED_TOOLING_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg artifact '${{ needs.package.outputs.bundle_artifact_id }}' \
+            --arg tag_object "$(git rev-parse "$RELEASE_TAG")" \
+            '.identity.version == $version and .identity.source_sha == $source and .identity.tooling_sha == $tooling and .identity.build_run_id == $run and .identity.artifact_id == $artifact and .identity.signed_tag_object == $tag_object' \
+            receipt/release.json >/dev/null
+      - name: Verify the native exact consumer and write proof
+        run: |
+          set -euo pipefail
+          verify_args=(
+            node release-tooling/scripts/verify-native-channel.mjs
+            --package "$MATRIX_PACKAGE"
+            --version "$RELEASE_VERSION"
+            --source-sha "$RELEASE_COMMIT"
+            --archive "dist/${MATRIX_PACKAGE}.tar.gz"
+            --mode "$NATIVE_MODE"
+            --output native-proof.json
+          )
+          if [ "$MATRIX_PACKAGE" = hardgate-linux-x64 ]; then
+            verify_args+=(--wrapper-source npm/hardgate/bin/hardgate.js)
+          fi
+          "${verify_args[@]}"
+      - name: Apply native proof to the release receipt
+        run: node release-tooling/scripts/apply-native-receipt.mjs --receipt receipt/release.json --proof native-proof.json
+      - id: installer
+        name: Verify the canonical GNU x64 shell installer
+        if: matrix.package == 'hardgate-linux-x64'
+        run: |
+          set -euo pipefail
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          env -i PATH=/usr/bin:/bin HARDGATE_VERSION="v${RELEASE_VERSION}" HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
+          archive_sha=$(tar xOf "dist/${MATRIX_PACKAGE}.tar.gz" "${MATRIX_PACKAGE}/hardgate" | sha256sum | awk '{print $1}')
+          installed_sha=$(sha256sum "$install_root/hardgate" | awk '{print $1}')
+          test "$installed_sha" = "$archive_sha"
+          test "$("$install_root/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          node release-tooling/scripts/release-receipt-cli.mjs advance \
+            --receipt receipt/release.json \
+            --channel github-assets \
+            --to exact_consumer_verified \
+            --consumer "$install_root/hardgate"
+      - name: Record native exact failure
+        if: failure() && hashFiles('receipt/release.json') != ''
+        run: |
+          failed_channel="$MATRIX_PACKAGE"
+          if [ "${{ steps.installer.outcome }}" = failure ]; then failed_channel=github-assets; fi
+          node release-tooling/scripts/release-receipt-cli.mjs failure \
+            --receipt receipt/release.json \
+            --channel "$failed_channel" \
+            --code native-verification-failed \
+            --message 'Native exact verification failed; inspect this matrix job before recovery.'
+      - id: upload_receipt
+        name: Retain exact native receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-exact-${{ matrix.package }}-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain exact native proof
+        if: always() && hashFiles('native-proof.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-proof-exact-${{ matrix.package }}-attempt-${{ github.run_attempt }}
+          path: native-proof.json
+          if-no-files-found: error
+          retention-days: 90
+
+  promote-channels:
+    name: Promote verified release channels
+    needs: [version-check, package, publish-npm, verify-native-exact]
+    if: >-
+      ${{ always() && needs.version-check.result == 'success' &&
+          needs.package.result == 'success' && needs.publish-npm.result == 'success' &&
+          needs.verify-native-exact.result == 'success' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
+    env:
+      RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+      RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --global "npm@${NPM_VERSION}"
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.publish-npm.outputs.receipt_artifact_id }}
+          path: expected-receipt
+          digest-mismatch: error
+      - id: select_receipts
+        name: Select the latest exact receipt for every native package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          ids=$(node release-tooling/scripts/select-receipt-artifacts.mjs --phase exact --attempt "$GITHUB_RUN_ATTEMPT" --run-id "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY")
+          printf 'ids=%s\n' "$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.select_receipts.outputs.ids }}
+          path: exact-receipts
+          digest-mismatch: error
+      - name: Bind and merge every exact consumer checkpoint
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          node release-tooling/scripts/release-receipt-cli.mjs create --output identity.json \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --tooling-sha "$GITHUB_SHA" \
+            --tag-object "$(git rev-parse "$RELEASE_TAG")" --build-run-id "$GITHUB_RUN_ID" \
+            --artifact-id '${{ needs.package.outputs.bundle_artifact_id }}' --dist dist
+          mkdir -p receipt
+          node release-tooling/scripts/merge-release-receipts.mjs --expected identity.json --output receipt/release.json \
+            expected-receipt/release.json exact-receipts/*/release.json
+          jq -e '.channels | length == 9 and all(.[]; .state == "exact_consumer_verified" or .state == "promoted" or .state == "default_consumer_verified")' receipt/release.json >/dev/null
+      - name: Promote npm defaults after immutable and exact consumer verification
+        env:
+          # dist-tag uses token authentication even when publication uses OIDC.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node release-tooling/scripts/promote-npm-channels.mjs --receipt receipt/release.json --dist dist
+      - id: crate_default
+        name: Verify the crate default without a registry mutation
+        run: |
+          set -euo pipefail
+          cargo package --locked --no-verify
+          node release-tooling/scripts/verify-crate-publication.mjs \
+            --expected "target/package/hardgate-${RELEASE_VERSION}.crate" \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --require-default
+          node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel hardgate --to promoted
+      - name: Promote the verified GitHub release to stable and latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node release-tooling/scripts/promote-github-channel.mjs --receipt receipt/release.json --dist dist --repo "$GITHUB_REPOSITORY"
+      - name: Record crate default failure
+        if: failure() && steps.crate_default.outcome == 'failure' && hashFiles('receipt/release.json') != ''
+        run: node release-tooling/scripts/release-receipt-cli.mjs failure --receipt receipt/release.json --channel hardgate --code crate-default-failed --message 'Crate default verification failed; inspect the job before recovery.'
+      - id: upload_receipt
+        name: Retain the promotion receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-promoted-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
+
+
+  verify-native-default:
+    name: Verify default native ${{ matrix.package }}
+    needs: [version-check, package, promote-channels]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success' &&
+        needs.promote-channels.result == 'success'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: hardgate-linux-x64
+            runner: ubuntu-24.04
+          - package: hardgate-linux-x64-musl
+            runner: ubuntu-24.04
+          - package: hardgate-linux-arm64
+            runner: ubuntu-24.04-arm
+          - package: hardgate-linux-arm64-musl
+            runner: ubuntu-24.04-arm
+          - package: hardgate-darwin-x64
+            runner: macos-15-intel
+          - package: hardgate-darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      NATIVE_MODE: default
+      MATRIX_PACKAGE: ${{ matrix.package }}
+      RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+      EXPECTED_TOOLING_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --global "npm@${NPM_VERSION}"
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Download the promoted receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.promote-channels.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - name: Verify signed source, tooling, and receipt identity
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          test "$(git -C release-tooling rev-parse HEAD)" = "$EXPECTED_TOOLING_SHA"
+          node release-tooling/scripts/release-receipt-cli.mjs assert --receipt receipt/release.json
+          jq -e \
+            --arg version "$RELEASE_VERSION" \
+            --arg source "$RELEASE_COMMIT" \
+            --arg tooling "$EXPECTED_TOOLING_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg artifact '${{ needs.package.outputs.bundle_artifact_id }}' \
+            --arg tag_object "$(git rev-parse "$RELEASE_TAG")" \
+            '.identity.version == $version and .identity.source_sha == $source and .identity.tooling_sha == $tooling and .identity.build_run_id == $run and .identity.artifact_id == $artifact and .identity.signed_tag_object == $tag_object' \
+            receipt/release.json >/dev/null
+      - name: Verify the native default consumer and write proof
+        run: |
+          set -euo pipefail
+          verify_args=(
+            node release-tooling/scripts/verify-native-channel.mjs
+            --package "$MATRIX_PACKAGE"
+            --version "$RELEASE_VERSION"
+            --source-sha "$RELEASE_COMMIT"
+            --archive "dist/${MATRIX_PACKAGE}.tar.gz"
+            --mode "$NATIVE_MODE"
+            --output native-proof.json
+          )
+          if [ "$MATRIX_PACKAGE" = hardgate-linux-x64 ]; then
+            verify_args+=(--wrapper-source npm/hardgate/bin/hardgate.js)
+          fi
+          "${verify_args[@]}"
+      - name: Apply native proof to the release receipt
+        run: node release-tooling/scripts/apply-native-receipt.mjs --receipt receipt/release.json --proof native-proof.json
+      - id: installer
+        name: Verify the canonical GNU x64 shell installer
+        if: matrix.package == 'hardgate-linux-x64'
+        run: |
+          set -euo pipefail
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          env -i PATH=/usr/bin:/bin HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
+          archive_sha=$(tar xOf "dist/${MATRIX_PACKAGE}.tar.gz" "${MATRIX_PACKAGE}/hardgate" | sha256sum | awk '{print $1}')
+          installed_sha=$(sha256sum "$install_root/hardgate" | awk '{print $1}')
+          test "$installed_sha" = "$archive_sha"
+          test "$("$install_root/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          node release-tooling/scripts/release-receipt-cli.mjs advance \
+            --receipt receipt/release.json \
+            --channel github-assets \
+            --to default_consumer_verified \
+            --consumer "$install_root/hardgate"
+      - name: Record native default failure
+        if: failure() && hashFiles('receipt/release.json') != ''
+        run: |
+          failed_channel="$MATRIX_PACKAGE"
+          if [ "${{ steps.installer.outcome }}" = failure ]; then failed_channel=github-assets; fi
+          node release-tooling/scripts/release-receipt-cli.mjs failure \
+            --receipt receipt/release.json \
+            --channel "$failed_channel" \
+            --code native-verification-failed \
+            --message 'Native default verification failed; inspect this matrix job before recovery.'
+      - id: upload_receipt
+        name: Retain default native receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-default-${{ matrix.package }}-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain default native proof
+        if: always() && hashFiles('native-proof.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-proof-default-${{ matrix.package }}-attempt-${{ github.run_attempt }}
+          path: native-proof.json
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-channels:
+    outputs:
+      receipt_artifact_id: ${{ steps.upload_receipt.outputs.artifact-id }}
+    name: Verify all published channels
+    needs: [version-check, package, promote-channels, verify-native-default]
+    if: >-
+      ${{
+        always() &&
+        needs.version-check.result == 'success' &&
+        needs.package.result == 'success' &&
+        needs.promote-channels.result == 'success' &&
+        needs.verify-native-default.result == 'success'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1215,279 +1619,322 @@ jobs:
           node scripts/release-sbom-verify.mjs --file "dist/hardgate-${RELEASE_VERSION}.sbom.cdx.json" --version "$RELEASE_VERSION"
           (cd dist && sha256sum --check --strict SHA256SUMS)
           node release-tooling/scripts/verify-npm-publication.mjs --version "$RELEASE_VERSION" --dist dist
+      - name: Download the promoted receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.promote-channels.outputs.receipt_artifact_id }}
+          path: receipt
+          digest-mismatch: error
+      - name: Verify signed source, tooling, and promoted receipt identity
+        env:
+          RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+          EXPECTED_TOOLING_SHA: ${{ github.sha }}
+          EXPECTED_BUNDLE_ARTIFACT_ID: ${{ needs.package.outputs.bundle_artifact_id }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
+          test "$(git -C release-tooling rev-parse HEAD)" = "$EXPECTED_TOOLING_SHA"
+          cmp -- npm/hardgate/bin/hardgate.js release-tooling/npm/hardgate/bin/hardgate.js
+          tag_object="$(git rev-parse "$RELEASE_TAG")"
+          node release-tooling/scripts/release-receipt-cli.mjs assert --receipt receipt/release.json
+          jq -e --arg version "$RELEASE_VERSION" --arg source "$RELEASE_COMMIT" \
+            --arg tooling "$EXPECTED_TOOLING_SHA" --arg run "$GITHUB_RUN_ID" \
+            --arg artifact "$EXPECTED_BUNDLE_ARTIFACT_ID" --arg tag_object "$tag_object" \
+            '.identity.version == $version and .identity.source_sha == $source and .identity.tooling_sha == $tooling and .identity.build_run_id == $run and .identity.artifact_id == $artifact and .identity.signed_tag_object == $tag_object' \
+            receipt/release.json >/dev/null
 
-      - name: Verify published registry versions and runnable installs
+      - id: crate_default
+        name: Install the default crate and checkpoint only hardgate
         env:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
         run: |
           set -euo pipefail
-          expected="hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
-          npm_registry_probe() {
-            name="$1"
-            wanted="$2"
-            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}/${wanted}") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          # The unversioned registry document is authoritative for
-          # dist-tags.latest; exact-version probes alone cannot prove the
-          # package is the current release channel.
-          npm_latest_probe() {
-            name="$1"
-            encoded_name=$(printf '%s' "$name" | sed 's|/|%2f|g')
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "https://registry.npmjs.org/${encoded_name}") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist-tags"]["latest"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_latest_tag() {
-            name="$1"
-            wanted="$2"
-            status=2
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_latest_probe "$name"); then
-                if [ "$actual" = "$wanted" ]; then
-                  printf '%s\n' "$actual"
-                  return 0
-                fi
-                echo "npm dist-tags.latest for $name is $actual; expected $wanted" >&2
-                status=4
-              else
-                status=$?
-                case "$status" in
-                  1|2) ;;
-                  *) return "$status" ;;
-                esac
-              fi
-              if [ "$SECONDS" -ge "$deadline" ]; then
-                echo "npm dist-tags.latest for $name did not settle on $wanted within ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                return "$status"
-              fi
-              remaining=$((deadline - SECONDS))
-              delay="$HARDGATE_REGISTRY_DELAY"
-              if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-              [ "$delay" -gt 0 ] && sleep "$delay"
-            done
-          }
-          wait_for_registry_version() {
-            retry_absent="$1"
-            name="$2"
-            wanted="$3"
-            deadline=$((SECONDS + HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS))
-            while :; do
-              if actual=$(npm_registry_probe "$name" "$wanted"); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "npm registry version $name@$wanted remained unavailable for ${HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS}s" >&2
-                  return "$status"
-                fi
-                remaining=$((deadline - SECONDS))
-                delay="$HARDGATE_REGISTRY_DELAY"
-                if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-                [ "$delay" -gt 0 ] && sleep "$delay"
-              fi
-            done
-          }
-          crate_probe() {
-            api="https://crates.io/api/v1/crates/hardgate/${RELEASE_VERSION}"
-            body=$(mktemp)
-            status=$(curl --location --silent --show-error --user-agent "$HARDGATE_CRATES_IO_USER_AGENT" --connect-timeout "$HARDGATE_CURL_CONNECT_TIMEOUT" --max-time "$HARDGATE_CURL_MAX_TIME" --output "$body" --write-out '%{http_code}' "$api") || {
-              rm -f "$body"
-              return 2
-            }
-            case "$status" in
-              200)
-                actual=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["num"])' < "$body") || {
-                  rm -f "$body"
-                  return 3
-                }
-                rm -f "$body"
-                printf '%s\n' "$actual"
-                return 0
-                ;;
-              404) rm -f "$body"; return 1 ;;
-              *) rm -f "$body"; return 3 ;;
-            esac
-          }
-          wait_for_crate_version() {
-            retry_absent="$1"
-            for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
-              if actual=$(crate_probe); then
-                printf '%s\n' "$actual"
-                return 0
-              else
-                status=$?
-                case "$status" in
-                  1)
-                    if [ "$retry_absent" -eq 0 ]; then return 1; fi
-                    ;;
-                  2) ;;
-                  *) return "$status" ;;
-                esac
-                [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
-              fi
-            done
-            return "$status"
-          }
-          test "$(wait_for_crate_version 1)" = "$RELEASE_VERSION"
-          for pkg in hardgate-linux-x64 hardgate-linux-x64-musl hardgate-linux-arm64 hardgate-linux-arm64-musl hardgate-darwin-x64 hardgate-darwin-arm64; do
-            test "$(wait_for_registry_version 1 "$pkg" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
-            test "$(wait_for_latest_tag "$pkg" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
-          done
-          test "$(wait_for_registry_version 1 "@tech-byte-frontier/hardgate" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
-          test "$(wait_for_latest_tag "@tech-byte-frontier/hardgate" "$RELEASE_VERSION")" = "$RELEASE_VERSION"
-
-          crate_root=$(mktemp -d)
-          crate_installed=0
-          for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
-            if cargo install hardgate --version "=$RELEASE_VERSION" --locked --force --root "$crate_root"; then
-              crate_installed=1
-              break
-            fi
-            [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
-          done
-          test "$crate_installed" -eq 1
-          test -x "$crate_root/bin/hardgate"
-          test "$("$crate_root/bin/hardgate" --version)" = "$expected"
-
-          npm_root=$(mktemp -d)
-          npm init --yes --prefix "$npm_root" >/dev/null
-          npm_installed=0
-          for attempt in $(seq 1 "$HARDGATE_REGISTRY_ATTEMPTS"); do
-            if npm install --ignore-scripts --no-audit --no-fund --prefix "$npm_root" "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"; then
-              npm_installed=1
-              break
-            fi
-            [ "$attempt" -lt "$HARDGATE_REGISTRY_ATTEMPTS" ] && sleep "$HARDGATE_REGISTRY_DELAY"
-          done
-          test "$npm_installed" -eq 1
-          npm_binary="$npm_root/node_modules/.bin/hardgate"
-          test -x "$npm_binary"
-          test "$("$npm_binary" --version)" = "$expected"
-
-          # Exercise the documented global commands in isolated prefixes. A
-          # minimal fresh-shell PATH proves users do not need the repository's
-          # development PATH or a project-local node_modules directory.
+          unset HARDGATE_BINARY HARDGATE_BINARY_PATH HARDGATE_NATIVE_BINARY HARDGATE_LAUNCHER_DEPTH NODE_OPTIONS
+          rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+          cargo_bin=$(command -v cargo)
           node_bin=$(dirname "$(command -v node)")
-          npm_global=$(mktemp -d)
-          npm install --global --ignore-scripts --no-audit --no-fund \
-            --prefix "$npm_global" "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"
-          npm_executable="$npm_global/bin/hardgate"
-          test -x "$npm_executable"
-          env -i PATH="$npm_global/bin:$node_bin:/usr/bin:/bin" EXPECTED="$expected" \
-            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' \
-            sh "$npm_executable"
+          export PATH="$(dirname "$cargo_bin"):$node_bin:/usr/bin:/bin"
+          install_tmp=$(mktemp -d)
+          trap 'rm -rf "$install_tmp"' EXIT
+          trap 'exit 130' HUP INT TERM
+          export HOME="$install_tmp/home"
+          export CARGO_HOME="$install_tmp/cargo-home"
+          export RUSTUP_HOME="$rustup_home"
+          mkdir -p "$HOME" "$CARGO_HOME"
+          cargo package --locked --no-verify
+          node release-tooling/scripts/verify-crate-publication.mjs \
+            --expected "target/package/hardgate-$RELEASE_VERSION.crate" \
+            --version "$RELEASE_VERSION" --source-sha "$RELEASE_COMMIT" --require-default
+          crate_root="$install_tmp/crate-root"
+          cargo install hardgate --locked --force --root "$crate_root"
+          test -x "$crate_root/bin/hardgate"
+          expected="hardgate $RELEASE_VERSION ($RELEASE_COMMIT)"
+          test "$("$crate_root/bin/hardgate" --version)" = "$expected"
+          node release-tooling/scripts/release-receipt-cli.mjs advance \
+            --receipt receipt/release.json --channel hardgate \
+            --to default_consumer_verified --consumer "$crate_root/bin/hardgate"
+      - name: Record crate default failure
+        if: failure() && steps.crate_default.outcome == 'failure' && hashFiles('receipt/release.json') != ''
+        run: |
+          node release-tooling/scripts/release-receipt-cli.mjs failure \
+            --receipt receipt/release.json --channel hardgate \
+            --code crate-default-failed \
+            --message 'Crate default installation or verification failed; inspect this job before recovery.'
 
-          pnpm_root=$(mktemp -d)
-          mkdir -p "$pnpm_root/home" "$pnpm_root/bin" "$pnpm_root/config"
-          (
-            export HOME="$pnpm_root/home"
-            export XDG_CONFIG_HOME="$pnpm_root/config"
-            export PNPM_HOME="$pnpm_root"
-            export PATH="$PNPM_HOME:$PNPM_HOME/bin:$PATH"
-            pnpm add --global --ignore-scripts "@tech-byte-frontier/hardgate@${RELEASE_VERSION}"
-          )
-          pnpm_bin=$(HOME="$pnpm_root/home" XDG_CONFIG_HOME="$pnpm_root/config" \
-            PNPM_HOME="$pnpm_root" PATH="$pnpm_root:$pnpm_root/bin:$PATH" pnpm bin --global)
-          pnpm_executable="$pnpm_bin/hardgate"
-          test -x "$pnpm_executable"
-          env -i PATH="$pnpm_bin:$node_bin:/usr/bin:/bin" EXPECTED="$expected" \
-            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' \
-            sh "$pnpm_executable"
-
-      - name: Verify clean npm, pnpm, Yarn, and Bun consumers
+      - name: Verify default npm, pnpm, Yarn, Bun, and shell consumers
         env:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
           RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
-          PNPM_VERSION: ${{ env.PNPM_VERSION }}
-          YARN_VERSION: ${{ env.YARN_VERSION }}
-          BUN_VERSION: ${{ env.BUN_VERSION }}
-          NPM_VERSION: ${{ env.NPM_VERSION }}
         run: |
           set -euo pipefail
-          expected="hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
-          test "$(npm --version)" = "$NPM_VERSION"
-          test "$(pnpm --version)" = "$PNPM_VERSION"
-          test "$(yarn --version)" = "$YARN_VERSION"
-          test "$(bun --version)" = "$BUN_VERSION"
+          unset HARDGATE_BINARY HARDGATE_BINARY_PATH HARDGATE_NATIVE_BINARY HARDGATE_LAUNCHER_DEPTH NODE_OPTIONS HARDGATE_VERSION
+          consumer_tmp=$(mktemp -d)
+          trap 'rm -rf "$consumer_tmp"' EXIT
+          trap 'exit 130' HUP INT TERM
+          private_bin="$consumer_tmp/private-bin"
+          mkdir -p "$private_bin"
+          printf '%s\n' '#!/bin/sh' 'exit 127' > "$private_bin/hardgate"
+          chmod 755 "$private_bin/hardgate"
+          node_tool=$(command -v node)
+          npm_tool=$(command -v npm)
+          pnpm_tool=$(command -v pnpm)
+          yarn_tool=$(command -v yarn)
+          bun_tool=$(command -v bun)
+          node_bin=$(dirname "$node_tool")
+          manager_path="$private_bin:$node_bin:$(dirname "$npm_tool"):$(dirname "$pnpm_tool"):$(dirname "$yarn_tool"):$(dirname "$bun_tool"):/usr/bin:/bin"
+          runtime_path="$private_bin:$node_bin:/usr/bin:/bin"
+          expected="hardgate $RELEASE_VERSION ($RELEASE_COMMIT)"
+          expected_native="$consumer_tmp/hardgate-linux-x64"
+          tar xOf "dist/hardgate-linux-x64.tar.gz" hardgate-linux-x64/hardgate > "$expected_native"
+          chmod 755 "$expected_native"
+          wrapper_source="$PWD/npm/hardgate/bin/hardgate.js"
+          verify_script="$consumer_tmp/verify-installed.mjs"
+          cat > "$verify_script" <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { createRequire } from "node:module";
+          const [rootInput, commandInput, nativeInput, wrapperInput, version, label] = process.argv.slice(2);
+          const wrapperName = "@tech-byte-frontier/hardgate";
+          const nativeName = "hardgate-linux-x64";
+          const fail = (message) => { throw new Error(label + ": " + message); };
+          const inside = (base, candidate) => {
+            const relative = path.relative(base, candidate);
+            return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+          };
+          const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+          const resolveFrom = (base, specifier) => fs.realpathSync(createRequire(path.join(base, ".hardgate-resolve.cjs")).resolve(specifier));
+          const root = fs.realpathSync(rootInput);
+          const commandEntry = path.resolve(commandInput);
+          if (!inside(root, commandEntry)) fail("launcher command escaped fresh root");
+          const command = fs.realpathSync(commandEntry);
+          const launcherCandidates = [command];
+          let shim = "";
+          try { shim = fs.readFileSync(commandEntry, "utf8"); } catch {}
+          const shimTarget = shim.match(/^# cmd-shim-target=(.+)$/m)?.[1]?.trim();
+          if (shimTarget) {
+            const target = path.resolve(path.dirname(commandEntry), shimTarget);
+            launcherCandidates.push(fs.realpathSync(target));
+          }
+          const launcher = [...new Set(launcherCandidates)].find((candidate) =>
+            candidate.endsWith(`${path.sep}bin${path.sep}hardgate.js`));
+          if (!launcher) fail("installed command does not resolve to bin/hardgate.js");
+          const wrapperRoot = path.dirname(path.dirname(launcher));
+          if (!inside(root, wrapperRoot)) fail("wrapper escaped fresh root");
+          const wrapperManifestPath = fs.realpathSync(path.join(wrapperRoot, "package.json"));
+          if (!inside(root, wrapperManifestPath)) fail("wrapper manifest escaped fresh root");
+          const wrapperManifest = readJson(wrapperManifestPath);
+          if (wrapperManifest.name !== wrapperName || wrapperManifest.version !== version) fail("wrapper identity mismatch");
+          if (wrapperManifest.bin?.hardgate !== "bin/hardgate.js") fail("wrapper bin entry mismatch");
+          if (!fs.readFileSync(launcher).equals(fs.readFileSync(wrapperInput))) fail("wrapper launcher bytes differ");
+          let nativeManifestPath;
+          try { nativeManifestPath = resolveFrom(wrapperRoot, nativeName + "/package.json"); } catch {}
+          if (!nativeManifestPath) fail("native package is not resolvable from checked wrapper");
+          nativeManifestPath = fs.realpathSync(nativeManifestPath);
+          if (!inside(root, nativeManifestPath)) fail("native manifest escaped fresh root");
+          const nativeRoot = path.dirname(nativeManifestPath);
+          if (!inside(root, nativeRoot)) fail("native package escaped fresh root");
+          const nativeManifest = readJson(nativeManifestPath);
+          if (nativeManifest.name !== nativeName || nativeManifest.version !== version) fail("native identity mismatch");
+          const nativeBinary = fs.realpathSync(path.join(nativeRoot, "bin", "hardgate"));
+          if (!inside(root, nativeBinary)) fail("native binary escaped fresh root");
+          if (!fs.readFileSync(nativeBinary).equals(fs.readFileSync(nativeInput))) fail("native bytes differ from dist GNU x64 bytes");
+          const wrapperModule = createRequire(launcher)(launcher);
+          if (typeof wrapperModule.findBinary !== "function") fail("wrapper does not export findBinary");
+          const resolvedNative = wrapperModule.findBinary();
+          if (!resolvedNative || fs.realpathSync(resolvedNative) !== nativeBinary) fail("wrapper findBinary did not resolve the checked native binary");
+          process.stdout.write(label + ": verified\n");
+          NODE
+          make_project() {
+            project="$1"
+            mkdir -p "$project"
+            printf '%s\n' '{"name":"hardgate-default-consumer","private":true,"version":"1.0.0"}' > "$project/package.json"
+          }
+          verify_install() {
+            root="$1"; command="$2"; home="$3"; label="$4"
+            version_output=$(env -i HOME="$home" PATH="$runtime_path" "$command" --version)
+            test "$version_output" = "$expected"
+            env -i HOME="$home" PATH="$runtime_path" "$node_tool" "$verify_script" \
+              "$root" "$command" "$expected_native" "$wrapper_source" "$RELEASE_VERSION" "$label"
+          }
 
-          pnpm_project=$(mktemp -d)
-          npm init --yes --prefix "$pnpm_project" >/dev/null
-          (cd "$pnpm_project" && pnpm add --ignore-scripts "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
-          test "$($pnpm_project/node_modules/.bin/hardgate --version)" = "$expected"
+          npm_project="$consumer_tmp/npm-project"; npm_home="$consumer_tmp/npm-home"
+          npm_cache="$consumer_tmp/npm-cache"; npm_config="$consumer_tmp/npmrc"
+          make_project "$npm_project"; mkdir -p "$npm_home" "$npm_cache"
+          printf '%s\n' 'audit=false' 'fund=false' 'ignore-scripts=true' 'include=optional' > "$npm_config"
+          env -i HOME="$npm_home" PATH="$manager_path" NPM_CONFIG_USERCONFIG="$npm_config" \
+            NPM_CONFIG_CACHE="$npm_cache" NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false NPM_CONFIG_FETCH_RETRIES=0 \
+            NPM_CONFIG_FETCH_TIMEOUT=20000 NPM_CONFIG_IGNORE_SCRIPTS=true "$npm_tool" install --ignore-scripts --prefix "$npm_project" \
+            --include=optional "@tech-byte-frontier/hardgate@latest"
+          verify_install "$npm_project" "$npm_project/node_modules/.bin/hardgate" "$npm_home" npm-project
 
-          yarn_project=$(mktemp -d)
-          npm init --yes --prefix "$yarn_project" >/dev/null
+          pnpm_project="$consumer_tmp/pnpm-project"; pnpm_home="$consumer_tmp/pnpm-home"
+          pnpm_config="$consumer_tmp/pnpm-config"; pnpm_store="$consumer_tmp/pnpm-store"
+          make_project "$pnpm_project"; mkdir -p "$pnpm_home" "$pnpm_config" "$pnpm_store"
+          (cd "$pnpm_project" && env -i HOME="$pnpm_home" XDG_CONFIG_HOME="$pnpm_config" \
+            PNPM_STORE_DIR="$pnpm_store" PATH="$manager_path" "$pnpm_tool" add \
+            --ignore-scripts --registry=https://registry.npmjs.org/ --store-dir "$pnpm_store" "@tech-byte-frontier/hardgate@latest")
+          verify_install "$pnpm_project" "$pnpm_project/node_modules/.bin/hardgate" "$pnpm_home" pnpm-project
+
+          yarn_project="$consumer_tmp/yarn-project"; yarn_home="$consumer_tmp/yarn-home"
+          yarn_cache="$consumer_tmp/yarn-cache"; make_project "$yarn_project"; mkdir -p "$yarn_home" "$yarn_cache"
           printf '%s\n' 'nodeLinker: node-modules' > "$yarn_project/.yarnrc.yml"
-          (cd "$yarn_project" && yarn add "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
-          test "$($yarn_project/node_modules/.bin/hardgate --version)" = "$expected"
+          (cd "$yarn_project" && env -i HOME="$yarn_home" YARN_CACHE_FOLDER="$yarn_cache" YARN_ENABLE_SCRIPTS=false \
+            YARN_GLOBAL_FOLDER="$yarn_home/.yarn" PATH="$manager_path" "$yarn_tool" add "@tech-byte-frontier/hardgate@latest")
+          verify_install "$yarn_project" "$yarn_project/node_modules/.bin/hardgate" "$yarn_home" yarn-project
 
-          bun_project=$(mktemp -d)
-          npm init --yes --prefix "$bun_project" >/dev/null
-          (cd "$bun_project" && bun add "@tech-byte-frontier/hardgate@${RELEASE_VERSION}")
-          test "$($bun_project/node_modules/.bin/hardgate --version)" = "$expected"
+          bun_project="$consumer_tmp/bun-project"; bun_home="$consumer_tmp/bun-home"
+          bun_cache="$consumer_tmp/bun-cache"; make_project "$bun_project"; mkdir -p "$bun_home" "$bun_cache"
+          (cd "$bun_project" && env -i HOME="$bun_home" BUN_INSTALL_CACHE_DIR="$bun_cache" \
+            PATH="$manager_path" "$bun_tool" add --ignore-scripts --registry=https://registry.npmjs.org/ "@tech-byte-frontier/hardgate@latest")
+          verify_install "$bun_project" "$bun_project/node_modules/.bin/hardgate" "$bun_home" bun-project
 
-      - name: Exercise the documented shell installer
-        env:
-          HARDGATE_VERSION: ${{ needs.version-check.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
-          RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
-        run: |
-          set -euo pipefail
-          install_root=$(mktemp -d)
-          HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
-          test -x "$install_root/hardgate"
-          test "$("$install_root/hardgate" --version)" = "hardgate ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+          npm_global="$consumer_tmp/npm-global"; npm_global_home="$consumer_tmp/npm-global-home"
+          npm_global_cache="$consumer_tmp/npm-global-cache"; npm_global_config="$consumer_tmp/npm-global-npmrc"
+          mkdir -p "$npm_global" "$npm_global_home" "$npm_global_cache"
+          printf '%s\n' 'audit=false' 'fund=false' 'ignore-scripts=true' > "$npm_global_config"
+          env -i HOME="$npm_global_home" PATH="$manager_path" NPM_CONFIG_USERCONFIG="$npm_global_config" \
+            NPM_CONFIG_CACHE="$npm_global_cache" NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false NPM_CONFIG_IGNORE_SCRIPTS=true "$npm_tool" install --ignore-scripts --global --prefix "$npm_global" \
+            "@tech-byte-frontier/hardgate@latest"
+          npm_global_command="$npm_global/bin/hardgate"; test -x "$npm_global_command"
+          env -i HOME="$npm_global_home" EXPECTED="$expected" PATH="$npm_global/bin:$private_bin:$node_bin:/usr/bin:/bin" \
+            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' sh "$npm_global_command"
+          verify_install "$npm_global" "$npm_global_command" "$npm_global_home" npm-global
+
+          pnpm_global="$consumer_tmp/pnpm-global"; pnpm_global_bin_expected="$pnpm_global/bin"; pnpm_global_home="$consumer_tmp/pnpm-global-home"
+          pnpm_global_config="$consumer_tmp/pnpm-global-config"; pnpm_global_store="$pnpm_global/store"
+          mkdir -p "$pnpm_global" "$pnpm_global_bin_expected" "$pnpm_global_home" "$pnpm_global_config" "$pnpm_global_store"
+          env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \
+            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global_bin_expected:$manager_path" \
+            "$pnpm_tool" add --ignore-scripts --global --store-dir "$pnpm_global_store" "@tech-byte-frontier/hardgate@latest"
+          pnpm_global_bin=$(env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \
+            PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global_bin_expected:$manager_path" \
+            "$pnpm_tool" bin --global)
+          test "$pnpm_global_bin" = "$pnpm_global_bin_expected"
+          test -d "$pnpm_global_bin"; pnpm_global_command="$pnpm_global_bin/hardgate"
+          test -x "$pnpm_global_command"
+          env -i HOME="$pnpm_global_home" EXPECTED="$expected" PATH="$pnpm_global_bin:$private_bin:$node_bin:/usr/bin:/bin" \
+            sh -c 'test "$(command -v hardgate)" = "$1" && test "$(hardgate --version)" = "$EXPECTED"' sh "$pnpm_global_command"
+          verify_install "$pnpm_global" "$pnpm_global_command" "$pnpm_global_home" pnpm-global
+
+          shell_root="$consumer_tmp/shell-install"; shell_home="$consumer_tmp/shell-home"
+          mkdir -p "$shell_root" "$shell_home"
+          env -i HOME="$shell_home" PATH=/usr/bin:/bin HARDGATE_INSTALL_DIR="$shell_root" sh scripts/install.sh
+          installed_sha=$(sha256sum "$shell_root/hardgate" | awk '{print $1}')
+          expected_sha=$(sha256sum "$expected_native" | awk '{print $1}')
+          test "$installed_sha" = "$expected_sha"
+          test "$("$shell_root/hardgate" --version)" = "$expected"
+
+      - id: upload_receipt
+        name: Retain default consumer receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-consumers-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90
 
   release-complete:
     name: Release publication aggregate
     if: ${{ always() }}
-    needs: [version-check, package, attest, publication-preflight, github-release, publish-crates, publish-npm, verify-channels]
+    needs: [version-check, package, attest, publication-preflight, receipt-init, github-release, publish-crates, publish-npm, verify-native-exact, promote-channels, verify-native-default, verify-channels]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}
+      RELEASE_TAG: ${{ needs.version-check.outputs.tag }}
     steps:
       - name: Require every publication and verification job to pass
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         run: exit 1
-      - run: echo "release publication and channel verification passed"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version-check.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out CI-validated release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.promote-channels.outputs.receipt_artifact_id }}
+          path: expected-receipt
+          digest-mismatch: error
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.verify-channels.outputs.receipt_artifact_id }}
+          path: consumer-receipt
+          digest-mismatch: error
+      - id: select_receipts
+        name: Select the latest default receipt for every native package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"
+          ids=$(node release-tooling/scripts/select-receipt-artifacts.mjs --phase default --attempt "$GITHUB_RUN_ATTEMPT" --run-id "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY")
+          printf 'ids=%s\n' "$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.select_receipts.outputs.ids }}
+          path: default-receipts
+          digest-mismatch: error
+      - name: Require matching identity and every default consumer checkpoint
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "$RELEASE_TAG"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT"
+          node release-tooling/scripts/release-receipt-cli.mjs assert --receipt expected-receipt/release.json
+          jq -e --arg version "$RELEASE_VERSION" --arg source "$RELEASE_COMMIT" --arg tooling "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" --arg artifact '${{ needs.package.outputs.bundle_artifact_id }}' \
+            --arg tag_object "$(git rev-parse "$RELEASE_TAG")" \
+            '.identity.version == $version and .identity.source_sha == $source and .identity.tooling_sha == $tooling and .identity.build_run_id == $run and .identity.artifact_id == $artifact and .identity.signed_tag_object == $tag_object' \
+            expected-receipt/release.json >/dev/null
+          mkdir -p receipt
+          node release-tooling/scripts/merge-release-receipts.mjs --expected expected-receipt/release.json \
+            --output receipt/release.json --require-complete \
+            expected-receipt/release.json consumer-receipt/release.json default-receipts/*/release.json
+      - name: Retain the aggregate release receipt
+        if: always() && hashFiles('receipt/release.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-receipt-complete-attempt-${{ github.run_attempt }}
+          path: receipt/release.json
+          if-no-files-found: error
+          retention-days: 90

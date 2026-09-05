@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a focused improvement to Hardgate
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: What task is difficult today, and who needs it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest behavior or interface that would help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and constraints
+      description: Describe current workarounds, relevant compatibility constraints, or a minimal example.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add links, examples, or other details that help evaluate the request.

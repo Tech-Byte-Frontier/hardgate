@@ -131,6 +131,7 @@
 //! the checksum, metadata, target marker, and version/commit identity together.
 
 pub mod adoption;
+pub mod cancellation;
 pub mod commands;
 pub mod config;
 pub mod diagnostics;
@@ -138,6 +139,7 @@ pub mod discovery;
 pub mod engines;
 pub mod git_evidence;
 pub mod mcp;
+mod resources;
 
 pub use adoption::{
     LegacyRatchetOutcome, LegacyRatchetSummary, apply_legacy_ratchet, ratchet_report,

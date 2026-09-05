@@ -2,14 +2,20 @@ use super::mutation_output::{
     MutationFailure, MutationSummaryContext, finish_disabled_mutation, handle_no_targets,
     render_mutation_output, runtime_failure,
 };
+use super::outcome::{CommandOutcome, CommandResult};
+use std::io::Write;
 #[path = "mutate/baselines.rs"]
 mod baselines;
+#[path = "mutate/progress.rs"]
+mod progress;
+use progress::{print_generation_notice, print_mutant_notice};
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
 mod targets;
+mod workspace;
 
-use crate::config::HardgateConfig;
+use crate::config::{ConfigContext, HardgateConfig};
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
 use crate::engines::{
     AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
@@ -42,35 +48,70 @@ struct MutationRun<'a> {
     results: &'a [MutantExecutionResult],
     stats: &'a MutationStats,
     start_time: Instant,
+    plan: crate::diagnostics::execution::ExecutionPlan,
 }
 
 /// Run native Tree-sitter AST mutation testing: generate mutants, execute the
 /// test suite per mutant with timeouts and RAII rollbacks, then report the
 /// kill score. Exits non-zero below the configured floor.
-pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
+pub fn cmd_mutate(opts: MutateOptions) -> CommandResult {
+    let context = ConfigContext::load(None)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", format!("{error:#}")))?;
+    cmd_mutate_in(opts, &context)
+}
+
+pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> CommandResult {
+    opts.scoped = opts.scoped.map(|path| context.input_path(&path));
+    let paths = opts.scoped.iter().cloned().collect::<Vec<_>>();
+    let plan = super::execution_plan::gate_plan(
+        context,
+        super::execution_plan::GateSelection {
+            command: "mutate",
+            paths: &paths,
+            diff: opts.diff,
+            dead_code: false,
+            all: false,
+            coverage_report: None,
+            mutation_report: None,
+        },
+    )?;
+    super::execution_failure::run_planned(plan, |plan| execute_mutate(opts, context, plan))
+}
+
+fn execute_mutate(
+    opts: MutateOptions,
+    context: &ConfigContext,
+    plan: crate::diagnostics::execution::ExecutionPlan,
+) -> CommandResult {
     let start_time = Instant::now();
-    let config = HardgateConfig::load_or_default(None)
-        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
-    let root = Path::new(".");
+    let config = &context.config;
+    let root = context.root.as_path();
     if !config.mutation.enabled {
-        return finish_disabled_mutation(opts.format.as_deref());
+        return finish_disabled_mutation(opts.format.as_deref(), &plan)
+            .map(|()| CommandOutcome::Passed);
     }
-    let target_files = discover_targets(&opts, &config, root)
+    let target_files = discover_targets(&opts, config, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if target_files.is_empty() {
-        return handle_no_targets(opts.diff, opts.format.as_deref());
+        return handle_no_targets(opts.diff, opts.format.as_deref(), &plan)
+            .map(|()| CommandOutcome::Passed);
     }
+    let resources = crate::resources::MutationGuard::acquire()
+        .map_err(|error| MutationFailure::new("setup", "resource-error", error.to_string()))?;
+    let workspace = workspace::MutationWorkspace::create(root, &target_files)
+        .map_err(|error| MutationFailure::new("setup", "snapshot-error", format!("{error:#}")))?;
+    let root = workspace.root();
     let json = opts.format.as_deref() == Some("json");
     if !json {
-        print_generation_notice(&target_files, opts.diff);
+        print_generation_notice(&target_files, opts.diff)?;
     }
     let test_cmd = opts
         .test_cmd
         .clone()
         .or_else(|| config.mutation.test_cmd.clone());
-    let max_count = resolve_max_mutants(&opts, &config)
+    let max_count = resolve_max_mutants(&opts, config)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
-    let mutants = generate_target_mutants(&target_files, max_count)
+    let mutants = generate_target_mutants(&target_files, max_count, root, resources.budget)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if mutants.is_empty() {
         return Err(MutationFailure::new(
@@ -81,7 +122,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .into());
     }
     let selected_files = selected_mutant_files(&mutants);
-    let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
+    let timeout = resolve_timeout(&opts, config, &selected_files, root)?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
     run_unmutated_baselines(BaselineRun {
         runner: &runner,
@@ -91,26 +132,21 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         json,
     })?;
     if !json {
-        print_mutant_notice(mutants.len(), timeout);
+        print_mutant_notice(mutants.len(), timeout)?;
     }
     let (results, stats) = run_mutant_batch(&mutants, &runner, root, json)?;
+    workspace.close()?;
+    crate::cancellation::check()?;
     finish_mutation_run(MutationRun {
-        config: &config,
+        config,
         opts: &opts,
         results: &results,
         stats: &stats,
         start_time,
+        plan,
     })
 }
 
-fn print_generation_notice(files: &[PathBuf], diff: bool) {
-    println!(
-        "{} generating AST mutations across {} source files (diff: {})...",
-        "note:".bold(),
-        files.len().to_string().cyan(),
-        diff
-    );
-}
 fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<usize> {
     let max_count = opts
         .max_mutants
@@ -184,48 +220,44 @@ fn automatic_full_suite_timeout(
     }
     Ok(recommended)
 }
-fn print_mutant_notice(count: usize, timeout: u64) {
-    println!(
-        "{} running {} mutants (timeout: {}s per mutant)...",
-        "note:".bold(),
-        count.to_string().cyan(),
-        timeout
-    );
-}
-fn finish_mutation_run(run: MutationRun<'_>) -> Result<()> {
+fn finish_mutation_run(run: MutationRun<'_>) -> CommandResult {
     let score = run.stats.score_percent();
     let min_score = run.config.mutation.min_score.unwrap_or(85.0);
     let passed = mutation_run_passed(run.stats, score, min_score);
-    render_mutation_output(
-        &MutationSummaryContext {
-            stats: run.stats,
-            results: run.results,
-            score,
-            min_score,
-            passed,
-            elapsed: run.start_time.elapsed().as_millis(),
-        },
-        run.opts.format.as_deref(),
-    )
-    .map_err(|error| MutationFailure::new("execution", "execution-error", error.to_string()))?;
-    if passed {
-        Ok(())
-    } else {
-        std::process::exit(1)
-    }
+    let context = MutationSummaryContext {
+        stats: run.stats,
+        results: run.results,
+        score,
+        min_score,
+        passed,
+        elapsed: run.start_time.elapsed().as_millis(),
+    };
+    render_mutation_output(&context, run.opts.format.as_deref(), Some(&run.plan))?;
+    Ok(context.outcome())
 }
 /// Resolve whether a path is an effective native mutation target under the
 /// built-in role default and any configured role policy override.
 pub fn effective_mutation_target(path: &Path, config: &HardgateConfig) -> Result<bool> {
     targets::effective_mutation_target(path, config)
 }
-fn generate_target_mutants(files: &[PathBuf], max_count: usize) -> Result<Vec<AstMutant>> {
+fn generate_target_mutants(
+    files: &[PathBuf],
+    max_count: usize,
+    root: &Path,
+    budget: crate::resources::MutationBudget,
+) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();
     let mut all = Vec::new();
     for file in files {
-        let content = fs::read_to_string(file)
-            .with_context(|| format!("Failed to read mutation target `{}`", file.display()))?;
-        all.extend(mutator.generate_mutants(file, &content));
+        crate::resources::check_pressure()?;
+        let source = fs::File::open(root.join(file))
+            .with_context(|| format!("Failed to open mutation target `{}`", file.display()))?;
+        let bytes = crate::resources::input::read_source(source, budget.source_bytes())?;
+        let content = String::from_utf8(bytes)
+            .with_context(|| format!("Mutation target `{}` is not UTF-8", file.display()))?;
+        let remaining = budget.candidate_count().saturating_sub(all.len());
+        all.extend(mutator.generate_mutants_bounded(file, &content, remaining)?);
+        crate::resources::check_pressure()?;
     }
     Ok(select_representative_mutants(all, max_count))
 }
@@ -357,15 +389,17 @@ fn run_mutant_batch(
     };
 
     for (idx, mutant) in mutants.iter().enumerate() {
+        crate::cancellation::check()?;
         if !json {
-            print!(
+            write!(
+                std::io::stdout().lock(),
                 "   [{}/{}] {}:{} {} ... ",
                 idx + 1,
                 mutants.len(),
                 mutant.file.display().to_string().bold(),
                 mutant.line.to_string().yellow(),
                 mutant.description.dimmed()
-            );
+            )?;
             std::io::Write::flush(&mut std::io::stdout())?;
         }
 
@@ -390,13 +424,16 @@ fn run_mutant_batch(
             )
             .into());
         }
-        if json {
-            if let Some(error) = runtime_failure(&res) {
-                return Err(error);
+        if let Some(error) = runtime_failure(&res) {
+            if !json {
+                print_outcome(&mut stats, res.outcome)?;
             }
+            return Err(error);
+        }
+        if json {
             increment_stats(&mut stats, res.outcome);
         } else {
-            print_outcome(&mut stats, res.outcome);
+            print_outcome(&mut stats, res.outcome)?;
         }
         results.push(res);
     }
@@ -404,14 +441,16 @@ fn run_mutant_batch(
     Ok((results, stats))
 }
 
-fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) {
+fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) -> Result<()> {
     let (label, style) = outcome_label(outcome);
     increment_stats(stats, outcome);
-    match style {
-        OutcomeStyle::Green => println!("{}", label.green().bold()),
-        OutcomeStyle::Red => println!("{}", label.red().bold()),
-        OutcomeStyle::Yellow => println!("{}", label.yellow().bold()),
-    }
+    let label = match style {
+        OutcomeStyle::Green => label.green().bold(),
+        OutcomeStyle::Red => label.red().bold(),
+        OutcomeStyle::Yellow => label.yellow().bold(),
+    };
+    writeln!(std::io::stdout().lock(), "{label}")?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

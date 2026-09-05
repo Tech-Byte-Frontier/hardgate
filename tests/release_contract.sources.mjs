@@ -19,6 +19,8 @@ export const checksumScript = read("scripts/release-checksums.mjs");
 export const verifier = read("scripts/release-verify.mjs");
 export const releaseAbi = read("scripts/release-abi.mjs");
 export const npmPublication = read("scripts/verify-npm-publication.mjs");
+export const npmRegistryPack = read("scripts/npm-registry-pack.mjs");
+export const npmVerificationPolicy = read("scripts/npm-verification-policy.mjs");
 export const npmPackRetry = read("scripts/npm-pack-retry.mjs");
 export const launcher = read("npm/hardgate/bin/hardgate.js");
 export const sbomScript = read("scripts/release-sbom.mjs");
@@ -60,4 +62,13 @@ export const wrapperManifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "ha
 
 export function includesAll(text, snippets, label) {
   for (const snippet of snippets) assert.ok(text.includes(snippet), `${label} must contain ${snippet}`);
+}
+
+export function releaseJob(name) {
+  assert.match(name, /^[a-z][a-z0-9-]*$/);
+  const start = release.indexOf(`  ${name}:\n`);
+  assert.ok(start >= 0, `release job ${name} must exist`);
+  const rest = release.slice(start);
+  const next = rest.search(/\n  [a-z][a-z0-9-]*:\n/);
+  return next < 0 ? rest : rest.slice(0, next);
 }

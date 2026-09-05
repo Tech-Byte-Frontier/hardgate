@@ -7,10 +7,10 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { isRetryableNpmPackError } from "./npm-pack-retry.mjs";
+import { packRegistryPackage } from "./npm-registry-pack.mjs";
+import { childTimeoutMs, remainingMs, verificationPolicy } from "./npm-verification-policy.mjs";
 import { archiveMemberMode, isExecutableMode, option, projectRoot as root, runCommand } from "./release-support.mjs";
 
 const packages = [
@@ -22,21 +22,19 @@ const packages = [
   ["hardgate-darwin-arm64", ["darwin"], ["arm64"], undefined],
 ];
 const packageNames = packages.map(([name]) => name).sort();
-const maxAttempts = Number.parseInt(process.env.NPM_VERIFY_ATTEMPTS ?? "20", 10);
-const retryDelay = Number.parseInt(process.env.NPM_VERIFY_DELAY_SECONDS ?? "10", 10);
 
 function fail(message) {
   throw new Error(`verify-npm-publication: ${message}`);
 }
 
-const run = (command, args, options = {}) => runCommand("verify-npm-publication", command, args, options);
+const run = (command, args, options = {}) => runCommand("verify-npm-publication", command, args, { ...options, timeout: childTimeoutMs(policy), killSignal: "SIGKILL" });
 
 function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
 function readTar(archive, member) {
-  const result = spawnSync("tar", ["-xOzf", archive, member], { encoding: null, maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync("tar", ["-xOzf", archive, member], { encoding: null, timeout: childTimeoutMs(policy), killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
   if (result.status !== 0) fail(`${path.basename(archive)} lacks ${member}`);
   return result.stdout;
 }
@@ -60,47 +58,6 @@ function verifyExecutableMember(archive, packageDirectory, packageName) {
   }
 }
 
-function packOnce(spec, directory) {
-  // Keep npm's error diagnostics so the bounded retry classifier can
-  // distinguish registry propagation (for example E404 immediately after a
-  // publish) from authentication or package-integrity failures. `--silent`
-  // suppresses those diagnostics and turns every failure into an opaque exit
-  // status that must fail closed.
-  const result = spawnSync("npm", ["pack", spec, "--ignore-scripts", "--loglevel=error", "--pack-destination", directory], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-    env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
-  });
-  if (result.status !== 0) {
-    const detail = [result.error?.code, result.error?.message, result.stderr, result.stdout]
-      .filter(Boolean)
-      .join("\n");
-    throw new Error(detail || `npm pack exited with status ${result.status}`);
-  }
-  const archives = fs.readdirSync(directory).filter((name) => name.endsWith(".tgz"));
-  if (archives.length !== 1) throw new Error(`npm pack ${spec} produced ${archives.length} tarballs`);
-  return path.join(directory, archives[0]);
-}
-
-function packWithRetry(spec) {
-  let lastError;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-npm-pack-"));
-    try {
-      return { archive: packOnce(spec, directory), directory };
-    } catch (error) {
-      lastError = error;
-      fs.rmSync(directory, { recursive: true, force: true });
-      if (!isRetryableNpmPackError(error)) {
-        fail(`npm pack ${spec} failed without retry: ${error?.message ?? error}`);
-      }
-      if (attempt < maxAttempts && retryDelay > 0) spawnSync("sleep", [String(retryDelay)]);
-    }
-  }
-  fail(`npm pack ${spec} failed after ${maxAttempts} bounded attempts: ${lastError?.message ?? lastError}`);
-}
-
 function assertArray(manifest, key, expected, packageName) {
   const actual = manifest[key];
   if (JSON.stringify(actual ?? undefined) !== JSON.stringify(expected)) {
@@ -108,8 +65,8 @@ function assertArray(manifest, key, expected, packageName) {
   }
 }
 
-function verifyPlatformPackage(version, dist, [name, osValues, cpuValues, libcValues]) {
-  const packed = packWithRetry(`${name}@=${version}`);
+async function verifyPlatformPackage(version, dist, [name, osValues, cpuValues, libcValues]) {
+  const packed = await packRegistryPackage(name, version, policy);
   try {
     const packageDirectory = unpackTar(packed.archive, packed.directory);
     verifyExecutableMember(packed.archive, packageDirectory, name);
@@ -133,8 +90,8 @@ function verifyPlatformPackage(version, dist, [name, osValues, cpuValues, libcVa
   }
 }
 
-function verifyWrapper(version) {
-  const packed = packWithRetry(`@tech-byte-frontier/hardgate@=${version}`);
+async function verifyWrapper(version) {
+  const packed = await packRegistryPackage("@tech-byte-frontier/hardgate", version, policy);
   try {
     const packageDirectory = unpackTar(packed.archive, packed.directory);
     const manifest = JSON.parse(fs.readFileSync(path.join(packageDirectory, "package.json"), "utf8"));
@@ -166,6 +123,7 @@ const dist = path.resolve(option("--dist", "dist"));
 const platformOnly = process.argv.includes("--platform-only");
 const selectedPackage = option("--package");
 if (!version) fail("--version is required");
+const policy = verificationPolicy(version);
 if (process.argv.includes("--package") && !selectedPackage) fail("--package requires a platform package name");
 if (selectedPackage && !packageNames.includes(selectedPackage)) {
   fail(`--package must identify one of the six platform packages, got ${selectedPackage}`);
@@ -173,7 +131,8 @@ if (selectedPackage && !packageNames.includes(selectedPackage)) {
 const platformsToVerify = selectedPackage
   ? packages.filter(([name]) => name === selectedPackage)
   : packages;
-for (const platform of platformsToVerify) verifyPlatformPackage(version, dist, platform);
-if (!platformOnly) verifyWrapper(version);
+for (const platform of platformsToVerify) await verifyPlatformPackage(version, dist, platform);
+if (!platformOnly) await verifyWrapper(version);
+remainingMs(policy);
 const platformLabel = selectedPackage ? selectedPackage : "all six platform packages";
 console.log(`verify-npm-publication: ${platformLabel}${platformOnly ? "" : " and wrapper"} verified at ${version}`);

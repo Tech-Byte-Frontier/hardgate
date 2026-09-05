@@ -457,7 +457,10 @@ fn directory_max_mutants_uses_selected_relevant_test_root() {
     write_executable(
         &root,
         "node_modules/.bin/pnpm",
-        "#!/bin/sh\nprintf '%s' \"$*\" >> pnpm-invocations\nexit 0\n",
+        &format!(
+            "#!/bin/sh\nprintf '%s' \"$*\" >> '{}'\nexit 0\n",
+            root.join("pnpm-invocations").display()
+        ),
     );
 
     let output = run_mutation(&root, "src", 1);

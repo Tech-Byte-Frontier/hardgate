@@ -1,6 +1,11 @@
 # Configuration specification
 
-Hardgate reads `hardgate.toml` from the current directory. If the file is absent, `HardgateConfig::load_or_default` uses the `strict-agent` preset object. `hardgate init --preset …` serializes that same preset object as a commented template.
+Hardgate finds the nearest `hardgate.toml` while searching upward to the first
+Git boundary. `--config FILE` selects an explicit policy; missing or invalid
+explicit files fail. Without a discovered policy, strict-agent defaults apply.
+Policy paths use the configuration root, while CLI paths use the invocation
+directory. `hardgate config` displays the merged, validated effective policy.
+See [configuration authority](CLI_AND_INTEGRATION.md) for monorepo details.
 
 ## Presets and presence-based merging
 
@@ -294,6 +299,10 @@ reports = ["reports/stryker-mutation.json"]
 ```
 
 `check` and `verify` evaluate Stryker-shaped (`files`), cargo-mutants-shaped (`outcomes`), or generic outcome-count JSON. Empty reports, empty outcome arrays, missing reports, parse errors, and reports with no viable outcomes are blocking when mutation is enabled. Scores use killed divided by killed plus survived. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings and remain blocking; mutation timeout handling is not a user-weakenable exception.
+
+Native execution also applies [resource safeguards](MUTATION_RESOURCES.md),
+including a per-user mutation slot and Linux memory checks. Resource failures
+remain incomplete evidence and are not configurable score exceptions.
 
 `hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool. When `[mutation].enabled = false`, it prints a disabled-policy note and exits successfully without target discovery or execution; the native baseline and no-target rules apply only when enabled.
 

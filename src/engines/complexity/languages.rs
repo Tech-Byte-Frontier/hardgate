@@ -1,6 +1,12 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, hash_map::Entry};
 use tree_sitter::Language;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+thread_local! {
+    static PARSERS: RefCell<HashMap<SupportedLanguage, tree_sitter::Parser>> = RefCell::new(HashMap::new());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportedLanguage {
     Rust,
     TypeScript,
@@ -12,7 +18,7 @@ pub enum SupportedLanguage {
 
 impl SupportedLanguage {
     pub fn from_extension(ext: &str) -> Option<Self> {
-        match ext {
+        match ext.to_ascii_lowercase().as_str() {
             "rs" => Some(SupportedLanguage::Rust),
             "ts" | "mts" | "cts" => Some(SupportedLanguage::TypeScript),
             "tsx" => Some(SupportedLanguage::Tsx),
@@ -54,9 +60,20 @@ impl SupportedLanguage {
     }
 
     pub fn parse_tree(&self, content: &str) -> Option<tree_sitter::Tree> {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&self.tree_sitter_language()).ok()?;
-        parser.parse(content, None)
+        // Each analysis worker owns at most one parser per supported language.
+        // Trees remain owned outputs; source text and prior trees are not cached.
+        PARSERS.with(|parsers| {
+            let mut parsers = parsers.borrow_mut();
+            let parser = match parsers.entry(*self) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let mut parser = tree_sitter::Parser::new();
+                    parser.set_language(&self.tree_sitter_language()).ok()?;
+                    entry.insert(parser)
+                }
+            };
+            parser.parse(content, None)
+        })
     }
 
     pub fn parse_file(path: &std::path::Path, content: &str) -> Option<(Self, tree_sitter::Tree)> {

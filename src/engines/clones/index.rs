@@ -1,6 +1,5 @@
-use super::fingerprint::hash_token;
 use super::repository_relative_path;
-use super::tokenizer::{Token, tokenize};
+use super::tokenizer::{Token, TokenInterner, tokenize};
 use globset::GlobSet;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -41,9 +40,8 @@ impl fmt::Display for CloneIndexError {
 
 impl std::error::Error for CloneIndexError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct TokenLocation {
-    pub(super) file: PathBuf,
     pub(super) stream_idx: usize,
     pub(super) start_line: usize,
     pub(super) end_line: usize,
@@ -51,15 +49,13 @@ pub(super) struct TokenLocation {
     pub(super) end_idx: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct RawCloneMatch {
-    pub(super) file_a: PathBuf,
     pub(super) stream_idx_a: usize,
     pub(super) start_a: usize,
     pub(super) end_a: usize,
     pub(super) start_idx_a: usize,
     pub(super) end_idx_a: usize,
-    pub(super) file_b: PathBuf,
     pub(super) stream_idx_b: usize,
     pub(super) start_b: usize,
     pub(super) end_b: usize,
@@ -74,9 +70,9 @@ struct CloneIndexState<'a> {
 
 struct FileWindowInput<'a> {
     tokens: &'a [Token],
-    rel_path: &'a Path,
     stream_idx: usize,
     token_streams: &'a [(PathBuf, Vec<Token>)],
+    interner: &'a TokenInterner,
     min_lines: usize,
     min_tokens: usize,
 }
@@ -90,11 +86,12 @@ struct WindowCheck<'a> {
 
 pub(super) struct CloneIndex {
     pub(super) token_streams: Vec<(PathBuf, Vec<Token>)>,
+    pub(super) interner: TokenInterner,
     pub(super) raw_matches: Vec<RawCloneMatch>,
 }
 
 pub(super) struct CloneIndexOptions<'a> {
-    pub(super) files: &'a [(PathBuf, String)],
+    pub(super) files: &'a [(PathBuf, &'a str)],
     pub(super) root: &'a Path,
     pub(super) exclude_glob: Option<&'a GlobSet>,
     pub(super) min_lines: usize,
@@ -118,14 +115,14 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
         .iter()
         .map(|path| repository_relative_path(path, root))
         .collect::<HashSet<_>>();
-    let mut inputs: Vec<(PathBuf, String)> = files
+    let mut inputs: Vec<(PathBuf, &str)> = files
         .iter()
         .filter_map(|(abs_path, content)| {
             let rel_path = repository_relative_path(abs_path, root);
             if exclude_glob.is_some_and(|exclude| exclude.is_match(&rel_path)) {
                 return None;
             }
-            Some((rel_path, content.clone()))
+            Some((rel_path, *content))
         })
         .collect();
     inputs.sort_by(|(left, _), (right, _)| {
@@ -134,13 +131,14 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
             .cmp(&changed.contains(left))
             .then(left.cmp(right))
     });
+    let mut interner = TokenInterner::default();
     let token_streams = inputs
         .into_iter()
-        .map(|(path, content)| (path, tokenize(&content)))
+        .map(|(path, content)| (path, tokenize(content, &mut interner)))
         .collect::<Vec<_>>();
     let mut window_map = HashMap::new();
     let mut raw_matches = Vec::new();
-    for (stream_idx, (rel_path, tokens)) in token_streams.iter().enumerate() {
+    for (stream_idx, (_rel_path, tokens)) in token_streams.iter().enumerate() {
         let mut state = CloneIndexState {
             window_map: &mut window_map,
             raw_matches: &mut raw_matches,
@@ -148,9 +146,9 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
         index_file_windows(
             FileWindowInput {
                 tokens,
-                rel_path,
                 stream_idx,
                 token_streams: &token_streams,
+                interner: &interner,
                 min_lines,
                 min_tokens,
             },
@@ -159,6 +157,7 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
     }
     Ok(CloneIndex {
         token_streams,
+        interner,
         raw_matches,
     })
 }
@@ -169,9 +168,9 @@ fn index_file_windows(
 ) -> Result<(), CloneIndexError> {
     let FileWindowInput {
         tokens,
-        rel_path,
         stream_idx,
         token_streams,
+        interner,
         min_lines,
         min_tokens,
     } = input;
@@ -179,7 +178,7 @@ fn index_file_windows(
         return Ok(());
     }
     const BASE: u64 = 31337;
-    let mut rolling_hash = init_rolling_hash(&tokens[..min_tokens], BASE);
+    let mut rolling_hash = init_rolling_hash(&tokens[..min_tokens], BASE, interner);
     let pow_base = calc_pow_base(min_tokens - 1, BASE);
     let mut i = 0;
     loop {
@@ -188,7 +187,6 @@ fn index_file_windows(
         let line_span = end_line.saturating_sub(start_line) + 1;
         if line_span >= min_lines {
             let loc = TokenLocation {
-                file: rel_path.to_path_buf(),
                 stream_idx,
                 start_line,
                 end_line,
@@ -205,8 +203,8 @@ fn index_file_windows(
         if i + min_tokens >= tokens.len() {
             break;
         }
-        let old_token_hash = hash_token(&tokens[i].kind);
-        let new_token_hash = hash_token(&tokens[i + min_tokens].kind);
+        let old_token_hash = interner.hash(tokens[i].symbol);
+        let new_token_hash = interner.hash(tokens[i + min_tokens].symbol);
         rolling_hash = rolling_hash
             .wrapping_sub(old_token_hash.wrapping_mul(pow_base))
             .wrapping_mul(BASE)
@@ -222,24 +220,23 @@ impl CloneIndexState<'_> {
             compare_existing_windows(existing, &check, self.raw_matches)?;
             if existing.len() >= MAX_WINDOWS_PER_HASH {
                 return Err(CloneIndexError::HashWindowCapacityExceeded {
-                    file: check.location.file.clone(),
+                    file: stream_path(check.location.stream_idx, check.token_streams).to_path_buf(),
                     line: check.location.start_line,
                     limit: MAX_WINDOWS_PER_HASH,
                 });
             }
-            existing.push(check.location.clone());
+            existing.push(*check.location);
         } else {
-            self.window_map
-                .insert(check.hash, vec![check.location.clone()]);
+            self.window_map.insert(check.hash, vec![*check.location]);
         }
         Ok(())
     }
 }
 
-fn init_rolling_hash(slice: &[Token], base: u64) -> u64 {
+fn init_rolling_hash(slice: &[Token], base: u64, interner: &TokenInterner) -> u64 {
     let mut h = 0u64;
     for t in slice {
-        h = h.wrapping_mul(base).wrapping_add(hash_token(&t.kind));
+        h = h.wrapping_mul(base).wrapping_add(interner.hash(t.symbol));
     }
     h
 }
@@ -258,7 +255,8 @@ fn compare_existing_windows(
     raw_matches: &mut Vec<RawCloneMatch>,
 ) -> Result<(), CloneIndexError> {
     for previous in existing {
-        let same_file = previous.file == check.location.file;
+        let same_file = stream_path(previous.stream_idx, check.token_streams)
+            == stream_path(check.location.stream_idx, check.token_streams);
         let too_close = same_file
             && (check.location.start_line <= previous.end_line.saturating_add(check.min_lines));
         if !too_close && token_sequences_match(previous, check.location, check.token_streams) {
@@ -267,26 +265,32 @@ fn compare_existing_windows(
                     limit: MAX_RAW_MATCHES,
                 });
             }
-            raw_matches.push(raw_clone_match(previous, check.location));
+            raw_matches.push(raw_clone_match(
+                previous,
+                check.location,
+                check.token_streams,
+            ));
         }
     }
     Ok(())
 }
 
-fn raw_clone_match(previous: &TokenLocation, location: &TokenLocation) -> RawCloneMatch {
-    let (a, b) = if location_ordering(previous, location).is_le() {
+fn raw_clone_match(
+    previous: &TokenLocation,
+    location: &TokenLocation,
+    streams: &[(PathBuf, Vec<Token>)],
+) -> RawCloneMatch {
+    let (a, b) = if location_ordering(previous, location, streams).is_le() {
         (previous, location)
     } else {
         (location, previous)
     };
     RawCloneMatch {
-        file_a: a.file.clone(),
         stream_idx_a: a.stream_idx,
         start_a: a.start_line,
         end_a: a.end_line,
         start_idx_a: a.start_idx,
         end_idx_a: a.end_idx,
-        file_b: b.file.clone(),
         stream_idx_b: b.stream_idx,
         start_b: b.start_line,
         end_b: b.end_line,
@@ -295,9 +299,13 @@ fn raw_clone_match(previous: &TokenLocation, location: &TokenLocation) -> RawClo
     }
 }
 
-fn location_ordering(left: &TokenLocation, right: &TokenLocation) -> std::cmp::Ordering {
-    left.file
-        .cmp(&right.file)
+fn location_ordering(
+    left: &TokenLocation,
+    right: &TokenLocation,
+    streams: &[(PathBuf, Vec<Token>)],
+) -> std::cmp::Ordering {
+    stream_path(left.stream_idx, streams)
+        .cmp(stream_path(right.stream_idx, streams))
         .then(left.stream_idx.cmp(&right.stream_idx))
         .then(left.start_idx.cmp(&right.start_idx))
 }
@@ -328,6 +336,10 @@ pub(super) fn token_slice(
 
 pub(super) fn token_kinds_match(left: &[Token], right: &[Token]) -> bool {
     left.iter()
-        .map(|token| token.kind.as_str())
-        .eq(right.iter().map(|token| token.kind.as_str()))
+        .map(|token| token.symbol)
+        .eq(right.iter().map(|token| token.symbol))
+}
+
+pub(super) fn stream_path(stream_idx: usize, streams: &[(PathBuf, Vec<Token>)]) -> &Path {
+    streams[stream_idx].0.as_path()
 }

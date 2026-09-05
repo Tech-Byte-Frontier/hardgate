@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 mod capture;
 #[path = "process/cleanup.rs"]
 mod cleanup;
+#[path = "process/mutation.rs"]
+mod mutation;
 
 use capture::{CaptureResult, CapturedOutput};
 use cleanup::terminate_process_tree;
@@ -58,20 +60,24 @@ pub(crate) fn run_command_with_roots(
     timeout: Duration,
     operation: &str,
 ) -> ProcessOutcome {
+    if let Err(error) = crate::cancellation::install() {
+        return ProcessOutcome::Failed {
+            message: error.to_string(),
+            output: String::new(),
+        };
+    }
     let Some(program) = tokens.first() else {
         return ProcessOutcome::Failed {
             message: "Empty command string; nothing was executed.".to_string(),
             output: String::new(),
         };
     };
-    let mut child = match spawn_command(tokens, roots) {
+    if operation == "mutation" {
+        return mutation::run(tokens, roots, timeout);
+    }
+    let mut child = match spawn_command(tokens, roots, operation) {
         Ok(child) => child,
-        Err(error) => {
-            return ProcessOutcome::Failed {
-                message: format!("Failed to execute '{program}': {error}"),
-                output: String::new(),
-            };
-        }
+        Err(error) => return spawn_failure(program, error),
     };
     let mut captured = CapturedOutput::from_child(&mut child);
     finish_process_wait(
@@ -99,7 +105,15 @@ pub(crate) fn append_output(existing: String, extra: String) -> String {
     format!("{existing}{separator}{extra}")
 }
 
-fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<Child> {
+fn spawn_command(
+    tokens: &[String],
+    roots: CommandRoots<'_>,
+    operation: &str,
+) -> std::io::Result<Child> {
+    command_for_tokens(tokens, roots, operation).spawn()
+}
+
+fn command_for_tokens(tokens: &[String], roots: CommandRoots<'_>, operation: &str) -> Command {
     let mut command = Command::new(&tokens[0]);
     command
         .args(&tokens[1..])
@@ -107,9 +121,48 @@ fn spawn_command(tokens: &[String], roots: CommandRoots<'_>) -> std::io::Result<
         .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if operation == "mutation" {
+        command.env("CARGO_TARGET_DIR", roots.workspace_root.join("target"));
+    }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
-    command.spawn()
+    command
+}
+
+/// Bounded manager queries and cleanup must still work after cancellation.
+/// This internal path never acquires a mutation lease or spawns test commands.
+#[cfg(target_os = "linux")]
+pub(crate) fn run_control_command(tokens: &[String]) -> ProcessOutcome {
+    let roots = CommandRoots::single(Path::new("/"));
+    let mut child = match spawn_command(tokens, roots, "resource control") {
+        Ok(child) => child,
+        Err(error) => return spawn_failure("resource control", error),
+    };
+    let mut captured = CapturedOutput::from_child(&mut child);
+    finish_process_wait(wait_for_control(&mut child), &mut child, &mut captured)
+}
+
+fn spawn_failure(program: &str, error: std::io::Error) -> ProcessOutcome {
+    ProcessOutcome::Failed {
+        message: format!("Failed to execute '{program}': {error}"),
+        output: String::new(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_control(child: &mut Child) -> ProcessWait {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return ProcessWait::Exited(status),
+            Err(error) => return wait_error_process(child, "resource control", error),
+            Ok(None) => {}
+        }
+        if Instant::now() >= deadline {
+            return timeout_process(child, "resource control");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn prepend_local_bins(command: &mut Command, package_root: &Path, workspace_root: &Path) {
@@ -320,6 +373,9 @@ enum ChildPoll {
 }
 
 fn poll_child(child: &mut Child) -> ChildPoll {
+    if let Err(error) = crate::cancellation::check() {
+        return ChildPoll::Error(error);
+    }
     match child.try_wait() {
         Ok(Some(status)) => ChildPoll::Exited(status),
         Ok(None) => ChildPoll::Running,

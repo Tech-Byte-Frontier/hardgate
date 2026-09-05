@@ -7,7 +7,7 @@ impl GateReport {
     pub fn render_agent(&self) -> String {
         if self.passed {
             let mut out = format!(
-                "✅ **Hardgate Passed**: All {} files and {} functions satisfied strict quality budgets ({}ms).\n\n",
+                "✅ **Hardgate Passed**: All {} files and {} functions satisfied the evaluated policy ({}ms).\n\n",
                 self.files_scanned, self.functions_analyzed, self.duration_ms
             );
             self.render_advisories_agent(&mut out);

@@ -1,12 +1,12 @@
-use super::tokenizer::Token;
+use super::tokenizer::{Token, TokenInterner};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
-pub(super) fn clone_fingerprint(tokens: &[Token]) -> String {
+pub(super) fn clone_fingerprint(tokens: &[Token], interner: &TokenInterner) -> String {
     let mut digest = digest_bytes(FNV_OFFSET_BASIS, b"hardgate-clone-fingerprint\0");
     for token in tokens {
-        digest = digest_len_prefixed(digest, token.kind.as_bytes());
+        digest = digest_len_prefixed(digest, interner.symbol(token.symbol).as_bytes());
     }
     format!("{digest:016x}")
 }

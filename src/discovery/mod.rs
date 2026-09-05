@@ -71,7 +71,7 @@ pub struct DiscoveryResult {
 
 /// Discover source files, returning just the included paths.
 pub fn discover_files(options: DiscoverOptions) -> Result<Vec<PathBuf>> {
-    discover_files_with_exclusions(options).map(|res| res.files)
+    discover_paths(options).map(|res| res.files)
 }
 
 /// Scope a discovered file list down to explicit CLI path filters.
@@ -165,6 +165,17 @@ fn path_key(p: &Path) -> String {
 
 /// Discover source files, keeping excluded ones visible for advisories.
 pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<DiscoveryResult> {
+    let mut result = discover_paths(options)?;
+    result.classified_files = result
+        .files
+        .iter()
+        .map(|path| ClassifiedFile::new(path))
+        .collect();
+    Ok(result)
+}
+
+/// Internal inventory leaves classification to the prepared policy for this run.
+pub(crate) fn discover_paths(options: DiscoverOptions) -> Result<DiscoveryResult> {
     let exclusion_glob = build_exclusion_globset(options.exclusions)?;
     let has_exclusions = !options.exclusions.is_empty();
 
@@ -204,11 +215,10 @@ pub fn discover_files_with_exclusions(options: DiscoverOptions) -> Result<Discov
 
     files.sort();
     excluded_files.sort();
-    let classified_files = files.iter().map(|path| ClassifiedFile::new(path)).collect();
     Ok(DiscoveryResult {
         files,
         excluded_files,
-        classified_files,
+        classified_files: Vec::new(),
     })
 }
 
@@ -234,11 +244,10 @@ fn discover_git_diff_files(
     files.sort();
     let mut excluded_files: Vec<PathBuf> = collector.excluded.into_iter().collect();
     excluded_files.sort();
-    let classified_files = files.iter().map(|path| ClassifiedFile::new(path)).collect();
     Ok(DiscoveryResult {
         files,
         excluded_files,
-        classified_files,
+        classified_files: Vec::new(),
     })
 }
 

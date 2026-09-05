@@ -1,6 +1,10 @@
 # Existing landscape and comparative analysis
 
-Hardgate sits between language tools and a repository's acceptance policy. It can invoke a formatter, linter, or test command, but its own contract is narrower: deterministic structural budgets, role-aware inputs, anti-gaming checks, declarative boundaries, bounded clone detection, and explicit evidence requirements.
+Hardgate adds repository acceptance rules to the language tools a project
+already uses. It can invoke a configured formatter, linter, or test command,
+but its own contract is narrower: deterministic structural budgets, role-aware
+inputs, anti-gaming checks, declarative boundaries, bounded clone detection,
+and explicit evidence requirements.
 
 ## Tool positioning
 
@@ -9,12 +13,12 @@ Hardgate sits between language tools and a repository's acceptance policy. It ca
 | PMAT | Rust-oriented agent context and technical-debt workflows, including quality scoring and MCP integration | Complementary context and grading; Hardgate supplies repository-owned budgets, role policy, and fail-closed evidence |
 | [Qlty CLI / Qlty Cloud](https://docs.qlty.sh/what-is-qlty) | A local CLI for setup, linters/formatters, smells and metrics, plus coverage publishing to a hosted code-health platform with maintainability, duplication, lint, and coverage views | Complementary analysis and history; Hardgate is the local verdict layer with explicit evidence, role ownership, and legacy static ratchet. Qlty's AST duplication analysis and Hardgate's normalized-token clone fingerprints answer related but different questions |
 | jscpd | Dedicated copy/paste detection across broad formats | A specialized detector; Hardgate includes a bounded role-group token detector and keeps clone exclusions local to that engine |
-| Stryker | JavaScript/TypeScript mutation execution and report generation | A mature external mutation runner; Hardgate evaluates Stryker-shaped JSON but does not invoke Stryker |
+| Stryker / cargo-mutants | JavaScript/TypeScript or Rust mutation execution and report generation | External mutation runners; Hardgate evaluates recognized mutation reports and has its own bounded runner, but does not invoke either tool |
 | SonarQube / SonarCloud | Broad static analysis, code smells, security, coverage, duplication, and hosted quality gates | Centralized analysis and history; Hardgate is local and repository-owned, and its verdict does not depend on a hosted service |
 | ESLint | Extensible JavaScript/TypeScript lint rules and plugins | Language-specific linting remains ESLint's job; Hardgate can run it through `[orchestration].lint` |
 | Biome | JavaScript/TypeScript formatting and linting | Hardgate can orchestrate Biome commands; it does not embed Biome rules |
 | Oxlint | JavaScript/TypeScript linting | Hardgate can orchestrate Oxlint; Oxlint owns language diagnostics |
-| Trunk / Lefthook / pre-commit | Hook scheduling and command orchestration | Useful invocation layers; Hardgate supplies the policy report they invoke |
+| Trunk / Lefthook / pre-commit | Hook scheduling and command orchestration | Useful invocation layers for configured commands; Hardgate does not ship or manage those hooks |
 
 Qlty has a different scope from Hardgate: Qlty Cloud is a hosted code-health
 product, and the Qlty CLI can run local analysis and publish coverage. Hardgate
@@ -31,11 +35,11 @@ wants local acceptance plus hosted trends.
 | Architecture | Declarative path-scoped import/call/token rules evaluated line by line | Dependency-graph or compiler tooling for resolved relationships |
 | Duplication | Bounded normalized-token windows over independent source/test/fixture role groups; stable path/line-independent fingerprints | Qlty or jscpd for broader formats, different structural algorithms, or hosted history |
 | Coverage and CRAP | LCOV ingestion with global floors, CRAP, critical paths, and changed executable-line mode | Jest/Vitest/cargo-llvm-cov or another provider that emits LCOV; Qlty Cloud for publication/history |
-| Mutation | Native AST baseline + mutants, plus Stryker/cargo-mutants/generic JSON report evaluation | Stryker or cargo-mutants for language-specific operators and runners |
+| Mutation | Native AST baseline + mutants in a private workspace on supported Linux/macOS builds, plus recognized JSON report evaluation | Stryker or cargo-mutants for language-specific operators and runners |
 | Generated artifacts | Independent freshness command; budget/clone exclusions cannot disable it | Project generator and CI command that establishes the freshness check |
 | Existing-code adoption | Git reference/merge-base static ratchet with rename lineage and changed-hunk attribution | Hosted quality baselines or migration tooling with different debt models |
 | Commands and formatting | Optional configured formatter/linter/test commands; no implicit discovery | Biome, Oxlint, ESLint, Cargo, or CI runner |
-| Agent transport | Stdio MCP tools and terminal/agent/JSON output | MCP clients, hooks, and hosted dashboards |
+| Agent transport | Static-only MCP tools over stdio plus terminal/agent/JSON output; MCP does not run evidence, orchestration, dead-code, or native mutation engines | MCP clients, hooks, and hosted dashboards |
 
 ## Why a policy layer
 
@@ -51,7 +55,11 @@ A project can use all of these tools and still have an ambiguous acceptance rule
 
 ## Current boundaries
 
-Hardgate parses Rust, JavaScript, TypeScript/TSX, Python, and Go with Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates several mutation JSON shapes; and speaks MCP over stdio. It does not claim global module resolution, compiler/type analysis, a broader parser matrix, another MCP transport, or a hosted quality dashboard.
+Hardgate parses Rust, JavaScript, TypeScript/TSX, Python, and Go with
+Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates
+recognized mutation JSON reports; and speaks MCP over stdio. It does not claim
+global module resolution, compiler/type analysis, a broader parser matrix,
+another MCP transport, or a hosted quality dashboard.
 
 For v0.5.0, the npm wrapper and shell installer select exactly six Linux/macOS
 artifacts (Linux x64/arm64 glibc and musl, macOS x64/arm64). Release archives

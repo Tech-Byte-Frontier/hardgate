@@ -236,7 +236,10 @@ fn failing_baseline_stops_before_any_mutant_runs() {
     let output = mutate(
         &root,
         "src/lib.rs",
-        "sh -c 'printf x >> baseline-runs; exit 1'",
+        &format!(
+            "sh -c 'printf x >> \"{}\"; exit 1'",
+            root.join("baseline-runs").display()
+        ),
         Some("1"),
     );
     assert!(!output.status.success());

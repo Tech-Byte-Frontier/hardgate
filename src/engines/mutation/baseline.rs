@@ -71,8 +71,11 @@ pub(crate) fn snapshot_baseline_sources(
     files: &[PathBuf],
     root: &Path,
 ) -> io::Result<BaselineSources> {
+    let resources = crate::resources::MutationGuard::acquire()?;
+    let mut total_bytes = 0;
     let mut entries = Vec::new();
     for file in files {
+        crate::resources::check_pressure()?;
         let path = super::resolve_target_path(file, root);
         if entries
             .iter()
@@ -81,6 +84,16 @@ pub(crate) fn snapshot_baseline_sources(
             continue;
         }
         let (location, snapshot) = snapshot_protected_location(&path, root)?;
+        crate::resources::input::admit_bytes(
+            &mut 0,
+            snapshot.bytes.len(),
+            resources.budget.source_bytes(),
+        )?;
+        crate::resources::input::admit_bytes(
+            &mut total_bytes,
+            snapshot.bytes.len(),
+            resources.budget.snapshot_bytes(),
+        )?;
         entries.push(ProtectedSource {
             path,
             location,
@@ -109,6 +122,8 @@ impl NativeMutationRunner {
         file: &Path,
         root: &Path,
     ) -> MutationRunnerResult<BaselineExecutionResult> {
+        let _resources =
+            crate::resources::MutationGuard::acquire().map_err(MutationRunnerError::resolution)?;
         let plan = self
             .resolve_test_plan(file, root)
             .map_err(MutationRunnerError::resolution)?;
@@ -205,6 +220,18 @@ impl NativeMutationRunner {
                 diagnostic: super::unsupported_platform_diagnostic(),
             };
         }
+        let _resources = match crate::resources::MutationGuard::acquire() {
+            Ok(resources) => resources,
+            Err(error) => {
+                return BaselineExecutionResult {
+                    file: file.to_path_buf(),
+                    outcome: BaselineOutcome::RunnerError,
+                    duration_ms: start.elapsed().as_millis(),
+                    command: plan.command,
+                    diagnostic: error.to_string(),
+                };
+            }
+        };
         if let Some(diagnostic) = self.full_suite_timeout_error(&plan) {
             return BaselineExecutionResult {
                 file: file.to_path_buf(),

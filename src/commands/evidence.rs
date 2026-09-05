@@ -20,19 +20,40 @@ pub(crate) fn record_evidence_failure(
         target,
         message,
     } = failure;
+    report.observe_evidence_failure(step, &message);
     if !blocking {
         report
             .advisories
             .push(format!("{} for `{}`: {}", step, target.display(), message));
         return;
     }
-    report.orchestration_violations.push(OrchestrationViolation {
-        step: step.to_string(),
-        command: target.display().to_string(),
-        exit_code: None,
-        output: message,
-        recommendation:
-            "Restore the required evidence or classify the file explicitly before accepting the gate."
-                .to_string(),
-    });
+    report
+        .orchestration_violations
+        .push(OrchestrationViolation {
+            step: step.to_string(),
+            command: target.display().to_string(),
+            exit_code: None,
+            output: message,
+            recommendation: remediation(step).to_string(),
+        });
+}
+
+fn remediation(step: &str) -> &'static str {
+    match step {
+        "coverage-report" | "coverage-diff" | "coverage-source-classification" => {
+            "Generate current line/function/branch LCOV for the selected source and configure coverage.report (or --coverage-report); preserve missing-source failures."
+        }
+        "mutation-report" => {
+            "Run the configured mutation tool against current source with a successful baseline and non-empty sample; set mutation.reports (or verify --mutation-report)."
+        }
+        "legacy-ratchet" => {
+            "Set legacy.reference_branch to a resolvable, trusted Git reference and retain its source history."
+        }
+        "clone-index" | "read-clone-index" => {
+            "Restore readable clone-index inputs and report capacity failures; do not remove source or relax policy to pass."
+        }
+        _ => {
+            "Restore readable, valid source and supported analysis evidence before accepting the gate."
+        }
+    }
 }

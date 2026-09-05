@@ -1,6 +1,35 @@
 # CLI reference and agent integration
 
-Commands run from the current repository. Hardgate loads `hardgate.toml` when present; without it, the `strict-agent` default bundle is used. A command exits non-zero when its report contains a blocking finding. Advisories remain visible context.
+Hardgate searches upward from the invocation directory for the nearest
+`hardgate.toml`, stopping at the first Git repository boundary (including a
+worktree `.git` file) or the filesystem root. That policy's directory is the
+configuration root. With no policy, strict-agent defaults apply at the Git
+root, or at the invocation directory outside Git. A blocking finding produces
+a nonzero exit; advisories remain visible context.
+
+`--config FILE` selects an explicit policy instead. A missing, unreadable, or
+invalid explicit policy fails; it never silently selects defaults. Unknown
+keys in all fixed configuration tables fail with valid field names, while
+intentional aliases and dynamic extension budgets remain supported.
+
+Policy globs, classification, report paths, generated freshness, and
+orchestrated commands use the configuration root. CLI paths (including report
+overrides) remain relative to the invocation directory. Full checks cover the
+configuration root even from a nested directory; pass `.` to select the
+invocation directory. Nested monorepo policies take precedence over parent
+policies; use `--config ../hardgate.toml` to select a parent explicitly.
+
+Inspect the complete merged, validated policy without executing tools:
+
+```sh
+hardgate config
+hardgate --config policy.toml config --format json
+```
+
+TOML inspection includes root/policy comments and round-trips as an effective
+policy. JSON includes `schema_version`, `root`, `config_path`,
+`invocation_dir`, and `effective`. MCP uses the same discovery and explicit
+`--config` authority; tool paths remain relative to its launch directory.
 
 The repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
@@ -19,7 +48,47 @@ hardgate init --preset legacy-migration
 hardgate init --preset custom
 ```
 
-The strict-agent template is the same preset object used by no-config execution. It enables its configured coverage and mutation report policies and includes the configured formatter/linter commands. Supply real evidence and commands before using it as a gate. Balanced disables coverage/mutation report engines. Legacy-migration disables those report engines and enables the static legacy ratchet.
+The default file contains a commented preset and project overrides. `--full`
+expands the effective policy; `--preview` prints valid TOML to stdout, with the
+setup summary on stderr, without writing a file. Existing files, directories and
+symlinks are preserved. `--config` selects existing policy and cannot be used
+with init.
+
+```sh
+hardgate init --preset balanced --preview
+hardgate init --preset strict-agent --full
+hardgate init --preset balanced --format-check 'pnpm run format:check' \
+  --format-command 'pnpm run format' --lint 'pnpm run lint'
+```
+
+Metadata detection covers Rust, JavaScript/TypeScript, Python and Go, without
+installing or executing project tools. Root manifests and existing scripts are
+preferred; mixed ecosystems, conflicting package managers and nested-only
+packages require explicit commands or initialization within the package. JS
+config-based tool fallbacks require repository-local executables. Python tools
+must be installed in the invoking environment; Go format checks require POSIX
+`sh`. No preset assigns JavaScript tools to every ecosystem.
+
+Strict-agent keeps its thresholds and requires real LCOV and mutation reports
+for both `check` and `verify`; start with `hardgate config` to inspect missing
+setup. Balanced is a structural starting point with those evidence engines
+disabled. Custom uses ordinary defaults, including clone and safety policies.
+Legacy-migration enables the static ratchet and requires a resolvable trusted
+reference with a merge-base; init checks `origin/main` but does not fetch it.
+
+### Reference context and dead-code limits
+
+Dead-code analysis uses all discoverable source, test, generated and fixture
+references even for `--diff` or explicit paths. Scope filters the reported
+findings, so an unchanged importer can keep a changed export live. A required
+reference that cannot be read produces an incomplete-context failure.
+
+The analyzer indexes words and recognizes common import/module declarations;
+it does not implement compiler module resolution or prove runtime reachability.
+Comments, strings, unrelated same-named symbols and same-stem modules may keep
+otherwise unused code live. Dynamic imports, reflection and language-specific
+module resolution remain heuristic boundaries. Confirm a finding before
+removing code, especially public library exports.
 
 ## `hardgate check`
 
@@ -73,7 +142,7 @@ An absent command is skipped because it was not configured; a configured command
 
 ## `hardgate verify`
 
-`verify` runs the full-tree static/dead-code and configured evidence gate by
+`verify` runs full-tree static analysis, configured dead-code analysis and the evidence gate by
 default. Optional path arguments scope the current static/dead-code inventory
 and coverage source matching only; mutation-report ingestion and generated
 freshness continue to use their configured/full scope. The ratchet still loads
@@ -120,11 +189,36 @@ mutation is enabled.
 The native runner:
 
 1. selects supported production (`source`) files, never tests or generated/fixture files;
-2. resolves one test command per target, unless `--test-cmd` overrides it;
+2. copies current workspace inputs to a private temporary directory and resolves test commands there;
 3. executes an unmutated baseline and stops before mutants if that baseline fails;
 4. applies bounded binary/boolean AST mutations one at a time;
 5. records killed, survived, timeout, compile-error, runner-error, equivalent, and unviable outcomes;
-6. restores and verifies original bytes after every mutant.
+6. restores and verifies the copied source bytes after every mutant, then removes the temporary workspace.
+
+The CLI copies dirty, untracked, and ignored regular files, including installed
+dependencies, without hardlinking them to live inputs. `.git` administrative
+data and directories named `target` are omitted. Test commands run from the
+copied repository or resolved package root; Cargo uses a fresh `target` inside
+that copy even when the invoking environment sets `CARGO_TARGET_DIR`.
+Commands requiring Git administrative data must be adapted before the
+unmutated baseline can pass. Internal symlinks are remapped into the copy;
+external symlinks, special files, and hardlinked mutation targets fail before
+tests. Choose a workspace root containing the required sources/dependencies.
+
+SIGINT/SIGTERM stop and reap owned test processes, verify restoration, and
+remove the copy before exit 130/143. Later edits in the original workspace are
+preserved. SIGKILL cannot run cleanup: the original source remains untouched,
+but a private `hardgate-mutation-<pid>-<id>` directory and test processes may
+remain. Stop those processes before deleting that exact temporary directory.
+Use an external `TMPDIR` with enough space for copied inputs and a fresh build.
+Mutation holds a per-user slot across projects, caps common worker defaults, and
+checks Linux memory pressure. Eligible Linux hosts also apply aggregate scope
+limits; macOS has no equivalent memory telemetry or aggregate cap. See
+[native mutation resources](MUTATION_RESOURCES.md) for thresholds and limitations.
+Resource aborts provide no mutation credit. Configured commands are trusted project code: the
+copy is not an operating-system sandbox for explicit absolute-path writes or
+external services. The low-level library runner still operates on its supplied
+root; library callers should supply their own disposable workspace.
 
 A scope with no viable mutation points fails. Native mutation is independent of mutation-report ingestion and does not invoke Stryker or cargo-mutants.
 
@@ -163,6 +257,11 @@ hardgate scan --format json --summary src/services/auth.ts
 
 Unsupported inventory formats can still receive applicable file/safety checks but do not produce function metrics. Missing or unreadable paths fail closed.
 
+Scan includes every analyzed function, including those within budget. Full JSON
+exposes `functions` with locations, cyclomatic/cognitive complexity, parameters,
+size, nesting, statements, Halstead difficulty and ABC score. Human formats show
+the same measurements; summary JSON keeps its smaller aggregate shape.
+
 ## `hardgate fmt`
 
 ```sh
@@ -172,9 +271,55 @@ hardgate fmt --check
 
 `fmt --check` runs `[orchestration].format_check`; `fmt` runs `format`, falling back to `format_check` when no write command is configured. Commands run from the repository root with local Node binaries available. A configured command failure is blocking for this command.
 
+An unconfigured formatter is a setup failure with exit 2.
+
 ## Output modes
 
 `check`, `scan`, and `verify` accept `--format terminal|agent|json|compact|summary`, plus `--json`, `--compact`/`--no-snippets`, and `--summary`. `mutate` accepts terminal, agent, or JSON output. JSON is a single machine-readable report; agent output is structured Markdown with actionable locations.
+
+Exit codes are **0** for success or an explicit no-op, **1** for policy
+violations, and **2** when arguments, configuration, runtime failures or missing
+required evidence prevent evaluation. Signal cancellation retains 130/143.
+Closing stdout intentionally (for example, piping to `head`) exits 0 without a
+panic. Native mutation stops and releases its isolated workspace if progress
+output cannot be written. Command APIs return `CommandOutcome` instead of
+terminating the calling process.
+
+Argument and runtime errors requested with `--json`, `--format json` or
+`--format=json` emit one JSON document on stdout and no duplicate stderr error.
+All gate JSON, summary JSON, mutation/no-op and error documents include
+`schema_version: 1`, `command`, `passed`, `status`, and `exit_code`. Reports also
+carry the execution plan, config identity and individual engine states.
+Runtime errors retain validated policy/scope when available; argument or invalid
+policy errors have no execution plan. Help/version retain normal text output.
+See the [machine-output contract](REPORT_SCHEMA.md) before migrating consumers.
+
+`--max-diagnostics N` caps displayed findings, including `N=0`; analysis,
+exit status and summary counts remain complete. `--snippets` adds excerpts from
+the source bytes captured during analysis, including both sides of a clone.
+Excerpts are limited to eight lines per location, 240 Unicode characters per
+line and 64 KiB of snippet text in total. Summary output omits diagnostic details.
+Stable [rule IDs](DIAGNOSTIC_RULES.md) identify findings independently of wording,
+paths and line movement.
+
+`--threads N` selects a positive analysis worker count without changing policy;
+otherwise Rayon settings apply. Small source captures and AST batches run
+sequentially below eight files. `--timing` adds total elapsed time to stderr.
+`--color auto|always|never` applies to human output. Explicit choices override
+environment; auto honors `NO_COLOR`, then nonzero `CLICOLOR_FORCE`, then TTY,
+`CLICOLOR=0` and `TERM=dumb`. JSON does not contain terminal styling.
+
+## Shell completions
+
+```sh
+hardgate completions bash > hardgate.bash
+hardgate completions zsh > _hardgate
+hardgate completions fish > hardgate.fish
+```
+
+PowerShell and Elvish are also supported. Completion generation loads no policy
+and runs no project tools. Source/install the generated script according to the
+selected shell's completion setup.
 
 ## `hardgate mcp`
 
@@ -193,6 +338,10 @@ It accepts newline-delimited or `Content-Length`-framed JSON-RPC. The tool names
 | `hardgate_get_metrics` | required `path: string`, `symbol: string` | Metrics for one named function |
 
 `hardgate_check` is fail-closed for outer tool errors: invalid arguments/configuration, missing paths, empty path arrays, empty discovery, and Git failures return an explicit failed response. Read/parse failures remain report-level Hardgate `Failed` findings, with effective role severity `error` failing the report, `warning` producing an advisory, and `ignore` omitting the finding. It never runs coverage/mutation reports, generated freshness, dead-code analysis, orchestration, or native mutation. The static report uses the same engine path as the CLI; optional `diff` selects Git-changed/staged scope by default, explicit existing paths add to static/clone selection, and clone matching uses the full repository index. MCP never runs coverage. For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
+
+Check and scan tools return their human report plus `structuredContent` using
+the versioned report schema. An evaluated policy violation remains a report;
+invalid tool requests retain the existing `isError` response contract.
 
 Register the stdio server with an MCP-capable client:
 

@@ -187,7 +187,7 @@ fn empty_command_violation(spec: &OrchestrationStep) -> OrchestrationViolation {
     OrchestrationViolation {
         step: spec.step.to_string(),
         command: spec.command.to_string(),
-        exit_code: Some(1),
+        exit_code: None,
         output: "Empty command string; nothing was executed.".to_string(),
         recommendation: format!("Configure a non-empty {} command.", spec.step),
     }

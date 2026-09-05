@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use globset::Glob;
+use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -87,13 +87,84 @@ impl ClassifiedFile {
     /// falling back to built-ins; configuration loading validates them before
     /// engines run, while this method keeps direct API use fail-closed too.
     pub fn new_with_config(path: &Path, config: &ClassificationConfig) -> Result<Self> {
-        let (role, reason) = classify_with_config(path, config)?;
-        Ok(Self {
+        PreparedClassifier::new(config).map(|classifier| classifier.classify(path))
+    }
+}
+
+struct PreparedRule {
+    matcher: GlobMatcher,
+    role: FileRole,
+    index: usize,
+    glob: String,
+}
+
+/// Reusable classifier with ordered custom globs compiled once.
+///
+/// Vendor/build directories remain authoritative, and custom rules retain
+/// declaration order and the same path-candidate matching semantics as the
+/// compatibility classification helpers.
+pub struct PreparedClassifier {
+    rules: Vec<PreparedRule>,
+}
+
+impl PreparedClassifier {
+    /// Compile normalized classification globs for reuse across file paths.
+    pub fn new(config: &ClassificationConfig) -> Result<Self> {
+        let rules = config
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| {
+                let pattern = rule.glob.trim().replace('\\', "/").to_ascii_lowercase();
+                let matcher = Glob::new(&pattern)
+                    .with_context(|| format!("Invalid classification glob `{}`", rule.glob))?
+                    .compile_matcher();
+                Ok(PreparedRule {
+                    matcher,
+                    role: rule.role,
+                    index,
+                    glob: rule.glob.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { rules })
+    }
+
+    /// Classify one path with the prepared ordered rules.
+    pub fn classify(&self, path: &Path) -> ClassifiedFile {
+        let normalized = normalize(path);
+        let file_name = normalized.rsplit('/').next().unwrap_or_default();
+        let (role, reason) = if has_directory_component(&normalized, VENDOR_DIRS) {
+            (
+                FileRole::Vendor,
+                "dependency or build-output directory".to_string(),
+            )
+        } else {
+            let candidates = path_candidates(&normalized);
+            self.rules
+                .iter()
+                .find(|rule| {
+                    candidates
+                        .iter()
+                        .any(|candidate| rule.matcher.is_match(candidate))
+                })
+                .map(|rule| {
+                    (
+                        rule.role,
+                        format!("custom classification rule {}: {}", rule.index, rule.glob),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    let (role, reason) = classify_builtin_parts(&normalized, file_name);
+                    (role, reason.to_string())
+                })
+        };
+        ClassifiedFile {
             path: path.to_path_buf(),
             role,
             ast_supported: ast_supported(path),
             reason,
-        })
+        }
     }
 }
 
@@ -128,37 +199,8 @@ pub fn classify_with_config(
     path: &Path,
     config: &ClassificationConfig,
 ) -> Result<(FileRole, String)> {
-    let normalized = normalize(path);
-    let file_name = normalized.rsplit('/').next().unwrap_or_default();
-
-    // Discovery prunes these directories, and explicit scans must preserve the
-    // same safety boundary even when a user rule tries to override it.
-    if has_directory_component(&normalized, VENDOR_DIRS) {
-        return Ok((
-            FileRole::Vendor,
-            "dependency or build-output directory".to_string(),
-        ));
-    }
-
-    let candidates = path_candidates(&normalized);
-    for (index, rule) in config.rules.iter().enumerate() {
-        let pattern = rule.glob.trim().replace('\\', "/").to_ascii_lowercase();
-        let matcher = Glob::new(&pattern)
-            .with_context(|| format!("Invalid classification glob `{}`", rule.glob))?
-            .compile_matcher();
-        if candidates
-            .iter()
-            .any(|candidate| matcher.is_match(candidate))
-        {
-            return Ok((
-                rule.role,
-                format!("custom classification rule {index}: {}", rule.glob),
-            ));
-        }
-    }
-
-    let (role, reason) = classify_builtin_parts(&normalized, file_name);
-    Ok((role, reason.to_string()))
+    let classified = PreparedClassifier::new(config)?.classify(path);
+    Ok((classified.role, classified.reason))
 }
 
 fn classify_builtin(path: &Path) -> (FileRole, &'static str) {

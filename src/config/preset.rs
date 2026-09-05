@@ -102,9 +102,13 @@ fn build_line_budgets(rs: usize, other: usize, default_val: usize) -> HashMap<St
 
 fn make_orchestration() -> OrchestrationConfig {
     OrchestrationConfig {
-        format_check: Some("oxfmt --check .".to_string()),
-        format: Some("oxfmt .".to_string()),
-        lint: Some("oxlint --type-aware .".to_string()),
+        // Presets describe Hardgate policy, not a project language toolchain.
+        // `init` fills these fields only when it can identify a configured
+        // project command; otherwise the generated policy stays explicit about
+        // the missing setup instead of selecting JavaScript tools globally.
+        format_check: None,
+        format: None,
+        lint: None,
         test_cmd: None,
         timeout_secs: Some(300),
     }

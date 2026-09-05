@@ -57,7 +57,7 @@ fn missing_command_violation() -> OrchestrationViolation {
     OrchestrationViolation {
         step: GENERATED_FRESHNESS_STEP.to_string(),
         command: String::new(),
-        exit_code: Some(1),
+        exit_code: None,
         output: "Generated freshness is enabled but no freshness_command was configured."
             .to_string(),
         recommendation:

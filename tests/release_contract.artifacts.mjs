@@ -18,6 +18,8 @@ import {
   npmPackRetry,
   npmPlatformDirectories,
   npmPublication,
+  npmRegistryPack,
+  npmVerificationPolicy,
   packageScript,
   platformPackages,
   release,
@@ -51,8 +53,13 @@ assert.deepEqual(
     "/CHANGELOG.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
+    "/docs/INSTALLATION.md",
+    "/docs/GETTING_STARTED.md",
+    "/docs/MUTATION_RESOURCES.md",
     "/docs/ARCHITECTURE.md",
     "/docs/CLI_AND_INTEGRATION.md",
+    "/docs/REPORT_SCHEMA.md",
+    "/docs/DIAGNOSTIC_RULES.md",
     "/docs/CONFIGURATION_SPEC.md",
     "/docs/EXISTING_LANDSCAPE.md",
     "/docs/VISION_AND_PARADIGM.md",
@@ -61,8 +68,10 @@ assert.deepEqual(
 );
 includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "hardgate-target:", "expected Cargo target marker", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "-l", "-sW", "-n", "classifyBinaryAbi"], "archive verifier");
 includesAll(releaseAbi, ["classifyBinaryAbi", "ld-musl", "__init_libc", "GLIBC_", "gnu_get_libc_version", "_dl_relocate_static_pie", "NT_GNU_ABI_TAG", "staticBinary", "exact Cargo target marker", "targetMarkerValid"], "ABI evidence classifier");
-includesAll(npmPublication, ["--platform-only", "--package", "npm pack", "--loglevel=error", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js", "NPM_VERIFY_ATTEMPTS", "isRetryableNpmPackError", "failed without retry"], "npm publication verifier");
-assert.doesNotMatch(npmPublication, /["']--silent["']/, "npm pack must retain diagnostics needed to classify transient registry failures");
+includesAll(npmPublication, ["--platform-only", "--package", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js"], "npm publication verifier");
+includesAll(npmRegistryPack, ["npm pack", "--loglevel=error", "isRetryableNpmPackError", "failed without retry", "exactVersionObserved", "childTimeoutMs"], "npm registry retrieval");
+includesAll(npmVerificationPolicy, ["NPM_VERIFY_ATTEMPTS", "NPM_VERIFY_TIMEOUT_SECONDS", "NPM_VERIFY_CHILD_TIMEOUT_SECONDS", "remainingMs"], "npm verification deadlines");
+assert.doesNotMatch(npmRegistryPack.slice(npmRegistryPack.indexOf("async function packOnce"), npmRegistryPack.indexOf("async function mayRetry")), /["']--silent["']/, "npm pack must retain diagnostics needed to classify transient registry failures");
 includesAll(npmPackRetry, ["isRetryableNpmPackError", "E404", "EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED"], "npm pack retry classifier");
 for (const error of [
   { code: "E404" },
@@ -87,7 +96,7 @@ assert.doesNotMatch(sbomScript, /id:\s*pkg\.license/, "raw package SPDX expressi
 includesAll(sbomVerifier, ["CycloneDX", "1.5", "serialNumber", "RFC 4122 UUIDv5 URN", "uuidV5(JSON.stringify(withoutSerial))", "metadata.component", "application", "must not be duplicated", "license.expression", "$schema"], "CycloneDX verifier");
 includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "COV_TOOLCHAIN=\"${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}\"", "0.9.0", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-llvm-cov", "cargo install cargo-llvm-cov --version \"=$COV_VERSION\"", "cargo \"+$COV_TOOLCHAIN\" llvm-cov --version", "--all-targets", "--all-features", "--branch", "--include-build-script", "--lcov", "coverage/lcov.info"], "coverage helper");
 includesAll(auditScript, ["CARGO_AUDIT_VERSION", "0.22.2", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-audit", "cargo install cargo-audit --version \"=$AUDIT_VERSION\"", "cargo audit"], "audit helper");
-includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 180", "cargo test --all-targets --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
+includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 300", "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
 assert.doesNotMatch(selfGate, /verify --format agent\b/, "self gate must not claim complete evidence after disabling evidence engines");
 
 for (const target of targets) assert.ok(release.includes(target), `release must build ${target}`);
@@ -103,9 +112,9 @@ assert.match(release, /native-linux-x64-attempt-/, "release must promote the nat
 assert.match(release, /build:[\s\S]*needs:\s*\[version-check\]/, "cross-platform builds must wait for the exact CI receipt");
 assert.match(release, /package:[\s\S]*needs:\s*\[version-check, build\]/, "packaging must wait for all non-native builds");
 assert.match(release, /attest:[\s\S]*needs:\s*\[version-check, package\]/, "attestation must consume the completed package checkpoint");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
+assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight, receipt-init\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
 assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
-assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, github-release, publish-crates, publish-npm\]/, "final channel verification must wait for every publication");
+assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, package, promote-channels, verify-native-default\]/, "final channel verification must wait for every publication");
 const platformPublish = release.indexOf("Publish and verify each platform package in order");
 const wrapperPublish = release.indexOf("Publish wrapper only after all platforms are verified");
 assert.ok(platformPublish >= 0 && wrapperPublish > platformPublish, "wrapper publication must follow platform publication");

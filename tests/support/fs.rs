@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("hardgate-test-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    // Bound policy discovery independently of ambient parent repositories.
+    // This empty marker is not a Git repository; git tests initialize it.
     dir
 }

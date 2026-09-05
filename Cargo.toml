@@ -1,6 +1,6 @@
 [package]
 name = "hardgate"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.98.1"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
@@ -18,11 +18,17 @@ include = [
   "/tests/**/*.rs",
   "/tests/common/*.txt",
   "/README.md",
+  "/SECURITY.md",
   "/CHANGELOG.md",
   "/LICENSE-MIT",
   "/LICENSE-APACHE",
+  "/docs/INSTALLATION.md",
+  "/docs/GETTING_STARTED.md",
+  "/docs/MUTATION_RESOURCES.md",
   "/docs/ARCHITECTURE.md",
   "/docs/CLI_AND_INTEGRATION.md",
+  "/docs/REPORT_SCHEMA.md",
+  "/docs/DIAGNOSTIC_RULES.md",
   "/docs/CONFIGURATION_SPEC.md",
   "/docs/EXISTING_LANDSCAPE.md",
   "/docs/VISION_AND_PARADIGM.md",
@@ -47,6 +53,8 @@ inherits = "release"
 
 [dependencies]
 clap = { version = "=4.6.6", features = ["derive"] }
+clap_complete = "=4.6.9"
+sha2 = "=0.11.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = "=1.1.5"
 rayon = "=1.12.0"
@@ -67,3 +75,4 @@ globset = "=0.4.20"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "=1.1.4", features = ["process", "fs"] }
+signal-hook = { version = "=0.4.4", default-features = false }

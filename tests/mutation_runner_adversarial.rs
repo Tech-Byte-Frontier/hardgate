@@ -334,6 +334,20 @@ fn restoration_diagnostic_survives_saturated_output() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_background_cleanup_outcome(outcome: BaselineOutcome, diagnostic: &str) {
+    let expected = if diagnostic.contains("Linux cgroup memory cap") {
+        assert!(
+            diagnostic.contains("mutation descendants remain in cgroup"),
+            "{diagnostic}"
+        );
+        BaselineOutcome::RunnerError
+    } else {
+        BaselineOutcome::Passed
+    };
+    assert_eq!(outcome, expected, "{diagnostic}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn exited_descendants_with_inherited_pipes_are_cleaned_repeatedly() {
     let root = source_root("mutation-runner-inherited-pipes", b"fn main() {}\n");
@@ -341,7 +355,7 @@ fn exited_descendants_with_inherited_pipes_are_cleaned_repeatedly() {
     let started = std::time::Instant::now();
     for _ in 0..3 {
         let result = runner.run_baseline(Path::new("fixture.rs"), Path::new(&root));
-        assert_eq!(result.outcome, BaselineOutcome::Passed);
+        assert_background_cleanup_outcome(result.outcome, &result.diagnostic);
         assert!(result.diagnostic.len() <= 64 * 1024);
     }
     assert!(
@@ -364,7 +378,7 @@ fn exited_descendant_with_closed_pipes_is_still_reaped() {
 
     let result = runner.run_baseline(Path::new("fixture.rs"), Path::new(&root));
 
-    assert_eq!(result.outcome, BaselineOutcome::Passed);
+    assert_background_cleanup_outcome(result.outcome, &result.diagnostic);
     let child_pid = std::fs::read_to_string(&pid_file).unwrap();
     let child_pid = child_pid.trim().parse::<i32>().unwrap();
     let pid = rustix::process::Pid::from_raw(child_pid).unwrap();

@@ -4,7 +4,6 @@ mod classification;
 mod fs;
 
 use hardgate::config::{HardgateConfig, LegacyConfig, Preset, RolePoliciesConfig, Severity};
-use std::path::Path;
 
 #[test]
 fn role_policies_keep_engine_thresholds_independent() {
@@ -301,9 +300,13 @@ exclude = []
 
 #[test]
 fn generated_presets_and_runtime_defaults_have_matching_semantics() {
-    let strict =
-        HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))
-            .unwrap();
+    let absent = fs::tempdir("implicit-policy-strict");
+    std::fs::create_dir(absent.join(".git")).unwrap();
+    let strict = hardgate::config::ConfigContext::load_from(&absent, None)
+        .unwrap()
+        .config;
+    assert!(HardgateConfig::load_or_default(Some(&absent.join("missing.toml"))).is_err());
+    std::fs::remove_dir_all(absent).unwrap();
     let strict_preset = Preset::StrictAgent.to_default_config();
     assert_eq!(strict.gate.strict, strict_preset.gate.strict);
     assert_eq!(

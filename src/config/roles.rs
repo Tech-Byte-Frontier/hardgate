@@ -31,6 +31,7 @@ pub enum Severity {
 /// still classified independently when all fields are omitted; the engines
 /// decide which inherited budgets apply to that role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RolePolicy {
     pub severity: Option<Severity>,
     pub max_bytes: Option<u64>,
@@ -139,6 +140,7 @@ fn validate_float_thresholds(policy: &RolePolicy, role: &str) -> Result<()> {
 
 /// Independently configurable policy for each first-class repository role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RolePoliciesConfig {
     #[serde(default)]
     pub source: RolePolicy,
@@ -238,6 +240,7 @@ impl RolePoliciesConfig {
 /// budget exclusions: excluding a file from size checks must never disable a
 /// generated artifact's freshness command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GeneratedConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -289,6 +292,7 @@ const fn default_generated_timeout() -> Option<u64> {
 /// The ratchet engine is intentionally outside this configuration foundation;
 /// these fields preserve the contract for the worker that implements it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct LegacyConfig {
     pub reference_branch: Option<String>,
     #[serde(default)]
@@ -325,6 +329,7 @@ impl LegacyConfig {
 
 /// Ordered, user-defined classification override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClassificationRule {
     pub glob: String,
     pub role: FileRole,
@@ -333,6 +338,7 @@ pub struct ClassificationRule {
 /// Classification rules are evaluated in declaration order before built-ins,
 /// except for vendor/build pruning which always remains authoritative.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ClassificationConfig {
     #[serde(default)]
     pub rules: Vec<ClassificationRule>,

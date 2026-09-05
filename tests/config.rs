@@ -20,47 +20,17 @@ fn test_clean_toml_formatting() {
     assert!(toml_str.contains("[gate]"));
     assert!(toml_str.contains("[orchestration]"));
     assert!(toml_str.contains("[analysis.dead_code]"));
-    assert!(toml_str.contains("format_check = \"oxfmt --check .\""));
+    assert!(!toml_str.contains("format_check ="));
 
     // The template must deserialize cleanly back into a config.
     let parsed: Result<hardgate::config::HardgateConfig, _> = toml::from_str(&toml_str);
     assert!(parsed.is_ok());
     let cfg = parsed.unwrap();
     assert_eq!(cfg.gate.preset, hardgate::config::Preset::StrictAgent);
-    assert_eq!(
-        cfg.orchestration.format_check.as_deref(),
-        Some("oxfmt --check .")
-    );
-}
-
-#[test]
-fn strict_no_config_matches_generated_template_sections() {
-    use hardgate::config::{HardgateConfig, Preset};
-
-    let runtime =
-        HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))
-            .unwrap();
-    let generated: HardgateConfig =
-        toml::from_str(&HardgateConfig::generate_toml_template(Preset::StrictAgent)).unwrap();
-
-    assert_eq!(
-        toml::Value::try_from(&runtime).unwrap(),
-        toml::Value::try_from(&generated).unwrap()
-    );
-
-    let root = tempdir("strict-template-load");
-    let path = root.join("hardgate.toml");
-    std::fs::write(
-        &path,
-        hardgate::config::HardgateConfig::generate_toml_template(Preset::StrictAgent),
-    )
-    .unwrap();
-    let loaded = HardgateConfig::load_or_default(Some(&path)).unwrap();
-    assert_eq!(
-        toml::Value::try_from(&loaded).unwrap(),
-        toml::Value::try_from(&runtime).unwrap()
-    );
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(cfg.orchestration.format_check.is_none());
+    assert!(cfg.orchestration.format.is_none());
+    assert!(cfg.orchestration.lint.is_none());
+    assert!(cfg.orchestration.test_cmd.is_none());
 }
 
 #[test]
