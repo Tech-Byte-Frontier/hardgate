@@ -27,6 +27,8 @@ scripts/render_cards.py
 *.jpg
 *.jpeg
 drafts/
+/docs/stabilization.md
+/docs/audits/
 
 # JS distribution (populated in CI from Release binaries, never committed)
 node_modules/

@@ -1,0 +1,25 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  npm/hardgate: {}
+
+  npm/hardgate-darwin-arm64: {}
+
+  npm/hardgate-darwin-x64: {}
+
+  npm/hardgate-linux-arm64: {}
+
+  npm/hardgate-linux-arm64-musl: {}
+
+  npm/hardgate-linux-x64: {}
+
+  npm/hardgate-linux-x64-musl: {}
+
+  npm/hardgate-win32-x64: {}
