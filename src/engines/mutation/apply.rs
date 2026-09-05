@@ -125,9 +125,13 @@ fn apply_mutant_bytes(
     if mutant.replacement.as_bytes() == &original_bytes[mutant.start_byte..mutant.end_byte] {
         return Ok(ApplyResult::Equivalent);
     }
-    let mut mutated = Vec::with_capacity(
-        original_bytes.len() - (mutant.end_byte - mutant.start_byte) + mutant.replacement.len(),
-    );
+    let mut length = original_bytes.len() - (mutant.end_byte - mutant.start_byte);
+    crate::resources::input::admit_bytes(
+        &mut length,
+        mutant.replacement.len(),
+        crate::resources::MAX_SNAPSHOT_BYTES,
+    )?;
+    let mut mutated = Vec::with_capacity(length);
     mutated.extend_from_slice(&original_bytes[..mutant.start_byte]);
     mutated.extend_from_slice(mutant.replacement.as_bytes());
     mutated.extend_from_slice(&original_bytes[mutant.end_byte..]);

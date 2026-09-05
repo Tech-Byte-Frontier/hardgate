@@ -1,6 +1,6 @@
 [package]
 name = "hardgate"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.98.1"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
@@ -21,6 +21,9 @@ include = [
   "/CHANGELOG.md",
   "/LICENSE-MIT",
   "/LICENSE-APACHE",
+  "/docs/INSTALLATION.md",
+  "/docs/GETTING_STARTED.md",
+  "/docs/MUTATION_RESOURCES.md",
   "/docs/ARCHITECTURE.md",
   "/docs/CLI_AND_INTEGRATION.md",
   "/docs/REPORT_SCHEMA.md",

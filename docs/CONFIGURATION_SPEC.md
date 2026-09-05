@@ -300,6 +300,10 @@ reports = ["reports/stryker-mutation.json"]
 
 `check` and `verify` evaluate Stryker-shaped (`files`), cargo-mutants-shaped (`outcomes`), or generic outcome-count JSON. Empty reports, empty outcome arrays, missing reports, parse errors, and reports with no viable outcomes are blocking when mutation is enabled. Scores use killed divided by killed plus survived. Timeout, compile-error, runner-error, and unviable outcomes are integrity findings and remain blocking; mutation timeout handling is not a user-weakenable exception.
 
+Native execution also applies [resource safeguards](MUTATION_RESOURCES.md),
+including a per-user mutation slot and Linux memory checks. Resource failures
+remain incomplete evidence and are not configurable score exceptions.
+
 `hardgate mutate` is separate native execution. It does not read `reports` and does not invoke an external mutation tool. When `[mutation].enabled = false`, it prints a disabled-policy note and exits successfully without target discovery or execution; the native baseline and no-target rules apply only when enabled.
 
 Native mutation is compiled for Linux and macOS targets, including all six

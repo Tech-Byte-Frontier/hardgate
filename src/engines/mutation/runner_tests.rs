@@ -31,7 +31,7 @@ fn prepared_fixture(
 ) -> (PathBuf, PathBuf, AstMutant, PreparedTarget) {
     let (root, target) = fixture_root(label, file, b"true\n");
     let mutant = fixture_mutant(file, description);
-    let prepared = prepare_target(&mutant, &root).unwrap();
+    let prepared = prepare_target(&mutant, &root, crate::resources::MAX_SOURCE_BYTES).unwrap();
     (root, target, mutant, prepared)
 }
 

@@ -53,8 +53,13 @@ assert.deepEqual(
     "/CHANGELOG.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
+    "/docs/INSTALLATION.md",
+    "/docs/GETTING_STARTED.md",
+    "/docs/MUTATION_RESOURCES.md",
     "/docs/ARCHITECTURE.md",
     "/docs/CLI_AND_INTEGRATION.md",
+    "/docs/REPORT_SCHEMA.md",
+    "/docs/DIAGNOSTIC_RULES.md",
     "/docs/CONFIGURATION_SPEC.md",
     "/docs/EXISTING_LANDSCAPE.md",
     "/docs/VISION_AND_PARADIGM.md",
@@ -91,7 +96,7 @@ assert.doesNotMatch(sbomScript, /id:\s*pkg\.license/, "raw package SPDX expressi
 includesAll(sbomVerifier, ["CycloneDX", "1.5", "serialNumber", "RFC 4122 UUIDv5 URN", "uuidV5(JSON.stringify(withoutSerial))", "metadata.component", "application", "must not be duplicated", "license.expression", "$schema"], "CycloneDX verifier");
 includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "COV_TOOLCHAIN=\"${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}\"", "0.9.0", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-llvm-cov", "cargo install cargo-llvm-cov --version \"=$COV_VERSION\"", "cargo \"+$COV_TOOLCHAIN\" llvm-cov --version", "--all-targets", "--all-features", "--branch", "--include-build-script", "--lcov", "coverage/lcov.info"], "coverage helper");
 includesAll(auditScript, ["CARGO_AUDIT_VERSION", "0.22.2", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-audit", "cargo install cargo-audit --version \"=$AUDIT_VERSION\"", "cargo audit"], "audit helper");
-includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 180", "cargo test --all-targets --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
+includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 300", "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
 assert.doesNotMatch(selfGate, /verify --format agent\b/, "self gate must not claim complete evidence after disabling evidence engines");
 
 for (const target of targets) assert.ok(release.includes(target), `release must build ${target}`);

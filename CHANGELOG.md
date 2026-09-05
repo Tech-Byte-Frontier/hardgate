@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (unreleased)
 
 - Machine-readable gate, mutation, no-op, config, and error outputs use
   `schema_version: 1`; execution records distinguish `disabled`, `skipped`,
@@ -12,6 +12,11 @@
 - `check --diff` indexes the full eligible repository for clones and reports
   changed/reference context, catching copies against unchanged files; dead-code analysis retains
   required repository reference context.
+- Native mutation serializes workloads across projects for the same user, caps
+  common build-worker defaults, checks Linux memory pressure and applies aggregate
+  Linux memory limits when an eligible systemd user manager is available. Resource
+  failures remain incomplete evidence. Snapshot copying uses bounded buffers.
+- The README is a concise entry point with linked installation and getting-started guides.
 - Native `mutate` runs in a private workspace, restores and verifies source bytes
   after each mutant, and cleans up owned processes and temporary files. Mutation report ingestion
   remains a separate engine.
@@ -26,6 +31,13 @@
 - Local unreleased release tooling drafts staged identity-bound receipts with
   exact-version-before-default checks, explicit npm auth modes, and independent native/registry/consumer
   verification. This is review-only local capability; no publication or external settings change is claimed.
+
+This is a new `0.6.0` compatibility release: public Rust command result types,
+JSON schema/status contracts, and CLI exit meanings changed since `0.5.0`.
+Update integrations to distinguish policy failure (exit 1) from incomplete
+evaluation (exit 2), check `schema_version`, and read engine execution states.
+Existing `0.5.0` artifacts remain immutable; these changes must not be republished
+under that version.
 
 ## 0.5.0
 

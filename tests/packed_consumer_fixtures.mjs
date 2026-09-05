@@ -58,6 +58,13 @@ export function makeFixtureArchives({ fixtureRoot, root }) {
   for (const name of ["hardgate", ...names]) {
     const packageDirectory = path.join(fixtureRoot, name);
     fs.cpSync(path.join(root, "npm", name), packageDirectory, { recursive: true });
+    // This archive fixture deliberately represents a historical release;
+    // keep it independent of the next source version under development.
+    const manifestPath = path.join(packageDirectory, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.version = "0.5.0";
+    for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = "0.5.0";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     if (name !== "hardgate") {
       fs.copyFileSync(nativeBinary, path.join(packageDirectory, "bin", "hardgate"));
       fs.chmodSync(path.join(packageDirectory, "bin", "hardgate"), 0o755);

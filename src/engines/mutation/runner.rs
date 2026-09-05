@@ -270,7 +270,9 @@ impl NativeMutationRunner {
                 unsupported_platform_diagnostic(),
             ));
         }
-        let prepared = match prepare_target(mutant, root) {
+        let _resources =
+            crate::resources::MutationGuard::acquire().map_err(MutationRunnerError::resolution)?;
+        let prepared = match prepare_target(mutant, root, _resources.budget.source_bytes()) {
             Ok(prepared) => prepared,
             Err(error) => {
                 return Ok(mutant_error(
@@ -411,7 +413,11 @@ fn execute_and_restore(context: MutationContext<'_>) -> (CommandExecution, bool)
     (execution, source_restored)
 }
 
-fn prepare_target(mutant: &AstMutant, root: &Path) -> Result<PreparedTarget, String> {
+fn prepare_target(
+    mutant: &AstMutant,
+    root: &Path,
+    source_limit: usize,
+) -> Result<PreparedTarget, String> {
     let target_path = resolve_target_path(&mutant.file, root);
     let location = open_location(&target_path, root).map_err(|error| {
         format!(
@@ -440,6 +446,8 @@ fn prepare_target(mutant: &AstMutant, root: &Path) -> Result<PreparedTarget, Str
             ));
         }
     };
+    crate::resources::input::admit_bytes(&mut 0, original.bytes.len(), source_limit)
+        .map_err(|error| error.to_string())?;
     Ok(PreparedTarget {
         target_path,
         location,

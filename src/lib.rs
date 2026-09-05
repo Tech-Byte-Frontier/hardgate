@@ -139,6 +139,7 @@ pub mod discovery;
 pub mod engines;
 pub mod git_evidence;
 pub mod mcp;
+mod resources;
 
 pub use adoption::{
     LegacyRatchetOutcome, LegacyRatchetSummary, apply_legacy_ratchet, ratchet_report,

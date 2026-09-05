@@ -96,6 +96,8 @@ fn execute_mutate(
         return handle_no_targets(opts.diff, opts.format.as_deref(), &plan)
             .map(|()| CommandOutcome::Passed);
     }
+    let resources = crate::resources::MutationGuard::acquire()
+        .map_err(|error| MutationFailure::new("setup", "resource-error", error.to_string()))?;
     let workspace = workspace::MutationWorkspace::create(root, &target_files)
         .map_err(|error| MutationFailure::new("setup", "snapshot-error", format!("{error:#}")))?;
     let root = workspace.root();
@@ -109,7 +111,7 @@ fn execute_mutate(
         .or_else(|| config.mutation.test_cmd.clone());
     let max_count = resolve_max_mutants(&opts, config)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
-    let mutants = generate_target_mutants(&target_files, max_count, root)
+    let mutants = generate_target_mutants(&target_files, max_count, root, resources.budget)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if mutants.is_empty() {
         return Err(MutationFailure::new(
@@ -242,13 +244,20 @@ fn generate_target_mutants(
     files: &[PathBuf],
     max_count: usize,
     root: &Path,
+    budget: crate::resources::MutationBudget,
 ) -> Result<Vec<AstMutant>> {
     let mut mutator = AstMutationGenerator::new();
     let mut all = Vec::new();
     for file in files {
-        let content = fs::read_to_string(root.join(file))
-            .with_context(|| format!("Failed to read mutation target `{}`", file.display()))?;
-        all.extend(mutator.generate_mutants(file, &content));
+        crate::resources::check_pressure()?;
+        let source = fs::File::open(root.join(file))
+            .with_context(|| format!("Failed to open mutation target `{}`", file.display()))?;
+        let bytes = crate::resources::input::read_source(source, budget.source_bytes())?;
+        let content = String::from_utf8(bytes)
+            .with_context(|| format!("Mutation target `{}` is not UTF-8", file.display()))?;
+        let remaining = budget.candidate_count().saturating_sub(all.len());
+        all.extend(mutator.generate_mutants_bounded(file, &content, remaining)?);
+        crate::resources::check_pressure()?;
     }
     Ok(select_representative_mutants(all, max_count))
 }
@@ -415,10 +424,13 @@ fn run_mutant_batch(
             )
             .into());
         }
-        if json {
-            if let Some(error) = runtime_failure(&res) {
-                return Err(error);
+        if let Some(error) = runtime_failure(&res) {
+            if !json {
+                print_outcome(&mut stats, res.outcome)?;
             }
+            return Err(error);
+        }
+        if json {
             increment_stats(&mut stats, res.outcome);
         } else {
             print_outcome(&mut stats, res.outcome)?;

@@ -211,7 +211,11 @@ preserved. SIGKILL cannot run cleanup: the original source remains untouched,
 but a private `hardgate-mutation-<pid>-<id>` directory and test processes may
 remain. Stop those processes before deleting that exact temporary directory.
 Use an external `TMPDIR` with enough space for copied inputs and a fresh build.
-Mutation remains serial. Configured commands are trusted project code: the
+Mutation holds a per-user slot across projects, caps common worker defaults, and
+checks Linux memory pressure. Eligible Linux hosts also apply aggregate scope
+limits; macOS has no equivalent memory telemetry or aggregate cap. See
+[native mutation resources](MUTATION_RESOURCES.md) for thresholds and limitations.
+Resource aborts provide no mutation credit. Configured commands are trusted project code: the
 copy is not an operating-system sandbox for explicit absolute-path writes or
 external services. The low-level library runner still operates on its supplied
 root; library callers should supply their own disposable workspace.

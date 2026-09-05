@@ -7,7 +7,7 @@ mod temp;
 
 use std::ffi::OsStr;
 use std::fs::{File, Permissions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 #[path = "unix/location.rs"]
@@ -153,9 +153,8 @@ fn read_location(location: &TargetLocation) -> io::Result<CurrentFile> {
             ),
         ));
     }
-    let mut file: File = fd.into();
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    let file: File = fd.into();
+    let bytes = crate::resources::input::read_source(file, crate::resources::MAX_SNAPSHOT_BYTES)?;
     let mode = stat.st_mode as u32 & 0o7777;
     Ok(CurrentFile {
         snapshot: SourceSnapshot {
