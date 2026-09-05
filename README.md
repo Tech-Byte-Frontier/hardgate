@@ -94,8 +94,8 @@ The [Rust API reference](https://docs.rs/hardgate) is generated from the crate.
 ## Contributing and license
 
 Read [Contributing](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md)
-before opening an issue or pull request. See the repository's [security
-information](https://github.com/Tech-Byte-Frontier/hardgate/security).
+before opening an issue or pull request. See the [security policy](SECURITY.md)
+for private vulnerability reports.
 See the [changelog](CHANGELOG.md) for user-facing behavior changes.
 
 Hardgate is available under either the [Apache License 2.0](LICENSE-APACHE) or
