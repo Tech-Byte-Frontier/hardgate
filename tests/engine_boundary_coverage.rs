@@ -6,19 +6,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn orchestration(
-    format_check: Option<&str>,
-    format: Option<&str>,
-    lint: Option<&str>,
-    test_cmd: Option<&str>,
-    timeout_secs: Option<u64>,
-) -> OrchestrationConfig {
+fn orchestration(commands: [Option<&str>; 4]) -> OrchestrationConfig {
+    let [format_check, format, lint, test_cmd] = commands;
     OrchestrationConfig {
         format_check: format_check.map(str::to_owned),
         format: format.map(str::to_owned),
         lint: lint.map(str::to_owned),
         test_cmd: test_cmd.map(str::to_owned),
-        timeout_secs,
+        timeout_secs: Some(1),
     }
 }
 
@@ -67,32 +62,26 @@ fn orchestration_presence_and_format_fallbacks_are_explicit() {
     assert!(empty.run_tests(Path::new(".")).is_none());
 
     for config in [
-        orchestration(Some("true"), None, None, None, Some(1)),
-        orchestration(None, Some("true"), None, None, Some(1)),
-        orchestration(None, None, Some("true"), None, Some(1)),
-        orchestration(None, None, None, Some("true"), Some(1)),
+        orchestration([Some("true"), None, None, None]),
+        orchestration([None, Some("true"), None, None]),
+        orchestration([None, None, Some("true"), None]),
+        orchestration([None, None, None, Some("true")]),
     ] {
         assert!(OrchestrationEngine::new(&config).has_orchestration());
     }
 
-    let fallback = OrchestrationEngine::new(&orchestration(
-        Some("printf check"),
-        None,
-        None,
-        None,
-        Some(1),
-    ));
+    let fallback =
+        OrchestrationEngine::new(&orchestration([Some("printf check"), None, None, None]));
     assert_eq!(
         fallback.run_format(Path::new(".")).unwrap().unwrap().output,
         "check"
     );
-    let explicit = OrchestrationEngine::new(&orchestration(
+    let explicit = OrchestrationEngine::new(&orchestration([
         Some("printf check"),
         Some("printf format"),
         None,
         None,
-        Some(1),
-    ));
+    ]));
     assert_eq!(
         explicit.run_format(Path::new(".")).unwrap().unwrap().output,
         "format"
@@ -101,7 +90,7 @@ fn orchestration_presence_and_format_fallbacks_are_explicit() {
 
 #[test]
 fn orchestration_empty_runner_and_exit_paths_keep_diagnostics() {
-    let engine = OrchestrationEngine::new(&orchestration(None, None, None, None, Some(1)));
+    let engine = OrchestrationEngine::new(&orchestration([None, None, None, None]));
     let empty = engine
         .run_step(step(""), Path::new("."))
         .expect_err("empty commands must fail closed");
@@ -129,13 +118,12 @@ fn orchestration_empty_runner_and_exit_paths_keep_diagnostics() {
 
 #[test]
 fn orchestration_collects_success_failure_and_disabled_steps() {
-    let config = orchestration(
+    let config = orchestration([
         Some("printf format-boundary"),
         None,
         Some("sh -c 'printf lint-boundary >&2; exit 4'"),
         None,
-        Some(1),
-    );
+    ]);
     let (results, violations) = OrchestrationEngine::new(&config).run_all_checks(Path::new("."));
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].step, "format_check");
@@ -150,7 +138,7 @@ fn orchestration_collects_success_failure_and_disabled_steps() {
 #[cfg(unix)]
 #[test]
 fn orchestration_timeout_keeps_cleanup_evidence() {
-    let config = orchestration(Some("sleep 2"), None, None, None, Some(1));
+    let config = orchestration([Some("sleep 2"), None, None, None]);
     let violation = OrchestrationEngine::new(&config)
         .run_format_check(Path::new("."))
         .unwrap()
