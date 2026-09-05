@@ -247,3 +247,64 @@ fn explicit_js_family_imports_keep_module_files_reachable() {
             && violation.violation_type == "Unused Export"
     }));
 }
+
+#[test]
+fn test_dead_code_python_imports() {
+    let files = vec![
+        PathBuf::from("main.py"),
+        PathBuf::from("calculator.py"),
+        PathBuf::from("parameters.py"),
+    ];
+
+    let contents = vec![
+        entry(
+            "main.py",
+            "from calculator import double\nprint(double(2))\n",
+        ),
+        entry(
+            "calculator.py",
+            "def double(value):\n    return value * 2\n",
+        ),
+        entry(
+            "parameters.py",
+            "def total(*, a, b, c, d):\n    return a + b + c + d\n",
+        ),
+    ];
+
+    let violations = find_dead_code(files, contents);
+    let unref = unreferenced_files(&violations);
+    // calculator.py is imported in main.py, so it must NOT be unreferenced!
+    assert!(!unref.contains(&PathBuf::from("calculator.py")), "calculator.py must be recognized as referenced");
+    // parameters.py is not imported or referenced anywhere, so it MUST be reported!
+    assert!(unref.contains(&PathBuf::from("parameters.py")), "parameters.py should be reported unreferenced");
+}
+
+#[test]
+fn test_dead_code_html_and_runtime_references() {
+    let files = vec![
+        PathBuf::from("index.html"),
+        PathBuf::from("src/runtime_bundle.js"),
+        PathBuf::from("src/orphan.js"),
+    ];
+
+    let contents = vec![
+        entry(
+            "index.html",
+            r#"<!DOCTYPE html><html><body><script src="src/runtime_bundle.js"></script></body></html>"#,
+        ),
+        entry(
+            "src/runtime_bundle.js",
+            "console.log('loaded');",
+        ),
+        entry(
+            "src/orphan.js",
+            "console.log('orphan');",
+        ),
+    ];
+
+    let violations = find_dead_code(files, contents);
+    let unref = unreferenced_files(&violations);
+    assert!(!unref.contains(&PathBuf::from("src/runtime_bundle.js")), "runtime_bundle.js should be recognized via script tag");
+    assert!(unref.contains(&PathBuf::from("src/orphan.js")), "orphan.js should be reported unreferenced");
+}
+

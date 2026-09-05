@@ -76,8 +76,8 @@ impl DeadCodeAnalyzer {
         };
 
         let referenced_stems = collect_referenced_stems(file_contents);
-        self.detect_unreferenced_files(&ctx, &referenced_stems, &mut violations);
         let references = ReferenceIndex::build(file_contents);
+        self.detect_unreferenced_files(&ctx, &referenced_stems, &references, &mut violations);
         self.detect_unused_exports(&ctx, &references, &mut violations);
 
         violations
@@ -87,6 +87,7 @@ impl DeadCodeAnalyzer {
         &self,
         ctx: &AnalysisContext,
         referenced_stems: &HashSet<String>,
+        references: &ReferenceIndex<'_>,
         violations: &mut Vec<DeadCodeViolation>,
     ) {
         for path in ctx.files {
@@ -100,7 +101,10 @@ impl DeadCodeAnalyzer {
                 continue;
             };
 
-            if is_index_or_entry_stem(stem) || referenced_stems.contains(stem) {
+            if is_index_or_entry_stem(stem)
+                || referenced_stems.contains(stem)
+                || references.is_referenced(stem, path)
+            {
                 continue;
             }
 
@@ -165,10 +169,19 @@ fn build_entry_globs(user_entries: &[String]) -> GlobSet {
         "src/main.tsx",
         "src/App.tsx",
         "src/app.tsx",
+        "src/main.py",
+        "src/app.py",
         "main.rs",
         "lib.rs",
         "index.ts",
         "index.tsx",
+        "main.py",
+        "app.py",
+        "wsgi.py",
+        "asgi.py",
+        "manage.py",
+        "setup.py",
+        "**/__main__.py",
         "**/*.d.ts",
         "**/build.rs",
         "**/vite.config.*",
@@ -222,6 +235,28 @@ fn import_regex() -> &'static Regex {
     })
 }
 
+fn python_from_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?m)^\s*from\s+([a-zA-Z0-9_.]+)\s+import\s+([a-zA-Z0-9_*,\s]+)"#)
+            .expect("valid python from regex")
+    })
+}
+
+fn python_import_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?m)^\s*import\s+([a-zA-Z0-9_.,\s]+)"#).expect("valid python import regex")
+    })
+}
+
+fn html_script_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?:src|href)\s*=\s*['"]([^'"]+)['"]"#).expect("valid html script regex")
+    })
+}
+
 fn rust_mod_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"\bmod\s+([a-zA-Z0-9_]+);"#).expect("valid mod regex"))
@@ -265,12 +300,18 @@ fn collect_referenced_stems(file_contents: &[(PathBuf, &str)]) -> HashSet<String
     let rust_mod_re = rust_mod_regex();
     let rust_path_re = rust_path_regex();
     let rust_use_re = rust_use_regex();
+    let py_from_re = python_from_regex();
+    let py_import_re = python_import_regex();
+    let html_re = html_script_regex();
 
     for (_, content) in file_contents {
         scan_import_stems(content, import_re, &mut stems);
         scan_rust_stems(content, rust_mod_re, &mut stems);
         scan_rust_path_stems(content, rust_path_re, &mut stems);
         scan_rust_stems(content, rust_use_re, &mut stems);
+        scan_python_from_stems(content, py_from_re, &mut stems);
+        scan_python_import_stems(content, py_import_re, &mut stems);
+        scan_html_stems(content, html_re, &mut stems);
     }
     stems
 }
@@ -288,6 +329,62 @@ fn scan_import_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
                 .and_then(|s| s.to_str())
                 .unwrap_or(file_name);
             stems.insert(stem.to_string());
+        }
+    }
+}
+
+fn scan_python_from_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
+    for cap in re.captures_iter(content) {
+        if let Some(module) = cap.get(1) {
+            for part in module.as_str().split('.') {
+                let trimmed = part.trim().trim_start_matches('.');
+                if !trimmed.is_empty() {
+                    stems.insert(trimmed.to_string());
+                }
+            }
+        }
+        if let Some(imported) = cap.get(2) {
+            for item in imported.as_str().split(',') {
+                let symbol = item.split_whitespace().next().unwrap_or_default();
+                if !symbol.is_empty() && symbol != "*" {
+                    stems.insert(symbol.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn scan_python_import_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
+    for cap in re.captures_iter(content) {
+        if let Some(modules) = cap.get(1) {
+            for item in modules.as_str().split(',') {
+                let module = item.split_whitespace().next().unwrap_or_default();
+                for part in module.split('.') {
+                    let trimmed = part.trim().trim_start_matches('.');
+                    if !trimmed.is_empty() {
+                        stems.insert(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scan_html_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) {
+    for cap in re.captures_iter(content) {
+        if let Some(m) = cap.get(1) {
+            let path_str = m.as_str();
+            let file_name = Path::new(path_str)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path_str);
+            let stem = Path::new(file_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_name);
+            if !stem.is_empty() {
+                stems.insert(stem.to_string());
+            }
         }
     }
 }
@@ -313,7 +410,20 @@ fn scan_rust_path_stems(content: &str, re: &Regex, stems: &mut HashSet<String>) 
 }
 
 fn is_index_or_entry_stem(stem: &str) -> bool {
-    matches!(stem, "mod" | "index" | "lib" | "main" | "App" | "app")
+    matches!(
+        stem,
+        "mod"
+            | "index"
+            | "lib"
+            | "main"
+            | "App"
+            | "app"
+            | "__main__"
+            | "manage"
+            | "wsgi"
+            | "asgi"
+            | "setup"
+    )
 }
 
 fn is_js_or_ts_file(path: &Path) -> bool {
