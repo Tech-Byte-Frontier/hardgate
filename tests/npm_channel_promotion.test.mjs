@@ -84,6 +84,19 @@ function runner(states, events, { failMutation = false, mutationMakesTarget = tr
     return "";
   };
 }
+function mutatingRunner(states, events, mutate) {
+  let mutations = 0;
+  const baseRunner = runner(states, events);
+  const runProcess = async (command, args, options) => {
+    const result = await baseRunner(command, args, options);
+    if (command === "npm") {
+      mutations += 1;
+      mutate({ args, count: mutations });
+    }
+    return result;
+  };
+  return { runProcess, mutationCount: () => mutations };
+}
 function probe(states, events, scripted = new Map()) {
   return async ({ name, version: requested, env }) => {
     events.push({ type: "probe", name, env });
@@ -255,15 +268,11 @@ async function testRevalidationBindsEachChannel() {
   await withFixture(async ({ dist, receiptPath, identity }) => {
     const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
     const events = [];
-    let mutations = 0;
-    const baseRunner = runner(states, events);
-    const runProcess = async (command, args, options) => {
-      const result = await baseRunner(command, args, options);
-      if (command === "npm" && ++mutations === 1) fs.appendFileSync(path.join(dist, identity.archives[0].name), "changed after immutable proof\n");
-      return result;
-    };
-    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess, probeLatest: probe(states, events) }), /immutable/);
-    assert.equal(mutations, 1);
+    const mutation = mutatingRunner(states, events, ({ count }) => {
+      if (count === 1) fs.appendFileSync(path.join(dist, identity.archives[0].name), "changed after immutable proof\n");
+    });
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: mutation.runProcess, probeLatest: probe(states, events) }), /immutable/);
+    assert.equal(mutation.mutationCount(), 1);
     for (const event of events.filter((item) => item.type === "run")) {
       assert.equal(fs.existsSync(event.options.env.npm_config_userconfig), false);
       assert.equal(fs.existsSync(event.options.env.npm_config_globalconfig), false);
@@ -271,8 +280,26 @@ async function testRevalidationBindsEachChannel() {
       assert.equal(fs.existsSync(event.options.env.npm_config_cache), false);
     }
     const saved = readReceipt(receiptPath);
-    assert.equal(saved.channels[NPM_CHANNELS[0]].state, "promoted");
-    assert.equal(saved.channels[NPM_CHANNELS[1]].events.at(-1).code, "npm_immutable_failed");
+    assert.equal(saved.channels[NPM_CHANNELS[0]].state, "exact_consumer_verified");
+    assert.equal(saved.channels[NPM_CHANNELS[0]].events.at(-1).code, "npm_immutable_failed");
+  });
+}
+
+async function testFinalChannelRevalidation() {
+  await withFixture(async ({ dist, receiptPath, identity }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
+    const events = [];
+    const mutation = mutatingRunner(states, events, ({ args }) => {
+      const spec = args[2];
+      const name = spec.slice(0, spec.lastIndexOf("@"));
+      if (name === CHANNELS.npmWrapper) fs.appendFileSync(path.join(dist, identity.archives[0].name), "changed after wrapper mutation\n");
+    });
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: mutation.runProcess, probeLatest: probe(states, events) }), /immutable/);
+    assert.equal(mutation.mutationCount(), NPM_CHANNELS.length);
+    const saved = readReceipt(receiptPath);
+    for (const channel of NPM_CHANNELS.slice(0, -1)) assert.equal(saved.channels[channel].state, "promoted", channel);
+    assert.equal(saved.channels[CHANNELS.npmWrapper].state, "exact_consumer_verified");
+    assert.equal(saved.channels[CHANNELS.npmWrapper].events.at(-1).code, "npm_immutable_failed");
   });
 }
 
@@ -310,5 +337,6 @@ await testMetadataAndNoMutation();
 await testStrictProbeAndAuth();
 await testTransientAndAmbiguous();
 await testRevalidationBindsEachChannel();
+await testFinalChannelRevalidation();
 await testReadbackAndPartialResume();
 console.log("npm_channel_promotion.test: OK (receipt/digest gates, scoped credentials, strict probes, immutable verification, one-shot mutation, retry, readback, resume, and fixed failures)");

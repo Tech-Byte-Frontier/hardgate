@@ -169,6 +169,14 @@ function verifyDistributionDigests(receipt, distDir) {
   return directory;
 }
 
+function revalidatePromotionBytes(receipt, directory) {
+  try {
+    verifyDistributionDigests(receipt, directory);
+  } catch (cause) {
+    throw fail("npm_immutable_failed", "immutable npm payload verification failed", cause);
+  }
+}
+
 function stateAtLeast(state, required) {
   return RECEIPT_STATES.indexOf(state) >= RECEIPT_STATES.indexOf(required);
 }
@@ -266,6 +274,7 @@ export async function promoteNpmChannels({
         verifyImmutable,
         revalidate: () => verifyDistributionDigests(receipt, directory),
       });
+      revalidatePromotionBytes(receipt, directory);
       // A successful latest readback records only the durable promoted state.
       // The native consumer matrix owns default_consumer_verified later.
       if (stateBefore === REQUIRED_NPM_RECEIPT_STATE) {
