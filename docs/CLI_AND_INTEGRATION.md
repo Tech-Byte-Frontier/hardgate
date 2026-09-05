@@ -63,8 +63,12 @@ hardgate init --preset balanced --format-check 'pnpm run format:check' \
 
 Metadata detection covers Rust, JavaScript/TypeScript, Python and Go, without
 installing or executing project tools. Root manifests and existing scripts are
-preferred; mixed ecosystems, conflicting package managers and nested-only
-packages require explicit commands or initialization within the package. JS
+preferred. On POSIX hosts, root Python and JavaScript projects can combine
+commands when both ecosystems supply the corresponding tool; these pairs run
+through `sh`, and either failure fails the step. Missing pairs remain
+unconfigured with a setup notice. Other mixed ecosystems, conflicting package
+managers and nested-only packages require explicit commands or initialization
+within the package. JS
 config-based tool fallbacks require repository-local executables. Python tools
 must be installed in the invoking environment; Go format checks require POSIX
 `sh`. No preset assigns JavaScript tools to every ecosystem.
@@ -255,6 +259,39 @@ For JavaScript-family targets (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.m
 5. A matching `<stem>.test.<ext>` or `<stem>.spec.<ext>` is searched beside the source, under `__tests__`/`tests`, and in nested test roots (bounded depth). A child script runs from its package root; a workspace fallback script runs from the workspace root; a framework-only command runs from its config root (or the package root for a manifest-only hint); and the supplied repository root is the final fallback. If no reliable match exists, the full suite is selected.
 
 The generated command uses the detected manager's local binary: `npm test`/`npm run`, `pnpm test`/`pnpm run`, `yarn test`/`yarn <script>`, or `bun test`/`bun run`; direct framework fallback uses `npm exec --offline`, `pnpm exec`, `yarn exec`, or `bun x --no-install`. Jest receives its normal file selector, Vitest receives `run`, and Playwright receives `test` when selector inference is valid. A project-specific `--test-cmd` is the authoritative override. No resolver path downloads packages; unavailable managers, binaries, malformed manifests, ambiguous scripts, and other resolver failures are baseline failures.
+
+## Saved reports
+
+Inspect a full saved gate report without loading the current policy or rescanning:
+
+```sh
+hardgate check --json --output gate.json
+hardgate report gate.json --engine complexity --top 5 --json
+hardgate report gate.json --metric 'Cognitive Complexity'
+hardgate report compare before.json after.json --json --output comparison.json
+```
+
+Inspection filters the displayed findings and preserves the saved verdict and
+exit status, including missing-evidence failures. JSON `inspection` metadata
+distinguishes the original error total from the displayed count. Unknown engine
+names fail instead of silently ignoring the filter. `--metric` selects matching
+metric categories; `--top` selects findings with file locations, leaving tool
+failure status in the saved verdict.
+
+Comparison accepts terminal or JSON output and returns the after-report's exit
+status. It lists added, removed and retained findings. Missing execution metadata,
+changed engine selection, policy, roots or scope, incomplete evidence, and
+filtered views prevent a claim of equivalent evaluation scope. Diff reports lack
+a complete resolved inventory and are also marked non-equivalent. Removed findings
+are not proof of remediation when the evaluation scope differs.
+
+`--output PATH` saves the final rendered report atomically for `check`, `scan`,
+`verify`, `mutate` and saved-report commands while retaining stdout output.
+Mutation no-ops are saved too; setup errors use the normal error channel.
+`mutate --summary` or `--format summary` suppresses per-mutant progress and shows
+the score, outcomes, survivors and restoration status. `mutate --json --summary`
+also retains execution metadata. `check --progress jsonl` emits stage events to
+stderr; the final report remains the authority for engine completion and verdict.
 
 ## `hardgate scan <file>`
 

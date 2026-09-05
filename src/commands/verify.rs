@@ -29,6 +29,7 @@ pub struct VerifyOptions {
     pub summary: bool,
     pub paths: Vec<PathBuf>,
     pub display: crate::diagnostics::display::DisplayOptions,
+    pub output_file: Option<PathBuf>,
 }
 
 /// Run static gates plus coverage and mutation report evaluation.
@@ -129,6 +130,8 @@ fn execute_verify(
                 no_snippets: opts.no_snippets,
                 summary: opts.summary,
                 display: opts.display.clone(),
+                output_file: opts.output_file.clone(),
+                ..Default::default()
             },
         },
     )

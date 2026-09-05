@@ -6,6 +6,16 @@ are `check`, `verify`, `scan` and `mutate`; parser errors use `arguments` becaus
 a valid command may not exist. MCP structured reports use `mcp_check` and
 `mcp_scan`, preserving their narrower static scope.
 
+Saved-report inspection and comparison use `command: "report"` and the same
+version, verdict, status and exit-code fields. Inspection retains the original
+saved verdict even when its filters hide every finding. Its `inspection` object
+contains `filtered`, `original_total_errors` and `displayed_errors`; the category
+arrays and view summary describe the filtered findings. Saving and inspecting a
+filtered view again preserves an incomplete verdict. Comparison reports contain
+`verdict_before`, `verdict_after`, finding differences and explicit scope/config
+differences. `equivalent` requires known matching evaluation metadata and is not
+proof that the source bytes are unchanged. Neither command rescans sources.
+
 | Field | Contract |
 | --- | --- |
 | `passed` | Whether the evaluated policy has no blocking failure; never proof that every engine ran |

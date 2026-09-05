@@ -13,6 +13,7 @@ use crate::diagnostics::GateReport;
 use crate::engines::OrchestrationEngine;
 use crate::git_evidence::{ReferenceEvidence, load_reference};
 use anyhow::Result;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -30,6 +31,8 @@ pub struct CheckOptions {
     pub summary: bool,
     pub paths: Vec<PathBuf>,
     pub display: crate::diagnostics::display::DisplayOptions,
+    pub output_file: Option<PathBuf>,
+    pub progress: Option<String>,
 }
 
 impl CheckOptions {
@@ -41,6 +44,8 @@ impl CheckOptions {
             no_snippets: self.no_snippets,
             summary: self.summary,
             display: self.display.clone(),
+            output_file: self.output_file.clone(),
+            progress: self.progress.clone(),
         }
     }
 }
@@ -54,6 +59,8 @@ pub struct OutputOptions {
     pub no_snippets: bool,
     pub summary: bool,
     pub display: crate::diagnostics::display::DisplayOptions,
+    pub output_file: Option<PathBuf>,
+    pub progress: Option<String>,
 }
 
 impl OutputOptions {
@@ -127,6 +134,13 @@ fn execute_check(
             .push(empty_discovery_advisory(opts.diff, !opts.paths.is_empty()));
     }
 
+    let progress = opts.progress.as_deref();
+    emit_progress(
+        progress,
+        "static_analysis",
+        start_time.elapsed().as_millis(),
+    );
+
     let reference_evidence = if ratchet_enabled {
         run_legacy_ratchet(
             config,
@@ -140,29 +154,27 @@ fn execute_check(
 
     run_generated_freshness(config, root, &mut report);
 
-    if opts.all {
-        run_orchestration(config, root, &mut report);
-    }
-
-    run_check_coverage(CheckCoverage {
-        config,
-        diff: opts.diff,
-        cli_report: opts.coverage_report.clone(),
-        files: &files,
-        read_results: &read_results,
-        functions: &functions,
-        reference_evidence: reference_evidence.as_ref(),
-        root,
-        report: &mut report,
-    })?;
-
-    if config.mutation.enabled {
-        verify_mutation_at(config, None, &mut report, root);
-    }
-
-    report.advisories.push(check_scope_advisory(config, &opts));
+    run_verification_phase(
+        VerificationPhaseContext {
+            opts: &opts,
+            context,
+            coverage: CheckCoverage {
+                config,
+                diff: opts.diff,
+                cli_report: opts.coverage_report.clone(),
+                files: &files,
+                read_results: &read_results,
+                functions: &functions,
+                reference_evidence: reference_evidence.as_ref(),
+                root,
+            },
+            start_time,
+        },
+        &mut report,
+    )?;
 
     let elapsed = start_time.elapsed().as_millis();
+    emit_progress(progress, "finalization", elapsed);
     emit_gate_report(
         &mut report,
         Emission {
@@ -172,6 +184,52 @@ fn execute_check(
             opts: &opts.output_options(),
         },
     )
+}
+
+struct VerificationPhaseContext<'a> {
+    opts: &'a CheckOptions,
+    context: &'a ConfigContext,
+    coverage: CheckCoverage<'a>,
+    start_time: Instant,
+}
+
+fn run_verification_phase(
+    phase: VerificationPhaseContext<'_>,
+    report: &mut GateReport,
+) -> Result<()> {
+    let opts = phase.opts;
+    let progress = opts.progress.as_deref();
+    let root = phase.context.root.as_path();
+    let config = &phase.context.config;
+
+    if opts.all {
+        emit_progress(
+            progress,
+            "orchestration",
+            phase.start_time.elapsed().as_millis(),
+        );
+        run_orchestration(config, root, report);
+    }
+
+    emit_progress(progress, "coverage", phase.start_time.elapsed().as_millis());
+    run_check_coverage(&phase.coverage, report)?;
+
+    if config.mutation.enabled {
+        emit_progress(progress, "mutation", phase.start_time.elapsed().as_millis());
+        verify_mutation_at(config, None, report, root);
+    }
+
+    report.advisories.push(check_scope_advisory(config, opts));
+    Ok(())
+}
+
+fn emit_progress(progress: Option<&str>, stage: &str, elapsed_ms: u128) {
+    if progress == Some("jsonl") {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "{{\"stage\":\"{stage}\",\"elapsed_ms\":{elapsed_ms}}}"
+        );
+    }
 }
 
 fn run_orchestration(config: &HardgateConfig, root: &Path, report: &mut GateReport) {
@@ -195,10 +253,9 @@ struct CheckCoverage<'a> {
     functions: &'a [crate::engines::FunctionMetrics],
     reference_evidence: Option<&'a ReferenceEvidence>,
     root: &'a Path,
-    report: &'a mut GateReport,
 }
 
-fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
+fn run_check_coverage(request: &CheckCoverage<'_>, report: &mut GateReport) -> Result<()> {
     if !request.config.coverage.enabled {
         return Ok(());
     }
@@ -211,7 +268,7 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
         functions: request.functions,
         root: request.root,
         config: request.config,
-        report: request.report,
+        report,
     });
     let scope = CoverageScope {
         source_files: &source_files,
@@ -224,7 +281,7 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
                 cli_report: coverage_report,
                 functions: request.functions,
                 changed_lines: None,
-                report: request.report,
+                report,
             },
             scope,
         );
@@ -240,7 +297,7 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
             root: request.root,
         })?),
         None if request.config.legacy.ratchet => Some(Default::default()),
-        None => load_changed_lines_for_coverage(&mut request)?,
+        None => load_changed_lines_for_coverage(request, report)?,
     };
     verify_coverage_with_scope(
         CoverageVerification {
@@ -248,7 +305,7 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
             cli_report: coverage_report,
             functions: request.functions,
             changed_lines: changed_lines.as_ref(),
-            report: request.report,
+            report,
         },
         scope,
     );
@@ -256,7 +313,8 @@ fn run_check_coverage(mut request: CheckCoverage<'_>) -> Result<()> {
 }
 
 fn load_changed_lines_for_coverage(
-    request: &mut CheckCoverage<'_>,
+    request: &CheckCoverage<'_>,
+    report: &mut GateReport,
 ) -> Result<Option<crate::git_evidence::ChangedLineMap>> {
     let reference = request
         .config
@@ -274,7 +332,7 @@ fn load_changed_lines_for_coverage(
         })?)),
         Err(error) => {
             super::evidence::record_evidence_failure(
-                request.report,
+                report,
                 true,
                 super::evidence::EvidenceFailure {
                     step: "coverage-diff",
@@ -333,12 +391,22 @@ pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<()> {
             no_snippets: false,
             summary: false,
             display: Default::default(),
+            ..Default::default()
         },
     )
 }
 
 /// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
 pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<()> {
+    let output = format_report_with_opts(report, opts)?;
+    if let Some(ref path) = opts.output_file {
+        super::outcome::write_atomic_file(path, &output)?;
+    }
+    write_stdout(&output)?;
+    Ok(())
+}
+
+pub(crate) fn format_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<String> {
     let mut owned;
     let report = if report.display.snippets != opts.display.snippets
         || report.display.max_diagnostics != opts.display.max_diagnostics
@@ -357,8 +425,7 @@ pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Res
     if !opts.is_json() {
         super::outcome::append_scan_metrics(&mut output, &report.functions);
     }
-    write_stdout(&output)?;
-    Ok(())
+    Ok(output)
 }
 
 fn human_report(report: &GateReport, opts: &OutputOptions) -> String {

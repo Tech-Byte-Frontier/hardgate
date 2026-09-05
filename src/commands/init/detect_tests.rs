@@ -16,6 +16,54 @@ fn cleanup(root: std::path::PathBuf) {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn combined_commands_execute_both_tools_and_preserve_second_failure() {
+    let root = fixture("combined-execution");
+    let command = combine_commands(
+        Some("sh -c 'printf first > first.txt'".into()),
+        Some("sh -c 'printf second > second.txt; exit 7'".into()),
+    )
+    .unwrap();
+    let config = OrchestrationConfig {
+        lint: Some(command),
+        ..Default::default()
+    };
+    let failure = crate::engines::OrchestrationEngine::new(&config)
+        .run_lint(&root)
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failure.exit_code, Some(7));
+    assert_eq!(fs::read_to_string(root.join("first.txt")).unwrap(), "first");
+    assert_eq!(
+        fs::read_to_string(root.join("second.txt")).unwrap(),
+        "second"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn mixed_detection_does_not_drop_a_third_ecosystem_or_one_missing_tool() {
+    assert!(combine_commands(Some("pytest".into()), None).is_none());
+    let root = fixture("three-ecosystems");
+    fs::write(root.join("pyproject.toml"), "[tool.ruff]\n").unwrap();
+    fs::write(
+        root.join("package.json"),
+        r#"{"scripts":{"lint":"eslint ."}}"#,
+    )
+    .unwrap();
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    let detection = detect_project(&root);
+    assert!(detection.orchestration.lint.is_none());
+    assert!(
+        detection
+            .missing_setup
+            .iter()
+            .any(|s| s.contains("multiple supported ecosystems"))
+    );
+    cleanup(root);
+}
+
 #[test]
 fn detection_inventory_handles_duplicates_depth_and_symlinks() {
     let root = fixture("inventory");

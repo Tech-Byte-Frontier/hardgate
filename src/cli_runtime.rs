@@ -93,6 +93,15 @@ fn command_json(command: &Commands) -> bool {
         | Commands::Scan { output, .. } => output.output_options().is_json(),
         Commands::Mutate { format, json, .. } => *json || format.as_deref() == Some("json"),
         Commands::Config { format } => format == "json",
+        Commands::Report {
+            subcommand: Some(super::ReportCommand::Compare { output, .. }),
+            ..
+        } => output.output_options().is_json(),
+        Commands::Report {
+            subcommand: None,
+            output,
+            ..
+        } => output.output_options().is_json(),
         _ => false,
     }
 }
@@ -113,6 +122,7 @@ fn utility_stage(command: &Commands) -> &'static str {
         Commands::Init { .. } => "init",
         Commands::Completions { .. } => "completions",
         Commands::Fmt { .. } => "fmt",
+        Commands::Report { .. } => "report",
         _ => "mcp",
     }
 }

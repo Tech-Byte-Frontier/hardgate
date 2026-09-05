@@ -220,7 +220,10 @@ fn mutation_output_modes_and_noops_are_rendered() {
                 kind: "empty",
                 message: "nothing selected",
             },
-            format,
+            crate::commands::mutation_output::MutationRenderOptions {
+                format,
+                ..Default::default()
+            },
             None,
         )
         .unwrap();

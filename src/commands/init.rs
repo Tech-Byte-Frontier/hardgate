@@ -1,4 +1,5 @@
 mod detect;
+mod manifest;
 mod reference;
 mod render;
 mod tooling;

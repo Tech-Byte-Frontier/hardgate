@@ -1,6 +1,10 @@
 use crate::diagnostics::GateReport;
 use std::io::{self, BufWriter, Write};
 
+#[path = "file_output.rs"]
+mod file_output;
+pub(crate) use file_output::write_atomic_file;
+
 /// Process-independent result: main alone chooses the process exit status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOutcome {
