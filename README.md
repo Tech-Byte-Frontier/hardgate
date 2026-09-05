@@ -8,6 +8,162 @@
 
 Hardgate is a local Rust CLI. It turns repository policy into a deterministic report that a maintainer, CI job, or coding agent can inspect before accepting a change. A passing report means that the enabled engines found no blocking findings; it is not a claim that every quality property has been proven.
 
+## First run
+
+### Install a released CLI
+
+The released Rust CLI ([Cargo package](https://crates.io/crates/hardgate)) and
+[GitHub source tag](https://github.com/Tech-Byte-Frontier/hardgate/releases/tag/v0.5.0)
+are `0.5.0`:
+
+```sh
+cargo install hardgate --version 0.5.0 --locked
+hardgate --version
+```
+
+The [npm wrapper](https://www.npmjs.com/package/@tech-byte-frontier/hardgate) is published separately and currently remains at `0.4.2`. Pin
+that version when using a JavaScript package manager; the unpublished `0.5.0`
+wrapper manifests in this source tree are not an npm install target:
+
+```sh
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
+npx hardgate --version
+
+pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
+pnpm exec hardgate --version
+
+yarn add --dev --exact @tech-byte-frontier/hardgate@0.4.2
+yarn exec hardgate --version
+
+bun add --dev --exact @tech-byte-frontier/hardgate@0.4.2
+bunx --no-install hardgate --version
+```
+
+For a global npm or pnpm command, use the same published wrapper version:
+
+```sh
+npm install --global @tech-byte-frontier/hardgate@0.4.2
+# or
+pnpm add --global @tech-byte-frontier/hardgate@0.4.2
+
+hardgate --version
+```
+
+The wrapper requires Node.js 18 or newer. If you need the current source
+checkout's CLI changes, use a source build rather than assuming the older npm
+wrapper contains them:
+
+```sh
+git clone https://github.com/Tech-Byte-Frontier/hardgate.git
+cd hardgate
+cargo install --path . --locked
+```
+
+### Initialize a structural starting point
+
+Run this at the policy root:
+
+```sh
+hardgate init --preset balanced
+hardgate config
+hardgate check
+```
+
+`balanced` is an explicitly structural starting point. Initialization reads
+project-root manifest and configuration contents to choose relevant commands;
+it does not install tools or execute project commands. It creates
+`hardgate.toml` with create-new semantics, so an existing file (including a
+broken symlink) is left untouched. Review the completion summary for enabled
+engines, missing setup, and the next command. An arbitrary existing repository
+may still fail its first check because its source roles, budgets, commands, or
+evidence need project-specific decisions.
+
+Without a policy file, the CLI uses the `strict-agent` defaults. That preset
+requires configured LCOV and mutation reports. `legacy-migration` adds a
+static reference ratchet for adoption, while `custom` starts from ordinary
+deserialized defaults and expects the policy file to state the project choices.
+
+Current source checkouts also provide inspection-friendly initialization:
+
+```sh
+# Run from a checkout containing the current init implementation.
+cargo run --release -- init --preset balanced --preview > /tmp/hardgate.toml
+cargo run --release -- init --preset balanced --full > /tmp/hardgate-effective.toml
+cargo run --release -- config --format toml
+```
+
+`--preview` writes only valid generated TOML to stdout; its status and completion
+summary go to stderr, so the output can be redirected safely. `--full` renders
+the full effective policy. See the current [`init`](src/commands/init.rs) and
+[`config`](src/commands/inspect.rs) implementations. These are
+source-checkout affordances; the published npm wrapper remains the older
+`0.4.2` line until a newer wrapper is published.
+
+### See a pass, a diagnostic, and a real refactor
+
+This small Rust fixture demonstrates the structural loop. It is intentionally
+bounded and says nothing about whether an arbitrary existing repository will
+pass:
+
+```sh
+smoke_dir="$(mktemp -d)"
+mkdir -p "$smoke_dir/src"
+cat > "$smoke_dir/Cargo.toml" <<'EOF'
+[package]
+name = "hardgate-smoke"
+version = "0.1.0"
+edition = "2021"
+EOF
+cat > "$smoke_dir/src/lib.rs" <<'EOF'
+pub fn add(left: u32, right: u32) -> u32 {
+    left + right
+}
+EOF
+cd "$smoke_dir"
+hardgate init --preset balanced
+hardgate check --format compact
+```
+
+To see a parameter-budget diagnostic, temporarily replace `src/lib.rs` with a
+seven-parameter function. The balanced preset's default parameter ceiling is
+six, so this check should report a parameter-budget violation:
+
+```rust
+pub fn sum(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32) -> u32 {
+    a + b + c + d + e + f + g
+}
+```
+
+A real refactor can make the data explicit and return to one parameter:
+
+```rust
+pub fn sum(values: [u32; 7]) -> u32 {
+    values.into_iter().sum()
+}
+```
+
+Run `hardgate check --format compact` again. The fixture should pass its
+structural gate after the refactor. `check` is structural and does not execute
+the detected formatter, linter, or test commands; use `check --all` only after
+reviewing those configured commands.
+
+### Strict evidence and command boundaries
+
+`strict-agent` enables strict structural thresholds plus LCOV coverage and
+mutation-report evidence. Both `hardgate check` and `hardgate verify` require
+real, non-empty reports when those engines are enabled. The policy remains
+incomplete until a project generates the reports; initialization only describes
+missing producers and paths. `hardgate config` prints the validated effective
+policy and is the inspection step before adding those producers.
+
+`hardgate mutate` is a separate native mutation workflow: it runs an
+unmutated baseline and then bounded mutants against a test command. That
+baseline-plus-sample result is separate from configured mutation-report
+ingestion. `hardgate check --all` runs only the configured formatter, linter,
+and test commands. `hardgate verify` does not run those project commands or
+native mutation; the only external command it may run is an enabled generated-
+freshness check.
+
 ## What is enforced
 
 - **Role-aware discovery.** Inventory files are classified as source, test, generated, fixture, migration, configuration, documentation, vendor, or unknown before engines choose their inputs. Dependency and build-output directories are pruned by default. File-budget and clone exclusions belong only to their owning engines and remain visible as advisories; dead-code exclusions are engine-local and silent.
@@ -61,172 +217,6 @@ add a SQL parser. Other
 Supabase configuration/data files (for example `supabase/config.toml`) are
 inventoried as configuration and likewise have no function metrics.
 
-## Install
-
-### npm and package-manager wrappers
-
-The main npm package launches a prebuilt binary and does not require a Rust toolchain for ordinary use:
-
-```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
-npx hardgate check
-
-pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
-pnpm exec hardgate check --diff
-
-yarn add --dev --exact @tech-byte-frontier/hardgate@0.5.0
-yarn exec hardgate verify
-
-bun add --dev --exact @tech-byte-frontier/hardgate@0.5.0
-bunx --no-install hardgate scan src/index.ts
-```
-
-The npm wrapper requires Node.js 18 or newer.
-
-### Global CLI use
-
-The wrapper also supports a global install when one `hardgate` command should
-be available from any project:
-
-```sh
-npm install --global @tech-byte-frontier/hardgate@0.5.0
-# or
-pnpm add --global @tech-byte-frontier/hardgate@0.5.0
-
-hardgate --version
-```
-
-For npm, `npm prefix --global` prints the global prefix; its `bin` directory
-must be on `PATH`. For pnpm, run `pnpm setup` once if pnpm reports that it
-cannot find a global bin directory, then open a new shell so `PNPM_HOME` is on
-`PATH`. An exact project-local development dependency plus a committed lockfile
-is the more reproducible choice for CI and teams.
-
-The v0.5.0 wrapper ships exactly six Linux/macOS optional packages (Linux x64/arm64 glibc and musl, macOS x64/arm64) and selects one by operating system, architecture, and (on Linux) libc:
-
-| Target | Package |
-| --- | --- |
-| Linux x64, glibc | `hardgate-linux-x64` |
-| Linux x64, musl | `hardgate-linux-x64-musl` |
-| Linux arm64, glibc | `hardgate-linux-arm64` |
-| Linux arm64, musl | `hardgate-linux-arm64-musl` |
-| macOS x64 | `hardgate-darwin-x64` |
-| macOS arm64 | `hardgate-darwin-arm64` |
-
-If `HARDGATE_BINARY` is set, the launcher uses that binary first. Otherwise it
-checks the platform package selected by the matrix. On glibc Linux it can
-fall back to the musl package when the glibc candidate is unavailable; it
-never selects a glibc binary on a musl host. It then tries a development
-binary or `hardgate` on `PATH`. It never downloads a binary at runtime.
-Normal launcher resolution on unsupported platforms fails closed; an explicit
-`HARDGATE_BINARY` override is honored first.
-
-### Cargo and source
-
-```sh
-cargo install hardgate --version 0.5.0 --locked
-
-git clone --branch v0.5.0 https://github.com/Tech-Byte-Frontier/hardgate.git
-cd hardgate
-cargo install --path . --locked
-```
-
-Cargo installs executables under the selected install root's `bin` directory.
-`--root` takes precedence, followed by `CARGO_INSTALL_ROOT`, Cargo's
-`install.root` setting, and finally `$CARGO_HOME` (normally `$HOME/.cargo`). If
-installation succeeds but a different shell reports `hardgate: command not
-found`, put that `bin` directory on `PATH`. A rustup installation can load its
-standard environment file with:
-
-```sh
-. "$HOME/.cargo/env"
-command -v hardgate
-hardgate --version
-```
-
-Hardgate v0.5.0 requires Rust 1.98.1 when installed from source. It is a
-pre-1.0 compatibility release, not a patch: configuration, public Rust APIs,
-CLI evidence behavior, and supported distribution targets changed from
-v0.4.2. See [the v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) before upgrading a library integration or an existing policy file.
-
-## Upgrading from 0.4.2
-
-Pinned installs and lockfiles do not auto-update. Upgrade explicitly to 0.5.0:
-
-```sh
-cargo install hardgate --version 0.5.0 --locked --force
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
-pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.5.0
-yarn up --exact @tech-byte-frontier/hardgate@0.5.0
-bun add --dev --exact @tech-byte-frontier/hardgate@0.5.0
-npm install --global @tech-byte-frontier/hardgate@0.5.0
-pnpm add --global @tech-byte-frontier/hardgate@0.5.0
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
-  HARDGATE_VERSION=v0.5.0 sh
-```
-
-The exact flags pin the manifest entry; a committed lockfile pins the resolved
-artifact. Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
-
-### Shell installer
-
-The v0.5.0 release installer contract supports exactly the six Linux/macOS targets listed above (Linux x64/arm64 glibc and musl, macOS x64/arm64). It accepts `HARDGATE_VERSION=latest`, `HARDGATE_VERSION=vX.Y.Z`, or `HARDGATE_VERSION=X.Y.Z`; `latest` is the default. On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects the libc and takes precedence over automatic detection. `HARDGATE_INSTALL_DIR` selects the destination (otherwise `$HOME/.cargo/bin`). For every install it downloads the target archive and `SHA256SUMS`, requires one checksum entry for that archive, verifies the digest before extraction, reads `BUILD-METADATA.json`, and requires the installed binary to report the exact metadata version and full source commit (`hardgate VERSION (COMMIT)`). A version supplied without `v` is normalized to the release tag while the metadata is checked against the numeric version.
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
-  HARDGATE_VERSION=v0.5.0 sh
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
-  HARDGATE_VERSION=0.5.0 HARDGATE_INSTALL_DIR="$HOME/.local/bin" sh
-
-# Deliberately track the newest release instead of pinning a version.
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/main/scripts/install.sh | \
-  HARDGATE_VERSION=latest sh
-```
-
-There is no Windows or Homebrew installer in this contract.
-
-### Uninstall
-
-Use the command matching the installation channel:
-
-```sh
-cargo uninstall hardgate
-npm uninstall --save-dev @tech-byte-frontier/hardgate
-pnpm remove --save-dev @tech-byte-frontier/hardgate
-yarn remove @tech-byte-frontier/hardgate
-bun remove @tech-byte-frontier/hardgate
-npm uninstall --global @tech-byte-frontier/hardgate
-pnpm remove --global @tech-byte-frontier/hardgate
-```
-
-For a shell installation only, remove the exact destination you selected. The
-default is `$HOME/.cargo/bin/hardgate`; do not remove that path if another
-installation channel now owns it.
-
-```sh
-# Only after confirming this exact file came from scripts/install.sh:
-rm -- "$HOME/.cargo/bin/hardgate"
-```
-
-## Initialize a policy
-
-```sh
-hardgate init --preset strict-agent
-hardgate init --preset balanced
-hardgate init --preset legacy-migration
-```
-
-With no `hardgate.toml`, Hardgate loads the `strict-agent` default bundle. That object is the same bundle rendered by `hardgate init --preset strict-agent`; in particular, coverage and mutation report policies are enabled with their configured floors (coverage also has its default `coverage/lcov.info` path), and formatter/linter orchestration defaults are present. No test command is inferred. A generated strict template therefore requires the project to provide a valid coverage report and mutation report path in TOML before `check` can pass; `verify --mutation-report <path>` can supply the mutation path for that command. If a project wants a structural-only starting point, it must explicitly set those sections to `enabled = false` (or choose `balanced`).
-
-Preset behavior is deliberate:
-
-- `strict-agent` uses the tight budgets and enables configured coverage/mutation evidence.
-- `balanced` scales structural budgets and disables coverage/mutation report engines.
-- `legacy-migration` scales structural budgets, disables coverage/mutation report engines, and enables the static legacy reference/merge-base ratchet. Its non-strict setting affects ordinary role-evidence fallback; explicitly enabled report, freshness, and reference failures remain blocking.
-- `custom` uses values explicitly present in the file and deserialized defaults.
-
-For a non-custom preset, TOML merging is presence-based. Only keys that are actually present in the file override the preset value; omitted keys retain the preset value. Explicit `false`, empty arrays, and other explicit values are not mistaken for omission.
-
 ## Commands and evidence boundaries
 
 ```sh
@@ -261,7 +251,11 @@ hardgate check --format json
 
 Use `hardgate check --all` as the normal CI entry point after configuring the
 repository's formatter, linter, and tests. Plain `check` remains the fast,
-non-orchestrating command for local and agent feedback loops.
+non-orchestrating command for local and agent feedback loops. Under
+`strict-agent`, both `check` and `verify` require real LCOV and mutation reports
+when those evidence engines are enabled; a generated policy is incomplete until
+those reports exist. Native `hardgate mutate` is a separate baseline-plus-sample
+run and does not replace configured mutation-report ingestion.
 
 The command contract is:
 
@@ -270,7 +264,7 @@ The command contract is:
 | `check` | Static engines, enabled coverage/mutation reports, enabled generated freshness; optional configured dead code | Formatter/linter/test orchestration unless `--all`; native mutation |
 | `check --diff` | Git-changed/staged static files by default; explicit existing paths add to static/clone selection, with full-index clone matching; with a ratchet, static/clone analysis uses the full current selected scope (whole tree when no paths are supplied). LCOV always intersects actual changed executable lines | Native mutation; orchestration unless `--all` |
 | `check --all` | Everything in `check` plus configured orchestration steps | Native mutation |
-| `verify` | Full-tree static/dead-code and configured evidence by default; path filters scope only current static/dead-code inventory and coverage source matching, while mutation reports and freshness remain configured/full. The ratchet loads the full configured reference snapshot but compares only selected current static/dead-code findings | Orchestration and native mutation |
+| `verify` | Full-tree static/dead-code and configured evidence by default; path filters scope only current static/dead-code inventory and coverage source matching, while mutation reports and freshness remain configured/full. The ratchet loads the full configured reference snapshot but compares only selected current static/dead-code findings. Only enabled generated-freshness checks may run an external command. | Formatter/linter/test orchestration and native mutation |
 | `mutate` | When enabled, native unmutated baseline and bounded mutants; when disabled, a note and successful no-op | Coverage/mutation report ingestion |
 
 `verify` path arguments do not narrow mutation-report ingestion or generated
