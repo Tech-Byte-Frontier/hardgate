@@ -394,6 +394,39 @@ mod tests {
         );
     }
     #[test]
+    fn option_and_path_edges_preserve_safe_framework_detection() {
+        assert_eq!(option_requires_value("--package"), Some(true));
+        assert_eq!(option_requires_value("--offline"), Some(false));
+        assert_eq!(option_requires_value("--package=jest"), None);
+        assert_eq!(option_requires_value("--unknown"), None);
+
+        let option_value = [
+            "--package".to_string(),
+            "-x".to_string(),
+            "jest".to_string(),
+        ];
+        assert_eq!(first_executable_after_options(&option_value), None);
+        let delimiter = ["--".to_string(), "jest".to_string()];
+        assert_eq!(first_executable_after_options(&delimiter), Some("jest"));
+
+        assert_eq!(framework_from_command(""), None);
+        assert_eq!(framework_from_command("/opt/npx -- jest"), None);
+        assert_eq!(
+            framework_from_command("node_modules/.bin/jest"),
+            Some(TestFramework::Jest)
+        );
+        let quoted = build_js_command(JsCommandInput {
+            manager: PackageManager::Npm,
+            framework: Some(TestFramework::Jest),
+            script: None,
+            candidate: Some(Path::new("tests/space name.test.ts")),
+            selector_capable: true,
+            bun_test_script: false,
+            working_dir: Path::new("."),
+        });
+        assert!(quoted.ends_with("'tests/space name.test.ts'"));
+    }
+    #[test]
     fn workspace_root_script_is_bounded_fallback() {
         for (label, manager, expected) in [
             ("npm", "npm@10", "npm test"),
