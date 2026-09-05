@@ -251,3 +251,31 @@ fn unknown_classification_marks_selected_static_engines_incomplete() {
         );
     }
 }
+
+#[test]
+fn completed_engines_cover_mixed_roles_without_hiding_later_parse_failure() {
+    let fixture = fixture("mixed-observations");
+    fixture.write(
+        "fixtures/first.rs",
+        "fixture data without a Rust function\n",
+    );
+    let limited = json(&run(&fixture, &["check", "fixtures", "--json"]));
+    assert_eq!(state(&limited, "file_budgets"), "completed");
+    assert_eq!(state(&limited, "complexity"), "skipped");
+    assert_eq!(state(&limited, "invariants"), "skipped");
+
+    let full = json(&run(&fixture, &["check", "--json"]));
+    for id in ["file_budgets", "suppressions", "complexity", "invariants"] {
+        assert_eq!(state(&full, id), "completed", "{id}");
+    }
+    fixture.write("src/zz_broken.rs", "pub fn broken( { invalid\n");
+    let incomplete = json(&run(&fixture, &["check", "--json"]));
+    assert_eq!(incomplete["exit_code"], 2);
+    assert_eq!(state(&incomplete, "complexity"), "incomplete");
+    assert!(
+        engine(&incomplete, "complexity")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("parse")
+    );
+}
