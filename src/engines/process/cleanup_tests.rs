@@ -12,12 +12,57 @@ fn timeout_scope_identifies_cleanup_strategy() {
 mod unix {
     use super::super::{
         GroupPoll, SignalResult, clone_signal_result, next_group_poll, probe_process_group,
-        reap_direct_child, record_signal_result, signal_process_group, termination_result,
-        validate_process_group_pid,
+        reap_direct_child, record_signal_result, signal_process_group, terminate_process_tree,
+        termination_result, validate_process_group_pid, wait_for_direct_child,
+        wait_for_group_absence,
     };
     use rustix::process::Pid;
-    use std::process::Command;
-    use std::time::Instant;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(Option<Child>);
+
+    impl ChildGuard {
+        fn new(child: Child) -> Self {
+            Self(Some(child))
+        }
+
+        fn spawn(script: &str) -> Self {
+            let child = Command::new("sh")
+                .args(["-c", script])
+                .stdin(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .expect("shell fixture should spawn");
+            Self::new(child)
+        }
+
+        fn child(&mut self) -> &mut Child {
+            self.0.as_mut().expect("child fixture is still owned")
+        }
+
+        fn pid(&mut self) -> Pid {
+            Pid::from_child(self.child())
+        }
+
+        fn take(&mut self) -> Child {
+            self.0.take().expect("child fixture is still owned")
+        }
+
+        fn disarm(&mut self) {
+            let _ = self.0.take();
+        }
+    }
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = terminate_process_tree(child);
+            }
+        }
+    }
 
     fn assert_error_contains<T>(result: Result<T, String>, expected: &str) {
         match result {
@@ -114,5 +159,102 @@ mod unix {
         let status = reap_direct_child(&mut child, None).expect("child should be reaped");
 
         assert_eq!(status, expected);
+    }
+
+    #[test]
+    fn reap_direct_child_forces_kill_after_group_kill() {
+        let mut fixture = ChildGuard::spawn("sleep 1");
+        let pid = fixture.pid();
+        let kill_result = signal_process_group("KILL", pid);
+        assert!(matches!(kill_result.as_ref(), Ok(SignalResult::Sent)));
+
+        let status = reap_direct_child(fixture.child(), Some(&kill_result))
+            .expect("group-killed child should be reaped");
+        fixture.disarm();
+
+        assert!(
+            !status.success(),
+            "KILL should produce a non-success status"
+        );
+    }
+
+    #[test]
+    fn wait_for_direct_child_rejects_a_running_child_after_deadline() {
+        let mut fixture = ChildGuard::spawn("sleep 1");
+        let result = wait_for_direct_child(fixture.child(), Instant::now());
+
+        let error = result.expect_err("running child must exceed an immediate deadline");
+        assert!(error.contains("remained running after bounded KILL grace"));
+    }
+
+    #[test]
+    fn wait_for_direct_child_returns_a_completed_child() {
+        let mut fixture = ChildGuard::spawn("true");
+        let status =
+            wait_for_direct_child(fixture.child(), Instant::now() + Duration::from_secs(1))
+                .expect("completed child should be reaped");
+        fixture.disarm();
+
+        assert!(status.success());
+    }
+
+    #[test]
+    fn process_group_poll_observes_present_and_absent_states() {
+        let mut fixture = ChildGuard::spawn("sleep 1");
+        let pid = fixture.pid();
+
+        assert!(matches!(
+            probe_process_group(pid),
+            Ok(super::super::ProcessGroupState::Present)
+        ));
+        assert!(matches!(
+            next_group_poll(pid, Instant::now() + Duration::from_secs(1)),
+            GroupPoll::Continue
+        ));
+        assert!(matches!(
+            next_group_poll(pid, Instant::now()),
+            GroupPoll::Expired
+        ));
+
+        let signal = signal_process_group("TERM", pid).expect("owned group should be signaled");
+        let status = fixture.child().wait().expect("group child should exit");
+        fixture.disarm();
+        assert!(matches!(signal, SignalResult::Sent));
+        assert!(!status.success());
+        assert!(matches!(
+            probe_process_group(pid),
+            Ok(super::super::ProcessGroupState::Absent)
+        ));
+        assert!(matches!(
+            next_group_poll(pid, Instant::now() + Duration::from_secs(1)),
+            GroupPoll::Absent
+        ));
+    }
+
+    #[test]
+    fn wait_for_group_absence_observes_a_running_group_then_reaped_absence() {
+        let mut fixture = ChildGuard::spawn("sleep 0.2");
+        let pid = fixture.pid();
+        let barrier = Arc::new(Barrier::new(2));
+        let thread_barrier = Arc::clone(&barrier);
+        let child = fixture.take();
+        let waiter = std::thread::spawn(move || {
+            let mut fixture = ChildGuard::new(child);
+            thread_barrier.wait();
+            let status = fixture.child().wait().expect("group child should exit");
+            fixture.disarm();
+            status
+        });
+
+        barrier.wait();
+        let absence = wait_for_group_absence(pid);
+        let status = waiter.join().expect("child waiter should complete");
+
+        assert!(absence.is_ok(), "group should become absent: {absence:?}");
+        assert!(status.success());
+        assert!(matches!(
+            probe_process_group(pid),
+            Ok(super::super::ProcessGroupState::Absent)
+        ));
     }
 }
