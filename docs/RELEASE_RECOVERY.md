@@ -1,10 +1,9 @@
 # Release recovery
 
-**Status:** review-only runbook for the intended staged release flow. The
-current `/tmp/hardgate-audit-20260904/release-flow` checkout contains dirty,
-locally proposed workflow changes. They are not deployed and are not evidence
-of GitHub, npm, or crates.io state. Publication still requires explicit
-maintainer authorization.
+**Status:** review-only runbook for the proposed staged release workflow. It
+does not prove remote workflow deployment, publisher activation, or GitHub,
+npm, or crates.io state. Publication still requires explicit maintainer
+authorization.
 
 ## Identity and retained evidence
 
@@ -43,10 +42,12 @@ retained on the affected channel; it does not erase earlier evidence.
 2. GitHub publishes the public prerelease assets with `latest=false`. The crate
    is established at its immutable exact version. npm publishes all six
    platform packages and then the wrapper under `hardgate-candidate`.
-3. Six native exact jobs run on matching CPUs and ABIs. They verify the archive
-   and exact candidate consumer; the x64 GNU proof also covers the wrapper
-   source. Each job applies its proof to a receipt and uploads its receipt and
-   native proof under a run-attempt-specific name.
+3. Six native exact jobs run on matching CPUs and ABIs. Linux musl jobs execute
+   static-musl binaries on matching GNU Linux native-CPU runners; they inspect
+   the static-musl ABI and native CPU rather than requiring a musl userspace.
+   The jobs verify the archive and exact candidate consumer; the x64 GNU proof
+   also covers the wrapper source. Each job applies its proof to a receipt and
+   uploads its receipt and native proof under a run-attempt-specific name.
 4. The collector merges the latest valid receipts until all nine channels are
    `exact_consumer_verified`. A missing or divergent identity blocks promotion.
 5. Each npm candidate is promoted to `latest` once, with an independent
@@ -66,10 +67,10 @@ retained on the affected channel; it does not erase earlier evidence.
    `require-complete` and succeeds only when all nine channels reach
    `default_consumer_verified`.
 
-The local proposal is expected to use the existing receipt and staging helpers
-under `scripts/`, but helper branches are still being integrated. Do not report
-this sequence as deployed until the signed `main` workflow, its successful CI
-run, retained artifacts, and public readbacks prove each checkpoint.
+The proposed workflow uses the receipt and staging helpers under `scripts/`.
+Do not report this sequence as deployed until the signed `main` workflow, its
+successful CI run, retained artifacts, and public readbacks prove each
+checkpoint.
 
 ## Ordinary recovery
 
@@ -77,15 +78,18 @@ For a failed job, inspect the retained receipt and failure event, then rerun the
 failed job when the same immutable inputs remain available. Native reruns may
 replace the collector's selected attempt for that package, but older receipts
 and proofs remain retained. Do not republish an immutable npm version, overwrite
-matching GitHub assets, roll back a channel, or repeat an ambiguous write without
-first reading public state and obtaining maintainer direction.
+matching GitHub assets, or roll back a channel. Independently reconcile an
+ambiguous write from its receipt and public state within the authorized recovery
+scope; stop only when identity, integrity, or authorization remains unresolved.
 
 `resume_run_id` is a narrow same-tag recovery input. The current workflow binds
 it to a completed failed tag-triggered run, the same signed tag and source
 commit, the required successful checkpoints, an unexpired matching
 `release-bundle`, and successful CI for the current main commit. It reuses the
-verified bytes; it does not authorize a rebuild or a different source/tooling
-identity.
+verified bytes and the same signed source. A recovery run may use a new
+CI-validated tooling commit, which must be recorded and checked separately; it
+does not authorize a different signed source or a rebuild of the verified
+payload.
 
 ## Expired-artifact recovery
 
@@ -110,10 +114,12 @@ choose a documented evidence-based recovery or start a new signed release path.
 ## Stop conditions
 
 Stop before the next publication or promotion when the signed tag cannot be
-verified, the source/tooling identities differ, an artifact is expired or has
-unexpected bytes, a receipt merge diverges, a registry state is ambiguous, the
-crate `max_stable_version` does not match, or a default consumer fails. Preserve
-all receipts and failure artifacts and record the public state that caused the
+verified, either the signed source identity or the CI tooling identity fails
+its recorded expected binding, an artifact is expired or has unexpected bytes,
+a receipt merge diverges, a registry state remains ambiguous after independent
+reconciliation, the crate
+`max_stable_version` does not match, or a default consumer fails. Preserve all
+receipts and failure artifacts and record the public state that caused the
 stop.
 
 For npm credential boundaries, see [Publisher setup](PUBLISHER_SETUP.md). For

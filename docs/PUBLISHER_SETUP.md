@@ -1,11 +1,9 @@
 # Publisher setup
 
-**Status:** review-only operational contract. This page does not authorize a
-publication or change npm, crates.io, GitHub Actions, repository rules, or
-secrets. It was checked on 2026-09-04 against the local dirty
-`/tmp/hardgate-audit-20260904/release-flow` proposal. That worktree and its
-helper branches are not deployed evidence; confirm the signed `main` workflow,
-the actual CI run, and public registry state before acting.
+**Status:** review-only operational contract. This page describes the proposed
+checked-in release workflow; it does not authorize a publication or change npm,
+crates.io, GitHub Actions, repository rules, or secrets. Verify the signed
+`main` workflow, the actual CI run, and public registry state before acting.
 
 ## Release identity and pins
 
@@ -15,7 +13,7 @@ checks that the tag is an annotated object, verifies it with
 commit. `github.sha` identifies the CI-validated workflow/tooling checkout in
 `release-tooling`; tooling fixes must not replace files from the signed tag.
 
-The local proposal pins Node `26.8.1`, npm `12.0.2`, and these immutable action
+The proposed workflow pins Node `26.8.1`, npm `12.0.2`, and these immutable action
 commits:
 
 | Action | Commit | Release label |
@@ -67,8 +65,9 @@ The intended publisher sequence is all six platform packages first, then the
 wrapper. Each package is published at most once for the immutable version,
 verified independently, and promoted to `latest` at most once after all exact
 consumer evidence is merged. npm versions are immutable; an ambiguous result
-requires public-state inspection and maintainer review rather than a blind
-retry.
+requires public-state inspection and independent reconciliation within the
+authorized recovery scope rather than a blind retry. Stop if identity,
+integrity, or authorization remains unresolved.
 
 ## crates.io authentication
 
@@ -101,6 +100,29 @@ Before enabling or changing a mode, an authorized maintainer must record:
 No local `npm whoami`, OIDC variable check, or static workflow inspection can
 prove a remote trusted-publisher binding. Do not report one as verified without
 the authorized publish-time evidence.
+
+## Signed-tag signer overlap and rotation
+
+Keep `.github/release-allowed-signers` under reviewable version control. Every
+publication job must continue to require an annotated tag object (`git cat-file
+-t ... = tag`), verify it with
+`git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag`,
+and verify that it resolves to the expected commit. OIDC setup does not replace
+this authorization.
+
+For a planned rotation:
+
+1. Add the new public signer through a signed, reviewed commit while retaining
+   the old signer for the overlap window. Check release contract tests before
+   changing the allowed-key count; do not weaken a one-signer policy implicitly.
+2. Create the next signed annotated tag with the new signer and require every
+   publication job to pass the existing tag and commit checks.
+3. Keep the old signer until all in-flight tags and recovery work using it are
+   complete. Remove it only in a later signed, reviewed commit, then rerun
+   release contract checks.
+
+If the signer is unavailable or verification fails, stop. Do not bypass the
+allowlist, accept an unsigned or lightweight tag, or invent a recovery identity.
 
 ## References
 
