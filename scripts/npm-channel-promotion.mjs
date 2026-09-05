@@ -3,6 +3,9 @@
 "use strict";
 
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { compareReleaseTags } from "./release-order.mjs";
 import { promoteVerifiedChannel } from "./channel-promotion.mjs";
 import { childTimeoutMs, remainingMs } from "./npm-verification-policy.mjs";
@@ -22,6 +25,7 @@ const SAFE_ENVIRONMENT = new Set([
 ]);
 const PLATFORM_SET = new Set(NPM_PLATFORM_CHANNELS);
 const SEMVER_ERROR = "npm latest metadata has an invalid version";
+const TOOLING_SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 
 export class NpmPromotionError extends Error {
   constructor(code, message, cause) {
@@ -61,18 +65,35 @@ export function credentialFreeEnvironment(source = process.env) {
   return result;
 }
 
-export function promotionEnvironment(source = process.env) {
+function promotionResource(source = process.env) {
   const token = source.NODE_AUTH_TOKEN;
   if (typeof token !== "string" || token.trim().length === 0) throw error("npm_auth_missing", "npm promotion requires NODE_AUTH_TOKEN");
-  const result = credentialFreeEnvironment(source);
-  result.NODE_AUTH_TOKEN = token;
-  Object.assign(result, {
-    npm_config_registry: NPM_REGISTRY,
-    npm_config_audit: "false",
-    npm_config_fund: "false",
-    npm_config_fetch_retries: "0",
-  });
-  return result;
+  return configResource(source, token);
+}
+
+function configResource(source, token) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-npm-config-"));
+  const home = path.join(root, "home");
+  const cache = path.join(root, "cache");
+  const userConfig = path.join(root, "user.npmrc");
+  const globalConfig = path.join(root, "global.npmrc");
+  try {
+    for (const directory of [home, cache]) { fs.mkdirSync(directory, { mode: 0o700 }); fs.chmodSync(directory, 0o700); }
+    const contents = token === undefined ? `registry=${NPM_REGISTRY}\n` : `registry=${NPM_REGISTRY}\n//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n`;
+    fs.writeFileSync(userConfig, contents, { mode: 0o600 });
+    fs.writeFileSync(globalConfig, "", { mode: 0o600 });
+    fs.chmodSync(userConfig, 0o600); fs.chmodSync(globalConfig, 0o600);
+    const environment = credentialFreeEnvironment(source);
+    Object.assign(environment, { HOME: home, npm_config_cache: cache, npm_config_userconfig: userConfig, npm_config_globalconfig: globalConfig, npm_config_registry: NPM_REGISTRY });
+    if (token !== undefined) {
+      environment.NODE_AUTH_TOKEN = token;
+      Object.assign(environment, { npm_config_audit: "false", npm_config_fund: "false", npm_config_fetch_retries: "0" });
+    }
+    return { environment, cleanup: () => fs.rmSync(root, { recursive: true, force: true }), root };
+  } catch (cause) {
+    fs.rmSync(root, { recursive: true, force: true });
+    throw cause;
+  }
 }
 
 export function latestUrl(name) {
@@ -100,16 +121,19 @@ export async function probeNpmLatest({ name, policy: requestPolicy, sourceCwd, e
   policy(requestPolicy);
   const timeoutMs = childTimeoutMs(requestPolicy);
   const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const resource = configResource(env);
   let output;
   try {
     output = await runProcess("curl", [
       "--disable", "--location", "--silent", "--show-error", "--connect-timeout", String(seconds),
       "--max-time", String(seconds), "--write-out", "\n%{http_code}\n", latestUrl(name),
-    ], { cwd: sourceCwd, env: credentialFreeEnvironment(env), timeoutMs });
+    ], { cwd: sourceCwd, env: resource.environment, timeoutMs });
   } catch (cause) {
     const wrapped = error("npm_latest_probe", "npm latest probe failed", cause);
     if (cause?.retryable || /(?:EAI_AGAIN|ECONNRESET|ETIMEDOUT|ECONNREFUSED|429|5\d\d)/iu.test(String(cause?.code ?? ""))) wrapped.retryable = true;
     throw wrapped;
+  } finally {
+    resource.cleanup();
   }
   const response = curlResponse(output);
   if (response.status === 404) return { state: "missing" };
@@ -144,11 +168,11 @@ function safeChild(code, message, cause) {
   return wrapped;
 }
 async function bounded(runProcess, command, args, options) {
-  try { return await runProcess(command, args, { cwd: options.cwd, env: options.env, timeoutMs: childTimeoutMs(options.policy) }); }
+  try { return await runProcess(command, args, { cwd: options.cwd, env: options.env, timeoutMs: options.timeoutMs ?? childTimeoutMs(options.policy) }); }
   catch (cause) { throw safeChild("npm_child_failed", "npm promotion subprocess failed", cause); }
 }
 function verifierArgs(name, releaseVersion, distDir) {
-  const args = ["scripts/verify-npm-publication.mjs", "--version", releaseVersion, "--dist", path.resolve(distDir)];
+  const args = [path.join(TOOLING_SCRIPTS, "verify-npm-publication.mjs"), "--version", releaseVersion, "--dist", path.resolve(distDir)];
   if (PLATFORM_SET.has(name)) args.push("--platform-only", "--package", name);
   return args;
 }
@@ -167,8 +191,9 @@ async function channelProbe(context) {
   }
 }
 async function immutableProof(context) {
+  const resource = configResource(context.env);
   try {
-    const env = credentialFreeEnvironment(context.env);
+    const env = resource.environment;
     if (context.verifyImmutable) {
       const proof = await context.verifyImmutable({
         name: context.name, version: context.version, distDir: path.resolve(context.distDir),
@@ -177,13 +202,16 @@ async function immutableProof(context) {
       if (proof === false || (proof && typeof proof === "object" && proof.verified === false)) throw error("npm_immutable_failed", "immutable npm payload verification failed");
     } else {
       await bounded(context.runProcess, process.execPath, verifierArgs(context.name, context.version, context.distDir), {
-        policy: context.policy, cwd: context.sourceCwd, env,
+        policy: context.policy, cwd: context.sourceCwd, env, timeoutMs: remainingMs(context.policy),
       });
     }
+    if (context.revalidate) context.revalidate();
     context.immutableVerified = true;
     return { verified: true };
   } catch (cause) {
     throw safeChild("npm_immutable_failed", "immutable npm payload verification failed", cause);
+  } finally {
+    resource.cleanup();
   }
 }
 async function defaultProof(context) {
@@ -193,10 +221,12 @@ async function defaultProof(context) {
   return { verified: true, metadata: { name: context.name, version: context.version } };
 }
 async function mutateLatest(context) {
+  let resource;
   try {
+    resource = promotionResource(context.env);
     await bounded(context.runProcess, "npm", [
       "dist-tag", "add", `${context.name}@${context.version}`, "latest", `--registry=${NPM_REGISTRY}`,
-    ], { policy: context.policy, cwd: context.sourceCwd, env: promotionEnvironment(context.env) });
+    ], { policy: context.policy, cwd: context.sourceCwd, env: resource.environment });
     return { verified: true };
   } catch (cause) {
     context.lastMutationError = cause;
@@ -205,6 +235,8 @@ async function mutateLatest(context) {
       throw cause;
     }
     throw safeChild("npm_mutation_failed", "npm latest tag mutation failed", cause);
+  } finally {
+    resource?.cleanup();
   }
 }
 
@@ -214,7 +246,7 @@ function npmChannelOperations(options) {
     distDir: text(options.distDir, "dist directory"), sourceCwd: text(options.sourceCwd, "source directory"),
     policy: policy(options.policy), env: options.env ?? process.env,
     runProcess: options.runProcess ?? runReleaseProcess, probeLatest: options.probeLatest ?? probeNpmLatest,
-    verifyImmutable: options.verifyImmutable, immutableVerified: false,
+    verifyImmutable: options.verifyImmutable, revalidate: options.revalidate, immutableVerified: false,
     lastMutationError: undefined, fatalPromotionError: undefined,
   };
   return {

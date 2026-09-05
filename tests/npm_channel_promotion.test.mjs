@@ -6,12 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { CHANNELS, REQUIRED_CHANNELS, createReceipt, readReceipt, recordTransition, writeReceiptAtomicSync } from "../scripts/release-receipt.mjs";
-import { NPM_CHANNELS, credentialFreeEnvironment, latestUrl, probeNpmLatest, promotionEnvironment } from "../scripts/npm-channel-promotion.mjs";
-import { promoteNpmChannels } from "../scripts/promote-npm-channels.mjs";
+import { NPM_CHANNELS, credentialFreeEnvironment, latestUrl, probeNpmLatest } from "../scripts/npm-channel-promotion.mjs";
+import { promoteNpmChannels, run } from "../scripts/promote-npm-channels.mjs";
 
 const version = "1.2.3";
 const sourceCwd = path.resolve(".");
+const toolingVerifier = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../scripts/verify-npm-publication.mjs");
 const h40 = (letter) => letter.repeat(40);
 const h64 = (letter) => letter.repeat(64);
 const policy = (overrides = {}) => ({ attempts: 2, delayMs: 0, childMs: 1000, deadline: performance.now() + 20_000, ...overrides });
@@ -46,15 +48,38 @@ async function withFixture(action) {
   const value = fixture();
   try { return await action(value); } finally { fs.rmSync(value.directory, { recursive: true, force: true }); }
 }
+function scopedConfig(options, promotion = false) {
+  const { env } = options;
+  assert.ok(env.HOME && env.npm_config_cache && env.npm_config_userconfig && env.npm_config_globalconfig);
+  assert.equal(env.NPM_CONFIG_USERCONFIG, undefined);
+  assert.equal(env.NPM_CONFIG_GLOBALCONFIG, undefined);
+  assert.equal(fs.statSync(env.npm_config_userconfig).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(env.npm_config_globalconfig).mode & 0o777, 0o600);
+  const userConfig = fs.readFileSync(env.npm_config_userconfig, "utf8");
+  assert.equal(fs.readFileSync(env.npm_config_globalconfig, "utf8"), "");
+  assert.match(userConfig, /registry=https:\/\/registry\.npmjs\.org/);
+  if (promotion) {
+    assert.match(userConfig, /:_authToken=\$\{NODE_AUTH_TOKEN\}/);
+    assert.equal(userConfig.includes(env.NODE_AUTH_TOKEN), false);
+    assert.ok(env.NODE_AUTH_TOKEN);
+  } else {
+    assert.equal(userConfig.includes("_authToken"), false);
+    assert.equal(env.NODE_AUTH_TOKEN, undefined);
+  }
+}
 function runner(states, events, { failMutation = false, mutationMakesTarget = true } = {}) {
   return async (command, args, options) => {
     events.push({ type: "run", command, args: [...args], options });
     assert.ok(options.timeoutMs > 0);
+    if (command === process.execPath) assert.ok(options.timeoutMs > 1000);
+    scopedConfig(options, command === "npm");
     if (command === "npm") {
       const spec = args[2];
       const name = spec.slice(0, spec.lastIndexOf("@"));
       if (mutationMakesTarget) states[name] = version;
       if (failMutation) throw Object.assign(new Error("registry token leaked: SHOULD_NOT_PRINT"), { code: "EPIPE" });
+    } else if (command === process.execPath) {
+      assert.equal(args[0], toolingVerifier);
     }
     return "";
   };
@@ -72,14 +97,10 @@ function probe(states, events, scripted = new Map()) {
 }
 
 function testEnvironment() {
-  const source = { PATH: "/safe/bin", NODE_AUTH_TOKEN: "publish-secret", NPM_TOKEN: "other-secret", NPM_PROMOTION_TOKEN: "promotion-secret", GITHUB_TOKEN: "github-secret", GH_TOKEN: "gh-secret", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example.invalid/token", npm_config__auth: "config-secret" };
+  const source = { PATH: "/safe/bin", NODE_AUTH_TOKEN: "publish-secret", NPM_TOKEN: "other-secret", NPM_PROMOTION_TOKEN: "promotion-secret", GITHUB_TOKEN: "github-secret", GH_TOKEN: "gh-secret", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example.invalid/token", NPM_CONFIG_USERCONFIG: "ambient-user-config", NPM_CONFIG_GLOBALCONFIG: "ambient-global-config", npm_config_userconfig: "ambient-lower-user-config", npm_config_globalconfig: "ambient-lower-global-config", npm_config__auth: "config-secret" };
   assert.deepEqual(credentialFreeEnvironment(source), { PATH: "/safe/bin" });
-  const mutation = promotionEnvironment(source);
-  assert.equal(mutation.NODE_AUTH_TOKEN, "publish-secret");
-  for (const key of ["NPM_TOKEN", "NPM_PROMOTION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "npm_config__auth"]) assert.equal(mutation[key], undefined, key);
   assert.equal(source.NODE_AUTH_TOKEN, "publish-secret");
   assert.equal(latestUrl("@tech-byte-frontier/hardgate"), "https://registry.npmjs.org/%40tech-byte-frontier%2Fhardgate/latest");
-  assert.throws(() => promotionEnvironment({}), /NODE_AUTH_TOKEN/);
 }
 
 async function testHappyPath() {
@@ -96,12 +117,18 @@ async function testHappyPath() {
     assert.equal(mutation.options.env.NODE_AUTH_TOKEN, "promotion-secret");
     assert.equal(mutation.options.env.GITHUB_TOKEN, undefined);
     const platform = events.find((item) => item.type === "run" && item.command === process.execPath && item.args.includes("hardgate-linux-x64"));
-    assert.deepEqual(platform.args.slice(0, 5), ["scripts/verify-npm-publication.mjs", "--version", version, "--dist", path.resolve(dist)]);
+    assert.deepEqual(platform.args.slice(0, 5), [toolingVerifier, "--version", version, "--dist", path.resolve(dist)]);
     assert.deepEqual(platform.args.slice(-3), ["--platform-only", "--package", "hardgate-linux-x64"]);
     const wrapper = events.find((item) => item.type === "run" && item.command === process.execPath && !item.args.includes("--platform-only"));
     assert.equal(wrapper.args.includes("--package"), false);
     assert.equal(platform.options.env.NODE_AUTH_TOKEN, undefined);
     assert.equal(wrapper.options.env.GITHUB_TOKEN, undefined);
+    for (const event of events.filter((item) => item.type === "run")) {
+      assert.equal(fs.existsSync(event.options.env.npm_config_userconfig), false);
+      assert.equal(fs.existsSync(event.options.env.npm_config_globalconfig), false);
+      assert.equal(fs.existsSync(event.options.env.HOME), false);
+      assert.equal(fs.existsSync(event.options.env.npm_config_cache), false);
+    }
     const saved = readReceipt(receiptPath);
     for (const channel of NPM_CHANNELS) {
       assert.equal(saved.channels[channel].state, "promoted", channel);
@@ -110,6 +137,28 @@ async function testHappyPath() {
     }
     assert.equal(saved.channels[CHANNELS.crate].state, "exact_consumer_verified");
     assert.equal(saved.channels[CHANNELS.githubAssets].state, "exact_consumer_verified");
+  });
+}
+
+async function testToolingVerifierAuthority() {
+  await withFixture(async ({ directory, dist, receiptPath }) => {
+    const stale = path.join(directory, "scripts", "verify-npm-publication.mjs");
+    fs.mkdirSync(path.dirname(stale), { recursive: true });
+    fs.writeFileSync(stale, "throw new Error('stale signed-source verifier');\n");
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
+    const events = [];
+    const baseRunner = runner(states, events);
+    const runProcess = async (command, args, options) => {
+      if (command === process.execPath) {
+        assert.equal(options.cwd, directory);
+        if (args[0] === stale) throw new Error("stale signed-source verifier was selected");
+        assert.equal(args[0], toolingVerifier);
+        assert.match(fs.readFileSync(stale, "utf8"), /stale signed-source verifier/);
+      }
+      return baseRunner(command, args, options);
+    };
+    await run(["--receipt", receiptPath, "--dist", dist], { sourceCwd: directory, env: { NODE_AUTH_TOKEN: "promotion-secret" }, policy: policy(), runProcess, probeLatest: probe(states, events) });
+    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, 7);
   });
 }
 
@@ -124,9 +173,21 @@ async function testGates() {
       await assert.rejects(promoteNpmChannels({ receiptPath: incomplete.receiptPath, distDir: incomplete.dist, sourceCwd, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /exact consumer verification/);
       assert.equal(calls, 0);
     } finally { fs.rmSync(incomplete.directory, { recursive: true, force: true }); }
+    const extra = path.join(dist, "unexpected.txt");
+    fs.writeFileSync(extra, "extra\n");
+    let calls = 0;
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /exactly the receipt/);
+    assert.equal(calls, 0);
+    fs.rmSync(extra);
+    const link = path.join(dist, "unexpected-link");
+    fs.symlinkSync(identity.archives[0].name, link);
+    calls = 0;
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /exactly the receipt/);
+    assert.equal(calls, 0);
+    fs.rmSync(link);
     const altered = path.join(dist, identity.archives[0].name);
     fs.appendFileSync(altered, "tampered\n");
-    let calls = 0;
+    calls = 0;
     await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /digest/);
     assert.equal(calls, 0);
   });
@@ -149,7 +210,14 @@ async function testMetadataAndNoMutation() {
 
 async function testStrictProbeAndAuth() {
   const name = NPM_CHANNELS[0];
-  const call = (output) => probeNpmLatest({ name, sourceCwd, policy: policy(), env: { NODE_AUTH_TOKEN: "secret", GITHUB_TOKEN: "secret" }, runProcess: async (command, args, options) => { assert.equal(command, "curl"); assert.equal(args.at(-1), latestUrl(name)); assert.equal(options.env.NODE_AUTH_TOKEN, undefined); assert.equal(options.env.GITHUB_TOKEN, undefined); return output; } });
+  const call = async (output) => {
+    let config;
+    try {
+      return await probeNpmLatest({ name, sourceCwd, policy: policy(), env: { NODE_AUTH_TOKEN: "secret", GITHUB_TOKEN: "secret" }, runProcess: async (command, args, options) => { assert.equal(command, "curl"); assert.equal(args.at(-1), latestUrl(name)); assert.equal(options.env.NODE_AUTH_TOKEN, undefined); assert.equal(options.env.GITHUB_TOKEN, undefined); config = options.env.npm_config_userconfig; scopedConfig(options); return output; } });
+    } finally {
+      assert.equal(fs.existsSync(config), false);
+    }
+  };
   assert.deepEqual(await call(`{"name":"${name}","version":"1.2.2"}\n200\n`), { state: "present", metadata: { name, version: "1.2.2" }, version: "1.2.2" });
   assert.deepEqual(await call("\n404\n"), { state: "missing" });
   await assert.rejects(call("{}\n401\n"), /fatal HTTP/);
@@ -183,6 +251,31 @@ async function testTransientAndAmbiguous() {
   });
 }
 
+async function testRevalidationBindsEachChannel() {
+  await withFixture(async ({ dist, receiptPath, identity }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
+    const events = [];
+    let mutations = 0;
+    const baseRunner = runner(states, events);
+    const runProcess = async (command, args, options) => {
+      const result = await baseRunner(command, args, options);
+      if (command === "npm" && ++mutations === 1) fs.appendFileSync(path.join(dist, identity.archives[0].name), "changed after immutable proof\n");
+      return result;
+    };
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess, probeLatest: probe(states, events) }), /immutable/);
+    assert.equal(mutations, 1);
+    for (const event of events.filter((item) => item.type === "run")) {
+      assert.equal(fs.existsSync(event.options.env.npm_config_userconfig), false);
+      assert.equal(fs.existsSync(event.options.env.npm_config_globalconfig), false);
+      assert.equal(fs.existsSync(event.options.env.HOME), false);
+      assert.equal(fs.existsSync(event.options.env.npm_config_cache), false);
+    }
+    const saved = readReceipt(receiptPath);
+    assert.equal(saved.channels[NPM_CHANNELS[0]].state, "promoted");
+    assert.equal(saved.channels[NPM_CHANNELS[1]].events.at(-1).code, "npm_immutable_failed");
+  });
+}
+
 async function testReadbackAndPartialResume() {
   await withFixture(async ({ dist, receiptPath }) => {
     const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "missing"]));
@@ -211,9 +304,11 @@ async function testReadbackAndPartialResume() {
 
 testEnvironment();
 await testHappyPath();
+await testToolingVerifierAuthority();
 await testGates();
 await testMetadataAndNoMutation();
 await testStrictProbeAndAuth();
 await testTransientAndAmbiguous();
+await testRevalidationBindsEachChannel();
 await testReadbackAndPartialResume();
 console.log("npm_channel_promotion.test: OK (receipt/digest gates, scoped credentials, strict probes, immutable verification, one-shot mutation, retry, readback, resume, and fixed failures)");

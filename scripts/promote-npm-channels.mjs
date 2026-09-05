@@ -32,6 +32,10 @@ import {
 
 const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 const REQUIRED_NPM_RECEIPT_STATE = "exact_consumer_verified";
+const PLATFORM_ASSETS = Object.freeze([
+  "hardgate-linux-x64.tar.gz", "hardgate-linux-x64-musl.tar.gz", "hardgate-linux-arm64.tar.gz",
+  "hardgate-linux-arm64-musl.tar.gz", "hardgate-darwin-x64.tar.gz", "hardgate-darwin-arm64.tar.gz",
+]);
 
 const HASH_CHUNK_BYTES = 64 * 1024;
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
@@ -136,9 +140,26 @@ function hashArchive(file, label) {
   }
 }
 
-/** Validate every receipt archive before any public probe or npm mutation. */
+function expectedGithubAssets(version) {
+  return [...PLATFORM_ASSETS, "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
+}
+
+function exactDistSet(receipt, directory) {
+  const expected = expectedGithubAssets(receipt.identity.version);
+  const identityNames = receipt.identity.archives.map((archive) => archive.name);
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+  catch (cause) { throw fail("npm_dist_integrity", "dist could not be listed", cause); }
+  const actual = entries.map((entry) => entry.name).sort();
+  if (JSON.stringify(identityNames) !== JSON.stringify(expected) || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw fail("npm_dist_integrity", "dist must contain exactly the receipt release assets");
+  }
+  if (entries.some((entry) => entry.isSymbolicLink() || !entry.isFile())) throw fail("npm_dist_integrity", "dist release assets must be regular files");
+}
+
 function verifyDistributionDigests(receipt, distDir) {
   const directory = assertRegularDirectory(path.resolve(distDir), "dist");
+  exactDistSet(receipt, directory);
   for (const archive of receipt.identity.archives) {
     const actual = hashArchive(archivePath(directory, archive.name), archive.name);
     if (actual !== archive.sha256) {
@@ -243,6 +264,7 @@ export async function promoteNpmChannels({
         runProcess,
         probeLatest,
         verifyImmutable,
+        revalidate: () => verifyDistributionDigests(receipt, directory),
       });
       // A successful latest readback records only the durable promoted state.
       // The native consumer matrix owns default_consumer_verified later.
