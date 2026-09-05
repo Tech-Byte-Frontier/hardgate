@@ -81,7 +81,7 @@ pub fn walk_node(
         });
     }
 
-    check_boolean_operator(node, ctx.source, kind, state);
+    check_boolean_operator(node, kind, state);
     check_statement(kind, state);
     check_halstead(node, ctx.source, kind, state);
     check_abc(kind, state);
@@ -180,29 +180,13 @@ fn human_readable_branch(kind: &str) -> &'static str {
     "branching construct"
 }
 
-fn check_boolean_operator(node: Node, source: &[u8], kind: &str, state: &mut AnalysisState) {
+fn check_boolean_operator(node: Node, kind: &str, state: &mut AnalysisState) {
     if kind != "binary_expression" && kind != "boolean_operator" {
         return;
     }
-    // Prefer the direct operator token over whole-subtree text so nested
-    // `a && b || c` counts each operator once instead of double-counting
-    // the outer node (whose text contains both operators).
-    let op_label = direct_boolean_operator(node, source).or_else(|| {
-        let Ok(text) = node.utf8_text(source) else {
-            return None;
-        };
-        if text.contains("&&") {
-            Some("&&")
-        } else if text.contains("||") {
-            Some("||")
-        } else if text.contains(" and ") {
-            Some("and")
-        } else if text.contains(" or ") {
-            Some("or")
-        } else {
-            None
-        }
-    });
+    // Only the grammar's direct operator token counts. Nested operands,
+    // comments, string literals and identifiers cannot add a second branch.
+    let op_label = direct_boolean_operator(node);
 
     if let Some(op) = op_label {
         let line = node.start_position().row + 1;
@@ -229,20 +213,11 @@ fn check_boolean_operator(node: Node, source: &[u8], kind: &str, state: &mut Ana
     }
 }
 
-fn direct_boolean_operator(node: Node, source: &[u8]) -> Option<&'static str> {
+fn direct_boolean_operator(node: Node) -> Option<&'static str> {
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(op) = classify_operator_token(child.kind()) {
-            return Some(op);
-        }
-        if child.child_count() == 0
-            && let Ok(t) = child.utf8_text(source)
-            && let Some(op) = classify_operator_token(t)
-        {
-            return Some(op);
-        }
-    }
-    None
+    node.children(&mut cursor)
+        .filter(|child| !child.is_named())
+        .find_map(|child| classify_operator_token(child.kind()))
 }
 
 fn classify_operator_token(token: &str) -> Option<&'static str> {
