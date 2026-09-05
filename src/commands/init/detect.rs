@@ -494,3 +494,6 @@ fn add_unconfigured_commands(detection: &mut Detection) {
         detection.add_missing("linter command is not configured; add orchestration.lint");
     }
 }
+#[cfg(test)]
+#[path = "detect_tests.rs"]
+mod tests;

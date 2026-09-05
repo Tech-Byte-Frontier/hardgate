@@ -172,3 +172,7 @@ fn append_command(output: &mut String, key: &str, command: Option<&str>) {
         output.push_str(&format!("{key} = {quoted}\n"));
     }
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

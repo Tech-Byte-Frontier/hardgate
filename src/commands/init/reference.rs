@@ -17,3 +17,7 @@ pub(crate) fn legacy_reference_status(root: &Path, branch: &str) -> ReferenceSta
         Err(_) => ReferenceStatus::Unknown,
     }
 }
+
+#[cfg(test)]
+#[path = "reference_tests.rs"]
+mod tests;

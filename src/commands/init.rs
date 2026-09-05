@@ -377,3 +377,7 @@ fn write_stderr(content: &str) -> Result<()> {
     writer.flush()?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "init/init_tests.rs"]
+mod tests;

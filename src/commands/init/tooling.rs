@@ -150,3 +150,7 @@ fn set_if_missing(command: &mut Option<String>, value: &str) {
         *command = Some(value.to_string());
     }
 }
+
+#[cfg(test)]
+#[path = "tooling_tests.rs"]
+mod tests;
