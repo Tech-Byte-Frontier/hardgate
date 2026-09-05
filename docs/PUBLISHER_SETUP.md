@@ -1,160 +1,113 @@
-# Publisher setup proposal
+# Publisher setup
 
-**Status:** review-only; this does not authorize a publish or change npm, crates.io,
-GitHub Actions, repository rules, or secrets. **Verified:** 2026-09-04 against this
-checkout and the official sources linked below.
+**Status:** review-only operational contract. This page does not authorize a
+publication or change npm, crates.io, GitHub Actions, repository rules, or
+secrets. It was checked on 2026-09-04 against the local dirty
+`/tmp/hardgate-audit-20260904/release-flow` proposal. That worktree and its
+helper branches are not deployed evidence; confirm the signed `main` workflow,
+the actual CI run, and public registry state before acting.
 
-## Current release state
+## Release identity and pins
 
-The active workflow is `.github/workflows/release.yml`. Repository-wide pins are Node
-`26.8.1`, npm `12.0.2` (the workflow `env` block),
-`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), and
-`actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` (`v7.0.0`).
+The signed annotated `vX.Y.Z` tag identifies the release payload. The workflow
+checks that the tag is an annotated object, verifies it with
+`.github/release-allowed-signers`, and resolves it to the expected source
+commit. `github.sha` identifies the CI-validated workflow/tooling checkout in
+`release-tooling`; tooling fixes must not replace files from the signed tag.
 
-`publish-npm` runs on GitHub-hosted `ubuntu-24.04` with job-scoped `contents: read`,
-`actions: read`, and `id-token: write`. `publish-crates` has no job-level permissions
-block and inherits `contents: read` and `actions: read` from the workflow defaults; it
-cannot request OIDC today.
-The active authentication mode is **token**:
+The local proposal pins Node `26.8.1`, npm `12.0.2`, and these immutable action
+commits:
 
-- `publication-preflight` requires `secrets.NPM_TOKEN` as `NODE_AUTH_TOKEN`
-  in the `Authenticate the npm publication credential` step; `publish-npm` uses it in
-  `Publish and verify each platform package in order` and `Publish wrapper only after all platforms are verified`.
-- `publication-preflight` and `publish-crates` require `secrets.CARGO_REGISTRY_TOKEN`
-  in `Require the crates.io publication credential` and `Publish crate when exact version is missing`, respectively.
-- The npm child process runs `npm publish --provenance --access public --ignore-scripts`;
-  the token is unset before the publication verifier.
-No remote trusted-publisher setting, GitHub environment, or secret value was read. Treat
-each external binding below as unconfigured until a maintainer records fresh UI/API read
-evidence during an authorized setup change.
-## Proposed authentication modes
+| Action | Commit | Release label |
+| --- | --- | --- |
+| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | `v7.0.1` |
+| `actions/setup-node` | `820762786026740c76f36085b0efc47a31fe5020` | `v7.0.0` |
+| `actions/download-artifact` | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` | `v8.0.1` |
+| `actions/upload-artifact` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | `v7.0.1` |
 
-The workflow should select exactly one explicit mode per registry: `token` or `trusted`.
-An absent, malformed, or mixed mode must fail before publication. A failed OIDC exchange
-must never silently fall back to a long-lived token in the same run.
-### npm: current token mode
+Re-read the live workflow before relying on these values. A local checkout is
+not proof that the remote workflow or publisher configuration has changed.
 
-Keep the current `NPM_TOKEN` secret and `NODE_AUTH_TOKEN` handoff while trusted publishing
-is reviewed. Keep the non-empty check and `npm whoami` token preflight; do not print the
-value or leave it set for the verifier.
-### npm: proposed trusted-publisher mode
+## npm authentication modes
 
-Configure these seven packages independently in npm package settings:
+`NPM_PUBLISH_AUTH_MODE` selects exactly one npm publication mode. An unset
+repository variable defaults to `token`; any supplied value must be `token` or
+`trusted`. There is no implicit fallback between modes.
 
-`hardgate-linux-x64`, `hardgate-linux-x64-musl`, `hardgate-linux-arm64`,
-`hardgate-linux-arm64-musl`, `hardgate-darwin-x64`, `hardgate-darwin-arm64`, and
-`@tech-byte-frontier/hardgate`.
-For every package, propose this binding:
+- **`token`:** publication receives the existing `secrets.NPM_TOKEN` as
+  `NODE_AUTH_TOKEN`. The preflight `npm whoami` check is evidence for token
+  authentication only; it does not prove an OIDC trusted-publisher binding.
+- **`trusted`:** publication receives GitHub's OIDC request credentials and
+  strips registry tokens from the publish environment. The job needs
+  `id-token: write`; a failed OIDC exchange stops the run and does not fall back
+  to `NPM_TOKEN`. Presence of OIDC variables is a prerequisite, not proof that
+  npm has the package binding; npm publish is the authoritative binding check.
 
-| Field | Value |
-| --- | --- |
-| Provider | GitHub Actions |
-| Owner | `Tech-Byte-Frontier` |
-| Repository | `hardgate` |
-| Workflow filename | `release.yml` |
-| Environment | unset; add only if the workflow later names an exact environment |
+The pinned npm `12.0.2` publisher does not use OIDC to perform a dist-tag
+promotion. Therefore every promotion from `hardgate-candidate` to `latest`
+must use the existing `secrets.NPM_TOKEN` separately, including when package
+publication used `trusted` mode. This is not a new secret and must not be
+silently substituted or omitted. Keep the promotion credential scoped to the
+promotion operation, and never print it or carry it into read-only verifiers.
 
-npm asks for the workflow **filename**, not `.github/workflows/release.yml`. Every current
-manifest points `repository.url` to `git+https://github.com/Tech-Byte-Frontier/hardgate.git`;
-recheck all seven before saving the bindings.
-npm Trusted Publishing requires a GitHub-hosted runner, npm CLI `>=11.5.1`, Node
-`>=22.14.0`, `contents: read`, and `id-token: write`. The current publisher pins Node
-`26.8.1` and npm `12.0.2`, so this publisher runtime meets those minimums without raising
-the package consumer engine floor of Node `>=18`.
-
-Retain setup-node's registry URL, the provenance publish command, and the exact action
-SHAs above. Trusted mode must remove `NODE_AUTH_TOKEN` from the publish environment.
-`npm whoami` is a token check, not an OIDC configuration test; npm says a trusted-publisher
-mismatch is detected at publish time. Static checks must fail closed and the package loop
-must stop on the first trusted-auth failure.
-### crates.io: current token mode
-
-Keep `CARGO_REGISTRY_TOKEN` in the current mode. The workflow makes an anonymous exact
-version-state probe and publishes only when that version is absent; it has no non-mutating
-registry credential check. Preserve this behavior and never log the token.
-### crates.io: proposed trusted-publisher mode
-
-Configure the `hardgate` crate once in the crates.io Trusted Publishing UI:
+The seven npm channels are the six platform packages and
+`@tech-byte-frontier/hardgate`:
 
 ```text
-Provider: GitHub Actions
-Owner: Tech-Byte-Frontier
-Repository: hardgate
-Workflow filename: release.yml
-Environment: unset unless the workflow is explicitly changed to use one
+hardgate-linux-x64
+hardgate-linux-x64-musl
+hardgate-linux-arm64
+hardgate-linux-arm64-musl
+hardgate-darwin-x64
+hardgate-darwin-arm64
+@tech-byte-frontier/hardgate
 ```
-Crates.io requires an initial manual publication before creating a trusted-publisher
-configuration. Confirm that prerequisite in the crates.io UI; the workflow version probe
-does not prove the external setting exists.
-Trusted mode requires job-scoped `id-token: write` and `contents: read`, plus the official
-`rust-lang/crates-io-auth-action` pinned to a reviewed full commit SHA. The official v1.0.0
-release identifies `63a7064947ceca9989005e118db3a5fecdc9259f`; reverify before use. Pass only
-that action's temporary-token output to `cargo publish`, then unset it. The current workflow
-has neither the permission nor the action; do not copy the action docs' floating `@v1` into this
-pinned workflow. The action's post-job revocation behavior should remain enabled.
-The current documented crates.io flow is GitHub Actions: it exchanges GitHub OIDC identity
-for a short-lived registry token; it does not make `cargo publish` transactional. An exchange
-failure is terminal for the job, with no automatic `CARGO_REGISTRY_TOKEN` fallback.
-## Fail-closed activation checks
 
-Before selecting trusted mode, an authorized workflow change must verify:
+The intended publisher sequence is all six platform packages first, then the
+wrapper. Each package is published at most once for the immutable version,
+verified independently, and promoted to `latest` at most once after all exact
+consumer evidence is merged. npm versions are immutable; an ambiguous result
+requires public-state inspection and maintainer review rather than a blind
+retry.
 
-1. The job is GitHub-hosted and the exact workflow filename is `release.yml`.
-2. Each trusted publisher job keeps job-scoped `contents: read` and `actions: read` (needed by artifact downloads) and adds `id-token: write`; do not rely on broader workflow defaults.
-3. Node/npm meet npm's documented minimums and package metadata identifies
-   `Tech-Byte-Frontier/hardgate`.
-4. Each external binding matches owner, repository, workflow file, and any environment
-   claim exactly; an unknown environment is an error.
-5. Trusted mode has no registry token in its environment. Token mode has its named secret
-   and no OIDC exchange step.
-6. The signed annotated-tag check succeeds before authentication and immediately before
-   publication, and the tag resolves to the expected commit.
+## crates.io authentication
 
-Local preflight may validate declarations and permissions, but must not pretend to prove a
-remote trusted-publisher match without exchanging a token. The first authorized trusted
-publish is the definitive external check. Stop before the next package or registry on
-failure, retain receipts for successful operations, and run existing public-state verifiers.
-The npm packages, crate, and GitHub release are separate systems; this proposal makes no
-atomic cross-registry transaction claim.
+The existing Cargo flow remains token-based through
+`secrets.CARGO_REGISTRY_TOKEN`. Preserve its exact-version probe, publication,
+and independent install/identity verification. Do not claim that npm or GitHub
+success covers crate publication; the release receipt keeps the crate channel
+separate and the final check verifies the intended `max_stable_version`.
 
-Keep token mode available until an authorized run verifies every trusted binding. Retire
-old secrets only in a separate reviewed change after that evidence. A failed trusted run
-may be retried in explicit token mode only after a maintainer changes and reviews the mode.
-## Signed-tag signer overlap and rotation
+A crates.io trusted-publisher setup is deferred. It requires separately
+authorized external configuration and a reviewed pinned auth action; this page
+does not claim that configuration exists and does not add a fallback mode.
 
-Keep `.github/release-allowed-signers` under reviewable version control. Every publication
-job must continue to require an annotated tag object (`git cat-file -t ... = tag`), verify
-it with `git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag`, and
-verify that it resolves to the expected commit. OIDC setup does not replace this authorization.
+## Activation evidence
 
-For a planned rotation:
+Before enabling or changing a mode, an authorized maintainer must record:
 
-1. Add the new public signer through a signed, reviewed commit while retaining the old signer
-   for the overlap window. Check release contract tests before changing the allowed-key count;
-   do not weaken a one-signer policy implicitly.
-2. Create the next signed annotated tag with the new signer and require every publication job
-   to pass the existing tag and commit checks.
-3. Keep the old signer until all in-flight tags and recovery work using it are complete. Remove
-   it only in a later signed, reviewed commit, then rerun release contract checks.
+1. The signed reviewed workflow commit and the exact workflow filename
+   `release.yml`.
+2. The selected `token` or `trusted` mode, job-scoped permissions, and the
+   absence of registry tokens in trusted publish environments.
+3. The seven npm package bindings, if trusted mode is selected, matching owner
+   `Tech-Byte-Frontier`, repository `hardgate`, workflow filename `release.yml`,
+   and any explicitly named environment.
+4. The separate `NPM_TOKEN` promotion credential and its restricted use after
+   exact receipt verification.
+5. The signed tag, source commit, tooling commit, bundle digest, receipt
+   identity, and independent public readbacks for every channel.
 
-If the signer is unavailable or verification fails, stop. Do not bypass the allowlist, accept
-an unsigned/lightweight tag, or invent a recovery identity.
+No local `npm whoami`, OIDC variable check, or static workflow inspection can
+prove a remote trusted-publisher binding. Do not report one as verified without
+the authorized publish-time evidence.
 
-## Official sources
+## References
 
-- [npm Trusted Publishers](https://docs.npmjs.com/trusted-publishers/) — GitHub fields,
-  GitHub-hosted limitation, Node/npm minimums, permissions, provenance, and migration.
-- [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)
-  — `id-token: write` and workflow identity claims.
-- [crates.io Trusted Publishing](https://crates.io/docs/trusted-publishing) — current
-  registry setup and supported claims; re-read its UI instructions at activation.
-- [Rust crates.io development update](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)
-  — GitHub Actions OIDC, initial manual publication, and the auth-action flow.
-- [rust-lang/crates-io-auth-action](https://github.com/rust-lang/crates-io-auth-action) and
-  its [official releases](https://github.com/rust-lang/crates-io-auth-action/releases) —
-  temporary-token output, post-job revocation, and reviewed action pins.
-- [Cargo publish reference](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) —
-  publish and credential behavior.
-
-Re-verify links, external bindings, action SHAs, and permissions immediately before enabling
-trusted mode. This proposal records no authorization to do so.
+- [Release recovery contract](RELEASE_RECOVERY.md)
+- [Maintainer release notes](MAINTAINERS.md)
+- [npm Trusted Publishers](https://docs.npmjs.com/trusted-publishers/)
+- [GitHub Actions OIDC](https://docs.github.com/en/actions/reference/security/oidc)
+- [crates.io Trusted Publishing](https://crates.io/docs/trusted-publishing)
+- [crates.io auth action](https://github.com/rust-lang/crates-io-auth-action)
+- [Cargo publish reference](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
