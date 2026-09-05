@@ -286,8 +286,10 @@ mod tests {
         assert_eq!(sibling.max_nesting_depth, Some(97));
 
         let config_role = effective_function_budgets(&config, FileRole::Config);
-        assert_eq!(config_role.max_parameters, Some(94));
-        assert_eq!(config_role.max_nesting_depth, Some(97));
+        assert_eq!(
+            (config_role.max_parameters, config_role.max_nesting_depth),
+            (Some(94), Some(97))
+        );
     }
 
     #[test]
