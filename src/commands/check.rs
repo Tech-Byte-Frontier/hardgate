@@ -227,7 +227,9 @@ fn run_verification_phase(
         verify_mutation_at(config, None, report, root);
     }
 
-    report.advisories.push(check_scope_advisory(config, opts));
+    report
+        .advisories
+        .push(super::gate_evidence::check_scope_advisory(config, opts));
     Ok(())
 }
 
@@ -352,31 +354,6 @@ fn load_changed_lines_for_coverage(
             );
             Ok(Some(Default::default()))
         }
-    }
-}
-
-fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String {
-    let mut omitted = Vec::new();
-    if !opts.all {
-        omitted.push("configured formatter/linter/test commands");
-    }
-    if !opts.dead_code && !config.analysis.dead_code.enabled {
-        omitted.push("dead-code analysis");
-    }
-    if !config.coverage.enabled {
-        omitted.push("coverage evidence (disabled by policy)");
-    }
-    if !config.mutation.enabled {
-        omitted.push("mutation evidence (disabled by policy)");
-    }
-    if omitted.is_empty() {
-        "This check evaluated every configured report and static/orchestration engine; native mutation execution remains a separate `hardgate mutate` command."
-            .to_string()
-    } else {
-        format!(
-            "This is a partial gate; omitted {}. Use `check --all --dead-code`, `verify`, and an enabled `mutate` policy for complete evidence.",
-            omitted.join(", ")
-        )
     }
 }
 
