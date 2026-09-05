@@ -29,7 +29,30 @@ const log = process.env.FAKE_LOG;
 const state = process.env.FAKE_STATE;
 const attempt = state ? (Number(fs.existsSync(state) ? fs.readFileSync(state, 'utf8') : 0) + 1) : 1;
 if (state) fs.writeFileSync(state, String(attempt));
-if (log) fs.appendFileSync(log, JSON.stringify({spec, force: args.includes('--force'), hardgate: process.env.HARDGATE_BINARY || null, nodeOptions: process.env.NODE_OPTIONS || null, nodePath: process.env.NODE_PATH || null, tls: process.env.NODE_TLS_REJECT_UNAUTHORIZED || null, proxy: process.env.HTTPS_PROXY || null}) + '\n');
+if (log) fs.appendFileSync(log, JSON.stringify({
+  spec,
+  force: args.includes('--force'),
+  hardgate: process.env.HARDGATE_BINARY || null,
+  nodeOptions: process.env.NODE_OPTIONS || null,
+  nodePath: process.env.NODE_PATH || null,
+  tls: process.env.NODE_TLS_REJECT_UNAUTHORIZED || null,
+  proxy: process.env.HTTPS_PROXY || null,
+  ldPreload: process.env.LD_PRELOAD || null,
+  ldLibraryPath: process.env.LD_LIBRARY_PATH || null,
+  extraCaCerts: process.env.NODE_EXTRA_CA_CERTS || null,
+  sslCertFile: process.env.SSL_CERT_FILE || null,
+  sslCertDir: process.env.SSL_CERT_DIR || null,
+  gitConfigGlobal: process.env.GIT_CONFIG_GLOBAL || null,
+  gitConfigSystem: process.env.GIT_CONFIG_SYSTEM || null,
+  home: process.env.HOME || null,
+  npmConfigRegistry: process.env.NPM_CONFIG_REGISTRY || null,
+  npmConfigUser: process.env.NPM_CONFIG_USERCONFIG || null,
+  npmConfigGlobal: process.env.NPM_CONFIG_GLOBALCONFIG || null,
+  npmConfigCache: process.env.NPM_CONFIG_CACHE || null,
+  npmConfigPrefix: process.env.NPM_CONFIG_PREFIX || null,
+  path: process.env.PATH || null,
+  tempDir: process.env.TMPDIR || null,
+}) + '\n');
 if (attempt <= Number(process.env.FAKE_NPM_FAILURES || 0)) { console.error('npm error code E503'); process.exitCode = 1; setTimeout(() => {}, 100); }
 function writeExecutable(file, bytes) {
   fs.mkdirSync(path.dirname(file), {recursive: true});

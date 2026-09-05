@@ -145,6 +145,10 @@ async function cleanupFailure(cleanup, workRoot) {
   return undefined;
 }
 
+function preserveFailure(primaryFailure, cleanupFailureValue) {
+  return primaryFailure ?? cleanupFailureValue;
+}
+
 export async function verifyNativeChannel(request, options = {}) {
   const values = requestValues(request);
   const host = options.host ?? detectHost();
@@ -173,7 +177,7 @@ export async function verifyNativeChannel(request, options = {}) {
   } catch (error) {
     failure = error;
   }
-  failure ??= await cleanupFailure(cleanup, workRoot);
+  failure = preserveFailure(failure, await cleanupFailure(cleanup, workRoot));
   if (failure) throw failure;
   if (values.output !== undefined) writeProofAtomic(values.output, proof);
   return proof;

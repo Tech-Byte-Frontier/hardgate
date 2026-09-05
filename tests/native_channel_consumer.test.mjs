@@ -1,6 +1,3 @@
-// Offline contract for native npm channel verification. The fake npm command
-// writes real executable fixtures into isolated prefixes; no registry or Rust
-// build is contacted.
 "use strict";
 
 import assert from "node:assert/strict";
@@ -30,7 +27,45 @@ import {
   verifyNativeChannel,
 } from "../scripts/verify-native-channel.mjs";
 
-const exact = await successful();
+function nativeChannelRoots() {
+  return fs.readdirSync(os.tmpdir())
+    .filter((entry) => entry.startsWith("hardgate-native-channel-") && !entry.startsWith("hardgate-native-channel-test-"))
+    .sort();
+}
+
+async function withEnvironment(values, action) {
+  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  try {
+    return await action();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+}
+
+function assertCleanChildCall(call) {
+  for (const key of ["hardgate", "nodeOptions", "nodePath", "tls", "proxy", "ldPreload", "ldLibraryPath", "extraCaCerts", "sslCertFile", "sslCertDir", "gitConfigGlobal", "gitConfigSystem"]) {
+    assert.equal(call[key], null, `${key} must not reach npm`);
+  }
+  assert.notEqual(call.home, injectedEnvironment.HOME);
+  assert.equal(call.npmConfigRegistry, "https://registry.npmjs.org/");
+  assert.notEqual(call.npmConfigUser, injectedEnvironment.NPM_CONFIG_USERCONFIG);
+  assert.notEqual(call.npmConfigCache, injectedEnvironment.NPM_CONFIG_CACHE);
+  assert.equal(call.path, restrictedPath());
+  assert.notEqual(call.tempDir, injectedEnvironment.TMPDIR);
+}
+
+const injectedEnvironment = {
+  HOME: "/tmp/ambient-home", TMPDIR: "/tmp", LD_PRELOAD: "/tmp/ambient-preload.so", LD_LIBRARY_PATH: "/tmp/ambient-libraries",
+  NODE_EXTRA_CA_CERTS: "/tmp/ambient-ca.pem", SSL_CERT_FILE: "/tmp/ambient-cert.pem", SSL_CERT_DIR: "/tmp/ambient-certs",
+  GIT_CONFIG_GLOBAL: "/tmp/ambient-gitconfig", GIT_CONFIG_SYSTEM: "/tmp/ambient-gitsystem", NPM_CONFIG_REGISTRY: "https://ambient.example.invalid/",
+  NPM_CONFIG_USERCONFIG: "/tmp/ambient-user.npmrc", NPM_CONFIG_CACHE: "/tmp/ambient-cache", NODE_OPTIONS: "--require=/tmp/ambient.js",
+};
+const sanitized = sanitizedEnvironment(injectedEnvironment);
+assert.equal(sanitized.PATH, restrictedPath());
+for (const key of Object.keys(injectedEnvironment)) assert.equal(sanitized[key], undefined, `${key} must not reach child tools`);
+
+const exact = await withEnvironment(injectedEnvironment, () => successful());
 try {
   assert.deepEqual(exact.proof, {
     schema_version: 1,
@@ -49,7 +84,7 @@ try {
     `hardgate-linux-x64@${version}`,
     `@tech-byte-frontier/hardgate@${version}`,
   ]);
-  assert.ok(calls.every(({hardgate, nodeOptions, nodePath, tls, proxy}) => hardgate === null && nodeOptions === null && nodePath === null && tls === null && proxy === null), "ambient runtime overrides must not reach npm");
+  for (const call of calls) assertCleanChildCall(call);
 } finally {
   fs.rmSync(exact.fixture.directory, {recursive: true, force: true});
 }
@@ -167,6 +202,7 @@ for (const [overrides, expected] of [
   [{binary: Buffer.from("wrong bytes\n")}, /binary bytes do not match/],
   [{environment: {FAKE_INSTALLED_VERSION: "0.4.9"}}, /package identity/],
 ]) {
+  const rootsBeforeFailure = nativeChannelRoots();
   const testFixture = fixture();
   try {
     await assert.rejects(
@@ -182,6 +218,7 @@ for (const [overrides, expected] of [
       expected,
     );
     assert.equal(fs.existsSync(testFixture.output), false, "failed verification must not write proof");
+    assert.deepEqual(nativeChannelRoots(), rootsBeforeFailure, "failed verification must clean its temporary root");
   } finally {
     fs.rmSync(testFixture.directory, {recursive: true, force: true});
   }

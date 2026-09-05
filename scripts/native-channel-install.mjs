@@ -68,6 +68,31 @@ function verifyInstalledBinary({ prefix, packageName, version, expectedSha256, l
   return { root, manifest, logical, real, sha256 };
 }
 
+function resetInstallPaths(paths) {
+  for (const directory of [paths.prefix, paths.cache, paths.home, paths.temp]) fs.rmSync(directory, { recursive: true, force: true });
+  for (const file of [paths.userConfig, paths.globalConfig]) fs.rmSync(file, { force: true });
+}
+
+function prepareInstall(paths) {
+  for (const directory of [paths.prefix, paths.cache, paths.home, paths.temp]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(paths.userConfig, `registry=${PUBLIC_NPM_REGISTRY}\naudit=false\nfund=false\nignore-scripts=true\n`, { mode: 0o600 });
+  fs.writeFileSync(paths.globalConfig, "", { mode: 0o600 });
+}
+
+function installEnvironment(paths) {
+  return sanitizedEnvironment(undefined, {
+    homeValue: paths.home,
+    tempValue: paths.temp,
+    npmConfig: {
+      userConfig: paths.userConfig,
+      globalConfig: paths.globalConfig,
+      cache: paths.cache,
+      prefix: paths.prefix,
+      registry: PUBLIC_NPM_REGISTRY,
+    },
+  });
+}
+
 export async function installNpmPackage({
   packageName,
   version,
@@ -76,6 +101,8 @@ export async function installNpmPackage({
   cache,
   userConfig,
   globalConfig,
+  home = path.join(path.dirname(prefix), "home"),
+  temp = path.join(path.dirname(prefix), "tmp"),
   force = false,
   npmCommand = nodeNpmPath(),
   runProcess = runReleaseProcess,
@@ -101,22 +128,15 @@ export async function installNpmPackage({
   ];
   if (force) args.push("--force");
   args.push(npmPackageSpec(packageName, version, mode));
+  const paths = {prefix, cache, userConfig, globalConfig, home, temp};
   let lastError;
   for (let attempt = 1; attempt <= policy.attempts; attempt += 1) {
-    if (attempt > 1) {
-      fs.rmSync(prefix, { recursive: true, force: true });
-      fs.rmSync(cache, { recursive: true, force: true });
-      fs.rmSync(userConfig, { force: true });
-      fs.rmSync(globalConfig, { force: true });
-    }
-    fs.mkdirSync(prefix, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(cache, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(userConfig, `registry=${PUBLIC_NPM_REGISTRY}\naudit=false\nfund=false\nignore-scripts=true\n`, { mode: 0o600 });
-    fs.writeFileSync(globalConfig, "", { mode: 0o600 });
+    if (attempt > 1) resetInstallPaths(paths);
+    prepareInstall(paths);
     try {
       await runProcess(npmCommand, args, {
         cwd,
-        env: sanitizedEnvironment(),
+        env: installEnvironment(paths),
         timeoutMs: childTimeoutMs(policy),
         maxBuffer: MAX_COMMAND_OUTPUT,
       });
@@ -156,6 +176,8 @@ function installPaths(root, name) {
     cache: path.join(base, "cache"),
     userConfig: path.join(base, "user.npmrc"),
     globalConfig: path.join(base, "global.npmrc"),
+    home: path.join(base, "home"),
+    temp: path.join(base, "tmp"),
   };
 }
 
@@ -227,7 +249,11 @@ export async function verifyWrapperConsumer({ values, host, policy, workRoot, in
   });
   const wrapperCommand = checkedExecutable(wrapperPaths.prefix, path.join(wrapperPaths.prefix, "node_modules", ".bin", "hardgate"), "wrapper command");
   const sentinelDirectory = createPathSentinel(wrapperPaths.prefix);
-  const wrapperEnvironment = sanitizedEnvironment(undefined, { pathValue: `${sentinelDirectory}:${restrictedPath()}` });
+  const wrapperEnvironment = sanitizedEnvironment(undefined, {
+    pathValue: `${sentinelDirectory}:${restrictedPath()}`,
+    homeValue: wrapperPaths.home,
+    tempValue: wrapperPaths.temp,
+  });
   await verifyVersion(selected.real, expectedOutput, { runProcess, policy, cwd: wrapperPaths.prefix, label: "wrapper native package" });
   await verifyVersion(wrapperCommand, expectedOutput, { runProcess, policy, cwd: wrapperPaths.prefix, label: "wrapper command", env: wrapperEnvironment });
   return { executable: stableExecutablePath(selectedName), sha256: selected.sha256 };

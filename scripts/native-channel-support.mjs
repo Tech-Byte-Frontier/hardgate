@@ -79,6 +79,16 @@ export const PROOF_VERSION = 1;
 
 const SHA = /^[0-9a-f]{40}$/;
 const OPTION_NAMES = new Set(["package", "version", "source-sha", "archive", "mode", "output", "wrapper-source"]);
+const LOCALE_ENV_KEYS = Object.freeze([
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "LC_MONETARY",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "TZ",
+]);
 
 export function fail(message) {
   throw new Error(`verify-native-channel: ${message}`);
@@ -242,8 +252,17 @@ export function npmPackageSpec(packageName, version, mode) {
   return `${packageName}@${mode === "exact" ? version : "latest"}`;
 }
 
+function verifiedPath(pathValue) {
+  if (typeof pathValue !== "string" || pathValue.length === 0) fail("PATH must be a non-empty fixed path");
+  const entries = pathValue.split(path.delimiter);
+  if (entries.some((entry) => entry.length === 0 || !path.isAbsolute(entry) || !fs.statSync(entry).isDirectory())) {
+    fail("PATH contains an unverified directory");
+  }
+  return pathValue;
+}
+
 export function restrictedPath() {
-  return `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+  return verifiedPath([path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter));
 }
 
 export function nodeNpmPath() {
@@ -252,25 +271,35 @@ export function nodeNpmPath() {
   return candidate;
 }
 
-export function sanitizedEnvironment(source = process.env, { pathValue } = {}) {
-  const result = { ...source };
-  for (const key of Object.keys(result)) {
-    const lower = key.toLowerCase();
-    if (
-      lower.startsWith("npm_config_") ||
-      /(?:token|secret|password|credential|authorization|auth|private[_-]?key|github|proxy)/i.test(key)
-    ) {
-      delete result[key];
-    }
+function verifiedEnvironmentPath(value, label) {
+  if (typeof value !== "string" || value.length === 0 || !path.isAbsolute(value)) fail(`${label} must be an absolute isolated path`);
+  return value;
+}
+
+export function sanitizedEnvironment(source = process.env, { pathValue, homeValue, tempValue, npmConfig = {} } = {}) {
+  const result = {};
+  for (const key of LOCALE_ENV_KEYS) {
+    if (typeof source?.[key] === "string") result[key] = source[key];
   }
-  delete result.HARDGATE_BINARY;
-  delete result.HARDGATE_LAUNCHER_DEPTH;
-  delete result.NODE_OPTIONS;
-  delete result.NODE_PATH;
-  delete result.NODE_TLS_REJECT_UNAUTHORIZED;
-  delete result.TAR_OPTIONS;
-  delete result.tar_options;
-  result.PATH = pathValue ?? restrictedPath();
+  result.PATH = verifiedPath(pathValue ?? restrictedPath());
+  if (homeValue !== undefined) result.HOME = verifiedEnvironmentPath(homeValue, "HOME");
+  if (tempValue !== undefined) {
+    const temp = verifiedEnvironmentPath(tempValue, "temporary directory");
+    result.TMPDIR = temp;
+    result.TMP = temp;
+    result.TEMP = temp;
+  }
+  const configValues = {
+    NPM_CONFIG_USERCONFIG: npmConfig.userConfig,
+    NPM_CONFIG_GLOBALCONFIG: npmConfig.globalConfig,
+    NPM_CONFIG_CACHE: npmConfig.cache,
+    NPM_CONFIG_PREFIX: npmConfig.prefix,
+    NPM_CONFIG_REGISTRY: npmConfig.registry,
+  };
+  for (const [key, value] of Object.entries(configValues)) {
+    if (value === undefined) continue;
+    result[key] = key === "NPM_CONFIG_REGISTRY" ? String(value) : verifiedEnvironmentPath(value, key);
+  }
   return result;
 }
 
