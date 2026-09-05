@@ -1,4 +1,6 @@
+mod context;
 mod merge;
+pub use context::ConfigContext;
 pub mod preset;
 mod roles;
 mod validation;
@@ -12,7 +14,7 @@ pub use roles::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Root `hardgate.toml` configuration: gate identity plus every engine budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,21 +280,20 @@ pub struct DeadCodeConfig {
 }
 
 impl HardgateConfig {
-    /// Load `hardgate.toml` (or `path`), falling back to the strict-agent
-    /// preset when no config file exists.
+    /// Load the nearest policy up to the Git boundary, or an explicit path.
+    /// Only absent implicit configuration falls back to strict-agent.
     pub fn load_or_default(path: Option<&Path>) -> Result<Self> {
-        let config_path = match path {
-            Some(p) => p.to_path_buf(),
-            None => PathBuf::from("hardgate.toml"),
-        };
+        Ok(ConfigContext::load(path)?.config)
+    }
 
-        if !config_path.exists() {
+    fn load_resolved(path: Option<&Path>) -> Result<Self> {
+        let Some(config_path) = path else {
             let config = Preset::StrictAgent.to_default_config();
             config.validate()?;
             return Ok(config);
-        }
+        };
 
-        let content = fs::read_to_string(&config_path)
+        let content = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read config file at {:?}", config_path))?;
 
         let mut config: HardgateConfig = toml::from_str(&content)

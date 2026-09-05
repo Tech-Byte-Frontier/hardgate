@@ -6,7 +6,7 @@ use super::gate_evidence::{
     run_static_gate_or_empty,
 };
 use super::role_policy::classify_file;
-use crate::config::HardgateConfig;
+use crate::config::{ConfigContext, HardgateConfig};
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
 use crate::engines::coverage::{CoverageEvaluationScope, normalized_repository_key};
@@ -33,9 +33,15 @@ pub struct VerifyOptions {
 /// Run static gates plus coverage and mutation report evaluation.
 /// Exits non-zero when violations are found.
 pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
+    cmd_verify_in(opts, &ConfigContext::load(None)?)
+}
+
+pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Result<()> {
     let start_time = Instant::now();
-    let root = Path::new(".");
-    let config = HardgateConfig::load_or_default(None)?;
+    let root = context.root.as_path();
+    let config = &context.config;
+    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
+    opts.mutation_report = context.input_report(opts.mutation_report);
     let scoped = !opts.paths.is_empty();
 
     let GateRun {
@@ -45,7 +51,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
         read_results,
         functions,
         ..
-    } = run_static_gate_or_empty(&config, false, &opts.paths)?;
+    } = run_static_gate_or_empty(config, false, &opts.paths, root)?;
     if empty {
         report
             .advisories
@@ -53,23 +59,18 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     }
 
     if config.analysis.dead_code.enabled {
-        run_dead_code_analysis(&config, &read_results, root, &mut report)?;
+        run_dead_code_analysis(config, &read_results, root, &mut report)?;
     }
 
-    run_legacy_ratchet(
-        &config,
-        root,
-        &mut report,
-        config.analysis.dead_code.enabled,
-    );
-    run_generated_freshness(&config, root, &mut report);
+    run_legacy_ratchet(config, root, &mut report, config.analysis.dead_code.enabled);
+    run_generated_freshness(config, root, &mut report);
 
     let source_files = if config.coverage.enabled {
         source_files_for_coverage(SourceCoverageRequest {
             files: &files,
             functions: &functions,
             root,
-            config: &config,
+            config,
             report: &mut report,
         })
     } else {
@@ -77,7 +78,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
     };
     verify_coverage_with_scope(
         CoverageVerification {
-            config: &config,
+            config,
             cli_report: opts.coverage_report.clone(),
             functions: &functions,
             changed_lines: None,
@@ -88,7 +89,7 @@ pub fn cmd_verify(opts: VerifyOptions) -> Result<()> {
             root,
         },
     );
-    verify_mutation(&config, opts.mutation_report.clone(), &mut report);
+    verify_mutation_at(config, opts.mutation_report.clone(), &mut report, root);
 
     emit_gate_report(
         &mut report,
@@ -193,14 +194,18 @@ fn evaluate_coverage_report(
         );
         return;
     };
-    let p = Path::new(path_str);
+    let resolved = scope.as_ref().map_or_else(
+        || PathBuf::from(path_str),
+        |scope| scope.root.join(path_str),
+    );
+    let p = resolved.as_path();
     if !p.exists() {
         record_evidence_failure(
             request.report,
             true,
             EvidenceFailure {
                 step: "coverage-report",
-                target: p,
+                target: Path::new(path_str),
                 message: "Required coverage report was not found.".to_string(),
             },
         );
@@ -215,7 +220,7 @@ fn evaluate_coverage_report(
                 true,
                 EvidenceFailure {
                     step: "coverage-report",
-                    target: p,
+                    target: Path::new(path_str),
                     message: format!("Failed to parse required coverage report: {e:#}"),
                 },
             );
@@ -300,7 +305,7 @@ fn source_file_for_coverage(
     config: &HardgateConfig,
     report: &mut GateReport,
 ) -> Option<PathBuf> {
-    let classified = match classify_file(path, config) {
+    let classified = match classify_file(path, config, rust_scope.root) {
         Ok(classified) => classified,
         Err(error) => {
             record_evidence_failure(
@@ -345,6 +350,15 @@ pub fn verify_mutation(
     cli_report: Option<String>,
     report: &mut GateReport,
 ) {
+    verify_mutation_at(config, cli_report, report, Path::new("."));
+}
+
+pub fn verify_mutation_at(
+    config: &HardgateConfig,
+    cli_report: Option<String>,
+    report: &mut GateReport,
+    root: &Path,
+) {
     if !config.mutation.enabled {
         return;
     }
@@ -379,14 +393,15 @@ pub fn verify_mutation(
     }
     let gatekeeper = MutationGatekeeper::new(&config.mutation);
     for r_str in reports {
-        let p = Path::new(&r_str);
+        let resolved = root.join(&r_str);
+        let p = resolved.as_path();
         if !p.exists() {
             record_evidence_failure(
                 report,
                 true,
                 EvidenceFailure {
                     step: "mutation-report",
-                    target: p,
+                    target: Path::new(&r_str),
                     message: "Required mutation report was not found.".to_string(),
                 },
             );
@@ -400,7 +415,7 @@ pub fn verify_mutation(
                     true,
                     EvidenceFailure {
                         step: "mutation-report",
-                        target: p,
+                        target: Path::new(&r_str),
                         message: format!("Failed to parse required mutation report: {e}"),
                     },
                 );

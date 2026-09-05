@@ -10,6 +10,7 @@ pub(crate) use findings::{
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use crate::config::{CloneConfig, FileBudgets, FunctionBudgets, HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
+use crate::discovery::classification::PreparedClassifier;
 use crate::discovery::{ClassifiedFile, FileRole};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -29,18 +30,32 @@ pub(crate) struct Advisory<'a> {
     pub detail: String,
 }
 
-pub(crate) fn classify_file(path: &Path, config: &HardgateConfig) -> Result<ClassifiedFile> {
-    ClassifiedFile::new_with_config(path, &config.classification)
+pub(crate) fn classify_file(
+    path: &Path,
+    config: &HardgateConfig,
+    root: &Path,
+) -> Result<ClassifiedFile> {
+    let classifier = PreparedClassifier::new(&config.classification)?;
+    Ok(classify_prepared(path, &classifier, root))
 }
 
 pub(crate) fn classify_files(
     paths: &[PathBuf],
     config: &HardgateConfig,
+    root: &Path,
 ) -> Result<Vec<ClassifiedFile>> {
-    paths
+    let classifier = PreparedClassifier::new(&config.classification)?;
+    Ok(paths
         .iter()
-        .map(|path| classify_file(path, config))
-        .collect()
+        .map(|path| classify_prepared(path, &classifier, root))
+        .collect())
+}
+
+fn classify_prepared(path: &Path, classifier: &PreparedClassifier, root: &Path) -> ClassifiedFile {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let mut file = classifier.classify(relative);
+    file.path = path.to_path_buf();
+    file
 }
 
 /// Resolve a role severity, falling back to the legacy gate strictness when

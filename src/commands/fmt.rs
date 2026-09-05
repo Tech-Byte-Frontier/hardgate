@@ -1,15 +1,18 @@
-use crate::config::HardgateConfig;
+use crate::config::ConfigContext;
 use crate::engines::OrchestrationEngine;
 use anyhow::Result;
 use colored::*;
-use std::path::Path;
 
 /// Format the project with the configured `[orchestration]` formatter.
 /// With `check_only`, verify formatting without writing changes.
 pub fn cmd_fmt(check_only: bool) -> Result<()> {
-    let config = HardgateConfig::load_or_default(None)?;
+    cmd_fmt_in(check_only, &ConfigContext::load(None)?)
+}
+
+pub fn cmd_fmt_in(check_only: bool, context: &ConfigContext) -> Result<()> {
+    let config = &context.config;
     let engine = OrchestrationEngine::new(&config.orchestration);
-    let root = Path::new(".");
+    let root = context.root.as_path();
 
     let res = if check_only {
         engine.run_format_check(root)

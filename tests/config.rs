@@ -34,36 +34,6 @@ fn test_clean_toml_formatting() {
 }
 
 #[test]
-fn strict_no_config_matches_generated_template_sections() {
-    use hardgate::config::{HardgateConfig, Preset};
-
-    let runtime =
-        HardgateConfig::load_or_default(Some(Path::new("/definitely/missing/hardgate.toml")))
-            .unwrap();
-    let generated: HardgateConfig =
-        toml::from_str(&HardgateConfig::generate_toml_template(Preset::StrictAgent)).unwrap();
-
-    assert_eq!(
-        toml::Value::try_from(&runtime).unwrap(),
-        toml::Value::try_from(&generated).unwrap()
-    );
-
-    let root = tempdir("strict-template-load");
-    let path = root.join("hardgate.toml");
-    std::fs::write(
-        &path,
-        hardgate::config::HardgateConfig::generate_toml_template(Preset::StrictAgent),
-    )
-    .unwrap();
-    let loaded = HardgateConfig::load_or_default(Some(&path)).unwrap();
-    assert_eq!(
-        toml::Value::try_from(&loaded).unwrap(),
-        toml::Value::try_from(&runtime).unwrap()
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
 fn test_preset_templates_keep_tests_visible_to_budget_checks() {
     // Every preset keeps tests in the budget inventory. Role policies provide
     // any softer test thresholds without hiding the files through exclusions.

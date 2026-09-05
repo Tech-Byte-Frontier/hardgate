@@ -1,6 +1,6 @@
 use super::check::{Emission, OutputOptions, emit_gate_report};
 use super::static_gate::{AnalyzeInput, analyze_file_content};
-use crate::config::HardgateConfig;
+use crate::config::ConfigContext;
 use crate::diagnostics::GateReport;
 use crate::engines::{AntiGamingScanner, InvariantsChecker};
 use anyhow::{Context, Result};
@@ -10,9 +10,15 @@ use std::path::Path;
 /// Inspect one file's AST metrics, suppressions, and budgets, then render
 /// and exit non-zero when violations are found.
 pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
+    cmd_scan_in(file_path, opts, &ConfigContext::load(None)?)
+}
+
+pub fn cmd_scan_in(file_path: &Path, opts: OutputOptions, context: &ConfigContext) -> Result<()> {
     let start_time = std::time::Instant::now();
-    let root = Path::new(".");
-    let config = HardgateConfig::load_or_default(None)?;
+    let root = context.root.as_path();
+    let config = &context.config;
+    let resolved = context.input_path(file_path);
+    let file_path = resolved.as_path();
 
     if !file_path.exists() {
         anyhow::bail!("File not found: {:?}", file_path);
@@ -28,7 +34,7 @@ pub fn cmd_scan(file_path: &Path, opts: OutputOptions) -> Result<()> {
         AnalyzeInput {
             path: file_path,
             content: &content,
-            config: &config,
+            config,
             root,
             anti_gaming: &scanner,
             invariants: &invariants,

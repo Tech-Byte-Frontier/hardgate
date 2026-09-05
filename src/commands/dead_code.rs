@@ -22,7 +22,7 @@ pub(crate) fn run_dead_code_analysis(
     let mut graph_contents = Vec::new();
     let mut graph_roles = Vec::new();
     for (path, content) in read_results {
-        let classified = classify_file(path, config)?;
+        let classified = classify_file(path, config, root)?;
         if !classified.ast_supported
             || !matches!(
                 classified.role,

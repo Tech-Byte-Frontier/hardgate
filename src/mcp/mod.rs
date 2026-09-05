@@ -1,5 +1,5 @@
-use crate::commands::{AnalyzeInput, analyze_file_content, run_static_gate_scoped};
-use crate::config::HardgateConfig;
+use crate::commands::{AnalyzeInput, analyze_file_content, run_static_gate_at};
+use crate::config::ConfigContext;
 use crate::diagnostics::GateReport;
 use crate::engines::{AntiGamingScanner, ComplexityAnalyzer, InvariantsChecker};
 use anyhow::{Result, anyhow};
@@ -21,6 +21,10 @@ struct JsonRpcRequest {
 /// Serve the Model Context Protocol over stdio: `hardgate_check`,
 /// `hardgate_scan_file`, and `hardgate_get_metrics` tools for AI assistants.
 pub fn run_mcp_server() -> Result<()> {
+    run_mcp_server_with_config(None)
+}
+
+pub fn run_mcp_server_with_config(config_path: Option<&Path>) -> Result<()> {
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();
     let mut stdout = io::stdout();
@@ -33,7 +37,7 @@ pub fn run_mcp_server() -> Result<()> {
         };
         let trimmed = message.trim();
         if !trimmed.is_empty() {
-            process_mcp_line(trimmed, &mut stdout)?;
+            process_mcp_line(trimmed, &mut stdout, config_path)?;
         }
     }
 
@@ -90,7 +94,7 @@ fn parse_content_length(line: &str) -> Result<Option<usize>> {
         .map_err(|_| anyhow!("MCP Content-Length value overflows usize: {value:?}"))?;
     Ok(Some(length))
 }
-fn process_mcp_line<W: Write>(line: &str, out: &mut W) -> Result<()> {
+fn process_mcp_line<W: Write>(line: &str, out: &mut W, config_path: Option<&Path>) -> Result<()> {
     let request = match serde_json::from_str::<JsonRpcRequest>(line) {
         Ok(req) => req,
         Err(e) => return response::parse_error(out, e),
@@ -100,9 +104,13 @@ fn process_mcp_line<W: Write>(line: &str, out: &mut W) -> Result<()> {
         return response::invalid_request(out, request.id);
     }
 
-    dispatch_mcp_method(&request, out)
+    dispatch_mcp_method(&request, out, config_path)
 }
-fn dispatch_mcp_method<W: Write>(req: &JsonRpcRequest, out: &mut W) -> Result<()> {
+fn dispatch_mcp_method<W: Write>(
+    req: &JsonRpcRequest,
+    out: &mut W,
+    config_path: Option<&Path>,
+) -> Result<()> {
     let id = req.id.clone().unwrap_or(serde_json::Value::Null);
 
     if req.method == "initialize" {
@@ -120,7 +128,7 @@ fn dispatch_mcp_method<W: Write>(req: &JsonRpcRequest, out: &mut W) -> Result<()
         return response::success(out, id, get_tools_list());
     }
     if req.method == "tools/call" {
-        let res = handle_tool_call(req.params.as_ref());
+        let res = handle_tool_call(req.params.as_ref(), config_path);
         return response::success(out, id, res);
     }
     if req.method == "notifications/initialized" {
@@ -174,7 +182,10 @@ fn get_tools_list() -> serde_json::Value {
         ]
     })
 }
-fn handle_tool_call(params: Option<&serde_json::Value>) -> serde_json::Value {
+fn handle_tool_call(
+    params: Option<&serde_json::Value>,
+    config_path: Option<&Path>,
+) -> serde_json::Value {
     let Some(params) = params else {
         return tool_error("Missing tool call parameters");
     };
@@ -185,7 +196,11 @@ fn handle_tool_call(params: Option<&serde_json::Value>) -> serde_json::Value {
         Ok(value) => value,
         Err(error) => return tool_error(error),
     };
-    dispatch_tool(name, &args)
+    let context = match ConfigContext::load(config_path) {
+        Ok(context) => context,
+        Err(error) => return tool_error(&format!("Failed to load hardgate.toml: {error:#}")),
+    };
+    dispatch_tool(name, &args, &context)
 }
 
 fn tool_arguments(params: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
@@ -196,32 +211,27 @@ fn tool_arguments(params: &serde_json::Value) -> Result<serde_json::Value, &'sta
     }
 }
 
-fn dispatch_tool(name: &str, args: &serde_json::Value) -> serde_json::Value {
+fn dispatch_tool(
+    name: &str,
+    args: &serde_json::Value,
+    context: &ConfigContext,
+) -> serde_json::Value {
     match name {
-        "hardgate_check" => execute_check_tool(args),
-        "hardgate_scan_file" => execute_scan_tool(args),
-        "hardgate_get_metrics" => execute_metrics_tool(args),
+        "hardgate_check" => execute_check_with_config(args, context),
+        "hardgate_scan_file" | "hardgate_get_metrics" => execute_file_tool(name, args, context),
         _ => tool_error(&format!("Unknown tool: {}", name)),
     }
 }
-fn execute_check_tool(args: &serde_json::Value) -> serde_json::Value {
-    let config = match load_config() {
-        Ok(c) => c,
-        Err(error) => return error,
-    };
-    execute_check_with_config(args, &config)
-}
-
 fn execute_check_with_config(
     args: &serde_json::Value,
-    config: &HardgateConfig,
+    context: &ConfigContext,
 ) -> serde_json::Value {
     let (diff_only, scoped) = match parse_check_args(args) {
         Ok(parsed) => parsed,
         Err(error) => return tool_error(&error),
     };
-    let paths = scoped.as_deref().unwrap_or_default();
-    let outcome = match run_static_gate_scoped(config, diff_only, paths) {
+    let paths = context.input_paths(scoped.as_deref().unwrap_or_default());
+    let outcome = match run_static_gate_at(&context.config, diff_only, &paths, &context.root) {
         Ok(outcome) => outcome,
         Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
     };
@@ -240,11 +250,6 @@ fn parse_check_args(args: &serde_json::Value) -> Result<(bool, Option<Vec<PathBu
     let diff_only = parse_bool_arg(args, "diff")?;
     let scoped = paths_arg(args)?.map(parse_scoped_paths).transpose()?;
     Ok((diff_only, scoped))
-}
-
-fn load_config() -> Result<HardgateConfig, serde_json::Value> {
-    HardgateConfig::load_or_default(None)
-        .map_err(|error| tool_error(&format!("Failed to load hardgate.toml: {error}")))
 }
 
 fn paths_arg(args: &serde_json::Value) -> Result<Option<&[serde_json::Value]>, String> {
@@ -316,29 +321,33 @@ fn get_str_arg<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, se
         .ok_or_else(|| tool_error(&format!("Missing '{}' parameter", key)))
 }
 
-fn execute_scan_tool(args: &serde_json::Value) -> serde_json::Value {
-    let path_str = match get_str_arg(args, "path") {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-    let path = Path::new(path_str);
-    if !path.exists() {
-        return tool_error(&format!("File not found: {}", path_str));
-    }
-    execute_scan_path(path)
-}
-
-fn execute_scan_path(path: &Path) -> serde_json::Value {
-    let config = match load_config() {
-        Ok(config) => config,
+fn execute_file_tool(
+    name: &str,
+    args: &serde_json::Value,
+    context: &ConfigContext,
+) -> serde_json::Value {
+    let input = match get_str_arg(args, "path") {
+        Ok(path) => path,
         Err(error) => return error,
     };
+    if name == "hardgate_get_metrics" {
+        return execute_metrics_tool(args, context, input);
+    }
+    let path = context.input_path(Path::new(input));
+    if !path.exists() {
+        return tool_error(&format!("File not found: {input}"));
+    }
+    execute_scan_path(&path, context)
+}
+
+fn execute_scan_path(path: &Path, context: &ConfigContext) -> serde_json::Value {
+    let config = &context.config;
     let mut report = GateReport::new(config.gate.name.clone());
     let read_results = match read_files_content(&[path.to_path_buf()]) {
         Ok(contents) => contents,
         Err(error) => return tool_error(&error),
     };
-    let func_count = analyze_file_contents(&read_results, &config, Path::new("."), &mut report);
+    let func_count = analyze_file_contents(&read_results, context, &context.root, &mut report);
 
     report.finalize(1, func_count, 0);
     json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
@@ -346,10 +355,11 @@ fn execute_scan_path(path: &Path) -> serde_json::Value {
 
 fn analyze_file_contents(
     files: &[(PathBuf, String)],
-    config: &HardgateConfig,
+    context: &ConfigContext,
     root: &Path,
     report: &mut GateReport,
 ) -> usize {
+    let config = &context.config;
     let anti_gaming = AntiGamingScanner::new(&config.anti_gaming);
     let invariants = InvariantsChecker::new(&config.invariants.rules);
     let mut func_count = 0;
@@ -372,34 +382,37 @@ fn analyze_file_contents(
     func_count
 }
 
-fn execute_metrics_tool(args: &serde_json::Value) -> serde_json::Value {
-    let path_str = match get_str_arg(args, "path") {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
+fn execute_metrics_tool(
+    args: &serde_json::Value,
+    context: &ConfigContext,
+    input: &str,
+) -> serde_json::Value {
+    let path = context.input_path(Path::new(input));
     let symbol_str = match get_str_arg(args, "symbol") {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    let Ok(content) = fs::read_to_string(path_str) else {
-        return tool_error(&format!("Cannot open: {}", path_str));
+    let Ok(content) = fs::read_to_string(&path) else {
+        return tool_error(&format!("Cannot open: {input}"));
     };
 
     let mut analyzer = ComplexityAnalyzer::new();
-    let funcs = analyzer.analyze_file(Path::new(path_str), &content, Path::new("."));
+    let funcs = analyzer.analyze_file(&path, &content, &context.root);
 
     let Some(function) = funcs.iter().find(|m| m.name == symbol_str) else {
         return tool_error(&format!(
             "Symbol '{}' not found in {}",
-            symbol_str, path_str
+            symbol_str,
+            path.display()
         ));
     };
     match serde_json::to_string_pretty(function) {
         Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
         Err(error) => tool_error(&format!(
             "Failed to serialize metrics for '{}' in {}: {error}",
-            symbol_str, path_str
+            symbol_str,
+            path.display()
         )),
     }
 }

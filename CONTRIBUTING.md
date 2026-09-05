@@ -66,11 +66,13 @@ is not sufficient.
 
 ## Mutation and fixtures
 
-Native mutation currently edits source files in place and restores the original
-bytes after each mutant. The isolation fix is ongoing. Until it is integrated,
-run mutation from a disposable clone or worktree, keep all builds and tests
-against that workspace serialized, and inspect the source diff after an
-interruption before reusing it.
+Native mutation runs in a private copy of the current working files, including
+dirty and untracked inputs. Dependencies are copied; `.git` and `target` are
+omitted. SIGINT and SIGTERM stop owned children and remove the copy. SIGKILL
+can leave that copy behind, but mutants never replace the original sources.
+Keep expensive builds and mutation jobs serialized, retain their evidence,
+then remove task-owned targets and completed worktrees. See the command
+reference for symlink rules and the trusted test-command boundary.
 
 When fixing a bug, add the smallest deterministic fixture or test that shows
 the failure. Keep the reproduction self-contained, state the exact command,

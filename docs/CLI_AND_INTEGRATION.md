@@ -1,6 +1,35 @@
 # CLI reference and agent integration
 
-Commands run from the current repository. Hardgate loads `hardgate.toml` when present; without it, the `strict-agent` default bundle is used. A command exits non-zero when its report contains a blocking finding. Advisories remain visible context.
+Hardgate searches upward from the invocation directory for the nearest
+`hardgate.toml`, stopping at the first Git repository boundary (including a
+worktree `.git` file) or the filesystem root. That policy's directory is the
+configuration root. With no policy, strict-agent defaults apply at the Git
+root, or at the invocation directory outside Git. A blocking finding produces
+a nonzero exit; advisories remain visible context.
+
+`--config FILE` selects an explicit policy instead. A missing, unreadable, or
+invalid explicit policy fails; it never silently selects defaults. Unknown
+keys in all fixed configuration tables fail with valid field names, while
+intentional aliases and dynamic extension budgets remain supported.
+
+Policy globs, classification, report paths, generated freshness, and
+orchestrated commands use the configuration root. CLI paths (including report
+overrides) remain relative to the invocation directory. Full checks cover the
+configuration root even from a nested directory; pass `.` to select the
+invocation directory. Nested monorepo policies take precedence over parent
+policies; use `--config ../hardgate.toml` to select a parent explicitly.
+
+Inspect the complete merged, validated policy without executing tools:
+
+```sh
+hardgate config
+hardgate --config policy.toml config --format json
+```
+
+TOML inspection includes root/policy comments and round-trips as an effective
+policy. JSON includes `schema_version`, `root`, `config_path`,
+`invocation_dir`, and `effective`. MCP uses the same discovery and explicit
+`--config` authority; tool paths remain relative to its launch directory.
 
 The repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch

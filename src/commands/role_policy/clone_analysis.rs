@@ -24,7 +24,7 @@ pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -
     let inputs = if input.diff {
         full_clone_inputs(input.config, input.root, report)?
     } else {
-        clone_eligible_inputs(input.read_results, input.config)?
+        clone_eligible_inputs(input.read_results, input.config, input.root)?
     };
     let mut groups: Vec<(FileRole, Vec<(PathBuf, String)>)> = FileRole::POLICY_ROLES
         .into_iter()
@@ -87,10 +87,11 @@ fn run_clone_group(
 fn clone_eligible_inputs(
     read_results: &[(PathBuf, String)],
     config: &HardgateConfig,
+    root: &Path,
 ) -> Result<Vec<(ClassifiedFile, String)>> {
     read_results
         .iter()
-        .map(|(path, content)| Ok((classify_file(path, config)?, content.clone())))
+        .map(|(path, content)| Ok((classify_file(path, config, root)?, content.clone())))
         .collect::<Result<Vec<_>>>()
         .map(|files| {
             files
@@ -111,7 +112,7 @@ fn full_clone_inputs(
             diff_only: false,
             exclusions: &config.budgets.files.exclusions.paths,
         })?;
-    let files = classify_files(&discovery.files, config)?
+    let files = classify_files(&discovery.files, config, root)?
         .into_iter()
         .filter(|file| clone_input_is_eligible(file, config))
         .collect::<Vec<_>>();

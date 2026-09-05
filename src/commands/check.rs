@@ -5,9 +5,9 @@ use super::gate_evidence::{
 };
 use super::verify::{
     CoverageScope, CoverageVerification, SourceCoverageRequest, source_files_for_coverage,
-    verify_coverage_with_scope, verify_mutation,
+    verify_coverage_with_scope, verify_mutation_at,
 };
-use crate::config::HardgateConfig;
+use crate::config::{ConfigContext, HardgateConfig};
 use crate::diagnostics::GateReport;
 use crate::engines::OrchestrationEngine;
 use crate::git_evidence::{ReferenceEvidence, load_reference};
@@ -60,10 +60,15 @@ impl OutputOptions {
 /// invariants, complexity, clones, and optional dead-code, coverage, and
 /// orchestration checks. Exits non-zero when violations are found.
 pub fn cmd_check(opts: CheckOptions) -> Result<()> {
+    cmd_check_in(opts, &ConfigContext::load(None)?)
+}
+
+pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<()> {
+    let ratchet_enabled = context.config.legacy.ratchet;
     let start_time = Instant::now();
-    let root = Path::new(".");
-    let config = HardgateConfig::load_or_default(None)?;
-    let ratchet_enabled = config.legacy.ratchet;
+    let root = context.root.as_path();
+    let config = &context.config;
+    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
     let static_diff = opts.diff && !ratchet_enabled;
 
     let GateRun {
@@ -72,7 +77,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         read_results,
         functions,
         empty,
-    } = run_static_gate_or_empty(&config, static_diff, &opts.paths)?;
+    } = run_static_gate_or_empty(config, static_diff, &opts.paths, root)?;
     if empty {
         report
             .advisories
@@ -80,12 +85,12 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     }
 
     if opts.dead_code || config.analysis.dead_code.enabled {
-        run_dead_code_analysis(&config, &read_results, root, &mut report)?;
+        run_dead_code_analysis(config, &read_results, root, &mut report)?;
     }
 
     let reference_evidence = if ratchet_enabled {
         run_legacy_ratchet(
-            &config,
+            config,
             root,
             &mut report,
             opts.dead_code || config.analysis.dead_code.enabled,
@@ -94,10 +99,10 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         None
     };
 
-    run_generated_freshness(&config, root, &mut report);
+    run_generated_freshness(config, root, &mut report);
 
     run_check_coverage(CheckCoverage {
-        config: &config,
+        config,
         diff: opts.diff,
         cli_report: opts.coverage_report.clone(),
         files: &files,
@@ -109,7 +114,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
     })?;
 
     if config.mutation.enabled {
-        verify_mutation(&config, None, &mut report);
+        verify_mutation_at(config, None, &mut report, root);
     }
 
     if opts.all {
@@ -118,7 +123,7 @@ pub fn cmd_check(opts: CheckOptions) -> Result<()> {
         report.orchestration_violations.extend(violations);
     }
 
-    report.advisories.push(check_scope_advisory(&config, &opts));
+    report.advisories.push(check_scope_advisory(config, &opts));
 
     let elapsed = start_time.elapsed().as_millis();
     emit_gate_report(

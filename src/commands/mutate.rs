@@ -10,7 +10,7 @@ mod mutate_tests;
 mod targets;
 mod workspace;
 
-use crate::config::HardgateConfig;
+use crate::config::{ConfigContext, HardgateConfig};
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
 use crate::engines::{
     AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
@@ -49,14 +49,20 @@ struct MutationRun<'a> {
 /// test suite per mutant with timeouts and RAII rollbacks, then report the
 /// kill score. Exits non-zero below the configured floor.
 pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
+    let context = ConfigContext::load(None)
+        .map_err(|error| MutationFailure::new("setup", "setup-error", format!("{error:#}")))?;
+    cmd_mutate_in(opts, &context)
+}
+
+pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> Result<()> {
     let start_time = Instant::now();
-    let config = HardgateConfig::load_or_default(None)
-        .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
-    let root = Path::new(".");
+    let config = &context.config;
+    let root = context.root.as_path();
+    opts.scoped = opts.scoped.map(|path| context.input_path(&path));
     if !config.mutation.enabled {
         return finish_disabled_mutation(opts.format.as_deref());
     }
-    let target_files = discover_targets(&opts, &config, root)
+    let target_files = discover_targets(&opts, config, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if target_files.is_empty() {
         return handle_no_targets(opts.diff, opts.format.as_deref());
@@ -72,7 +78,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .test_cmd
         .clone()
         .or_else(|| config.mutation.test_cmd.clone());
-    let max_count = resolve_max_mutants(&opts, &config)
+    let max_count = resolve_max_mutants(&opts, config)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     let mutants = generate_target_mutants(&target_files, max_count, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
@@ -85,7 +91,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
         .into());
     }
     let selected_files = selected_mutant_files(&mutants);
-    let timeout = resolve_timeout(&opts, &config, &selected_files, root)?;
+    let timeout = resolve_timeout(&opts, config, &selected_files, root)?;
     let runner = NativeMutationRunner::new(timeout, test_cmd);
     run_unmutated_baselines(BaselineRun {
         runner: &runner,
@@ -101,7 +107,7 @@ pub fn cmd_mutate(opts: MutateOptions) -> Result<()> {
     workspace.close()?;
     crate::cancellation::check()?;
     finish_mutation_run(MutationRun {
-        config: &config,
+        config,
         opts: &opts,
         results: &results,
         stats: &stats,

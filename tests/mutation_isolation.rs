@@ -191,7 +191,7 @@ fn internal_dependencies_are_copied_and_later_user_edits_are_preserved() {
         .unwrap();
         std::os::unix::fs::symlink(root.join("node_modules/local"), root.join("alias")).unwrap();
         for omitted in ["target", ".git"] {
-            fs::create_dir(root.join(omitted)).unwrap();
+            fs::create_dir_all(root.join(omitted)).unwrap();
             fs::write(root.join(omitted).join("sentinel"), "omit this output").unwrap();
         }
     });

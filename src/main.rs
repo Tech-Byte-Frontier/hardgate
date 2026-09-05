@@ -14,6 +14,9 @@ mod build_info;
 )]
 #[command(version = build_info::VERSION_DISPLAY)]
 struct Cli {
+    /// Explicit policy file; its directory is the configuration root
+    #[arg(long, global = true, value_name = "FILE")]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -140,6 +143,11 @@ enum Commands {
         #[arg(value_name = "PATH")]
         paths: Vec<PathBuf>,
     },
+    /// Show the fully merged and validated effective policy and its authority
+    Config {
+        #[arg(long, default_value = "toml", value_parser = ["toml", "json"])]
+        format: String,
+    },
     /// Launch as a Model Context Protocol (MCP) server over stdio
     Mcp,
 }
@@ -152,16 +160,19 @@ fn main() -> anyhow::Result<()> {
     if matches!(cli.command, Commands::Mutate { .. }) {
         hardgate::cancellation::install()?;
     }
-    let result = execute_with_json_errors(cli.command);
+    let result = execute_with_json_errors(cli.command, cli.config.as_deref());
     if let Some(signal) = hardgate::cancellation::signal() {
         std::process::exit(128 + signal);
     }
     result
 }
 
-fn execute_with_json_errors(command: Commands) -> anyhow::Result<()> {
+fn execute_with_json_errors(
+    command: Commands,
+    config: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     let json_context = JsonContext::from_command(&command);
-    let result = execute_command(command);
+    let result = execute_command(command, config);
     if let (Some(context), Err(error)) = (json_context, &result) {
         emit_json_error(context, error);
     }
@@ -194,6 +205,7 @@ impl JsonContext {
             Commands::Mutate { format, json, .. } => {
                 *json || matches!(format.as_deref(), Some("json"))
             }
+            Commands::Config { format } => format == "json",
             Commands::Init { .. } | Commands::Fmt { .. } | Commands::Mcp => false,
         };
         json.then(|| Self {
@@ -208,9 +220,8 @@ fn command_stage(command: &Commands) -> &'static str {
         Commands::Scan { .. } => "scan",
         Commands::Mutate { .. } => "mutation",
         Commands::Verify { .. } => "verify",
-        Commands::Init { .. } => "init",
-        Commands::Fmt { .. } => "fmt",
-        Commands::Mcp => "mcp",
+        Commands::Config { .. } => "config",
+        _ => "command",
     }
 }
 
@@ -244,16 +255,38 @@ impl JsonFailure {
     }
 }
 
-fn execute_command(cmd: Commands) -> anyhow::Result<()> {
+fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> anyhow::Result<()> {
     match cmd {
-        Commands::Init { preset } => commands::cmd_init(&preset),
-        Commands::Fmt { check } => commands::cmd_fmt(check),
-        Commands::Mcp => mcp::run_mcp_server(),
-        gate => execute_gate_command(gate),
+        Commands::Init { preset } => {
+            anyhow::ensure!(
+                config.is_none(),
+                "init writes hardgate.toml in the current directory; --config selects an existing policy"
+            );
+            commands::cmd_init(&preset)
+        }
+        Commands::Mcp => mcp::run_mcp_server_with_config(config),
+        command => {
+            let context = hardgate::config::ConfigContext::load(config)?;
+            execute_resolved_command(command, &context)
+        }
     }
 }
 
-fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
+fn execute_resolved_command(
+    cmd: Commands,
+    context: &hardgate::config::ConfigContext,
+) -> anyhow::Result<()> {
+    match cmd {
+        Commands::Fmt { check } => commands::cmd_fmt_in(check, context),
+        Commands::Config { format } => commands::inspect::cmd_config(context, &format),
+        gate => execute_gate_command(gate, context),
+    }
+}
+
+fn execute_gate_command(
+    cmd: Commands,
+    context: &hardgate::config::ConfigContext,
+) -> anyhow::Result<()> {
     match cmd {
         Commands::Check {
             output,
@@ -264,20 +297,25 @@ fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
             paths,
         } => {
             let opts = output.output_options();
-            commands::cmd_check(commands::CheckOptions {
-                format: opts.format,
-                diff,
-                all,
-                dead_code,
-                coverage_report,
-                json: opts.json,
-                compact: opts.compact,
-                no_snippets: opts.no_snippets,
-                summary: opts.summary,
-                paths,
-            })
+            commands::cmd_check_in(
+                commands::CheckOptions {
+                    format: opts.format,
+                    diff,
+                    all,
+                    dead_code,
+                    coverage_report,
+                    json: opts.json,
+                    compact: opts.compact,
+                    no_snippets: opts.no_snippets,
+                    summary: opts.summary,
+                    paths,
+                },
+                context,
+            )
         }
-        Commands::Scan { file, output } => commands::cmd_scan(&file, output.output_options()),
+        Commands::Scan { file, output } => {
+            commands::cmd_scan_in(&file, output.output_options(), context)
+        }
         Commands::Mutate {
             diff,
             scoped,
@@ -286,14 +324,17 @@ fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
             max_mutants,
             format,
             json,
-        } => commands::cmd_mutate(commands::MutateOptions {
-            diff,
-            scoped,
-            test_cmd,
-            timeout_secs: timeout,
-            max_mutants,
-            format: resolve_mutate_format(format, json),
-        }),
+        } => commands::cmd_mutate_in(
+            commands::MutateOptions {
+                diff,
+                scoped,
+                test_cmd,
+                timeout_secs: timeout,
+                max_mutants,
+                format: resolve_mutate_format(format, json),
+            },
+            context,
+        ),
         Commands::Verify {
             coverage_report,
             mutation_report,
@@ -301,18 +342,21 @@ fn execute_gate_command(cmd: Commands) -> anyhow::Result<()> {
             paths,
         } => {
             let opts = output.output_options();
-            commands::cmd_verify(commands::VerifyOptions {
-                coverage_report,
-                mutation_report,
-                format: opts.format,
-                json: opts.json,
-                compact: opts.compact,
-                no_snippets: opts.no_snippets,
-                summary: opts.summary,
-                paths,
-            })
+            commands::cmd_verify_in(
+                commands::VerifyOptions {
+                    coverage_report,
+                    mutation_report,
+                    format: opts.format,
+                    json: opts.json,
+                    compact: opts.compact,
+                    no_snippets: opts.no_snippets,
+                    summary: opts.summary,
+                    paths,
+                },
+                context,
+            )
         }
-        other => execute_command(other),
+        _ => anyhow::bail!("internal command routing error"),
     }
 }
 

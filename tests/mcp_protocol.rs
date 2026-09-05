@@ -7,8 +7,13 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run_mcp(root: &Path, input: &[u8]) -> Vec<Value> {
+    run_mcp_args(root, input, &[])
+}
+
+fn run_mcp_args(root: &Path, input: &[u8], args: &[&str]) -> Vec<Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_hardgate"))
         .arg("mcp")
+        .args(args)
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -333,4 +338,48 @@ fn metrics_tool_reports_success_missing_file_and_missing_symbol() {
     assert!(tool_text(&responses[2]).contains("Symbol 'missing' not found"));
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn nested_mcp_tools_share_policy_and_honor_explicit_config() {
+    let root = fs::tempdir("mcp-config-context");
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("hardgate.toml"),
+        "[gate]\npreset = 'custom'\nstrict = true\n\n[budgets.functions]\nmax_parameters = 1\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("loose.toml"), "[gate]\npreset = 'custom'\n").unwrap();
+    std::fs::write(
+        root.join("src/value.ts"),
+        "export function value(a: number, b: number) { return a + b; }\n",
+    )
+    .unwrap();
+    let input = ndjson([
+        request(
+            1,
+            "tools/call",
+            Some(json!({"name":"hardgate_check", "arguments":{"paths":["value.ts"]}})),
+        ),
+        request(
+            2,
+            "tools/call",
+            Some(json!({"name":"hardgate_scan_file", "arguments":{"path":"value.ts"}})),
+        ),
+    ]);
+    let nested = root.join("src");
+    let reports = run_mcp(&nested, &input);
+    for report in &reports {
+        let rendered = report["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            rendered.contains("Failed") && rendered.contains("value.ts"),
+            "{rendered}"
+        );
+    }
+    let reports = run_mcp_args(&nested, &input, &["--config", "../loose.toml"]);
+    for report in &reports {
+        let rendered = report["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(!rendered.contains("Failed"), "{rendered}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

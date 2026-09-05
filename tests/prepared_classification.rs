@@ -30,6 +30,7 @@ fn prepared_classifier_matches_builtin_and_compatibility_results() {
         "schema.sql",
     ] {
         let classified = prepared.classify(Path::new(path));
+        assert_eq!(classified, ClassifiedFile::new(Path::new(path)));
         assert_eq!(
             classified,
             ClassifiedFile::new_with_config(Path::new(path), &config).unwrap()

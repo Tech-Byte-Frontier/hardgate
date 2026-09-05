@@ -1,7 +1,7 @@
 use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::classify_file;
-use super::static_gate::{run_static_gate_scoped, run_static_gate_snapshot};
+use super::static_gate::{run_static_gate_at, run_static_gate_snapshot};
 use crate::adoption::apply_legacy_ratchet;
 use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
@@ -30,8 +30,9 @@ pub(crate) fn run_static_gate_or_empty(
     config: &HardgateConfig,
     diff: bool,
     paths: &[PathBuf],
+    root: &Path,
 ) -> Result<GateRun> {
-    let outcome = run_static_gate_scoped(config, diff, paths)?;
+    let outcome = run_static_gate_at(config, diff, paths, root)?;
     let Some((report, files, read_results, functions)) = outcome else {
         return Ok(GateRun {
             report: GateReport::new(config.gate.name.clone()),
@@ -290,7 +291,7 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
         if !selected.contains(&key) {
             continue;
         }
-        let classified = classify_file(path, request.config)?;
+        let classified = classify_file(path, request.config, request.root)?;
         if classified.ast_supported && classified.role == FileRole::Source {
             source_files.insert(key.clone());
             source_contents.entry(key).or_insert(content.as_str());
