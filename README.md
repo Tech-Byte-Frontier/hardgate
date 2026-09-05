@@ -10,60 +10,15 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 
 ## First run
 
-### Install a released CLI
+### Current source checkout: Phase 5 init flow
 
-The released Rust CLI ([Cargo package](https://crates.io/crates/hardgate)) and
-[GitHub source tag](https://github.com/Tech-Byte-Frontier/hardgate/releases/tag/v0.5.0)
-are `0.5.0`:
-
-```sh
-cargo install hardgate --version 0.5.0 --locked
-hardgate --version
-```
-
-The [npm wrapper](https://www.npmjs.com/package/@tech-byte-frontier/hardgate) is published separately and currently remains at `0.4.2`. Pin
-that version when using a JavaScript package manager; the unpublished `0.5.0`
-wrapper manifests in this source tree are not an npm install target:
+The initialization and `config` inspection flow below is in this source
+checkout and is unreleased. The published Cargo `0.5.0` and npm `0.4.2`
+channels do not contain these new init affordances. From the exact checkout
+that contains this implementation:
 
 ```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-npx hardgate --version
-
-pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-pnpm exec hardgate --version
-
-yarn add --dev --exact @tech-byte-frontier/hardgate@0.4.2
-yarn exec hardgate --version
-
-bun add --dev --exact @tech-byte-frontier/hardgate@0.4.2
-bunx --no-install hardgate --version
-```
-
-For a global npm or pnpm command, use the same published wrapper version:
-
-```sh
-npm install --global @tech-byte-frontier/hardgate@0.4.2
-# or
-pnpm add --global @tech-byte-frontier/hardgate@0.4.2
-
-hardgate --version
-```
-
-The wrapper requires Node.js 18 or newer. If you need the current source
-checkout's CLI changes, use a source build rather than assuming the older npm
-wrapper contains them:
-
-```sh
-git clone https://github.com/Tech-Byte-Frontier/hardgate.git
-cd hardgate
 cargo install --path . --locked
-```
-
-### Initialize a structural starting point
-
-Run this at the policy root:
-
-```sh
 hardgate init --preset balanced
 hardgate config
 hardgate check
@@ -78,26 +33,26 @@ engines, missing setup, and the next command. An arbitrary existing repository
 may still fail its first check because its source roles, budgets, commands, or
 evidence need project-specific decisions.
 
-Without a policy file, the CLI uses the `strict-agent` defaults. That preset
-requires configured LCOV and mutation reports. `legacy-migration` adds a
-static reference ratchet for adoption, while `custom` starts from ordinary
-deserialized defaults and expects the policy file to state the project choices.
-
 Current source checkouts also provide inspection-friendly initialization:
 
 ```sh
-# Run from a checkout containing the current init implementation.
+# Run from the same source checkout containing the current init implementation.
 cargo run --release -- init --preset balanced --preview > /tmp/hardgate.toml
-cargo run --release -- init --preset balanced --full > /tmp/hardgate-effective.toml
+cargo run --release -- init --preset balanced --preview --full > /tmp/hardgate-effective.toml
 cargo run --release -- config --format toml
 ```
 
 `--preview` writes only valid generated TOML to stdout; its status and completion
 summary go to stderr, so the output can be redirected safely. `--full` renders
 the full effective policy. See the current [`init`](src/commands/init.rs) and
-[`config`](src/commands/inspect.rs) implementations. These are
-source-checkout affordances; the published npm wrapper remains the older
-`0.4.2` line until a newer wrapper is published.
+[`config`](src/commands/inspect.rs) implementations. These commands describe
+this source checkout; do not attribute them to the published `0.5.0` binary
+until a release containing them exists.
+
+Without a policy file, the CLI uses the `strict-agent` defaults. That preset
+requires configured LCOV and mutation reports. `legacy-migration` adds a
+static reference ratchet for adoption, while `custom` starts from ordinary
+deserialized defaults and expects the policy file to state the project choices.
 
 ### See a pass, a diagnostic, and a real refactor
 
@@ -121,6 +76,7 @@ pub fn add(left: u32, right: u32) -> u32 {
 EOF
 cd "$smoke_dir"
 hardgate init --preset balanced
+hardgate config
 hardgate check --format compact
 ```
 
@@ -163,6 +119,75 @@ ingestion. `hardgate check --all` runs only the configured formatter, linter,
 and test commands. `hardgate verify` does not run those project commands or
 native mutation; the only external command it may run is an enabled generated-
 freshness check.
+
+### Install a released CLI
+
+The published Rust CLI is available as Cargo `0.5.0`; the [GitHub release](https://github.com/Tech-Byte-Frontier/hardgate/releases/tag/v0.5.0)
+is `v0.5.0`. These released-channel commands do not include the source-only
+init flow described above:
+
+```sh
+cargo install hardgate --version 0.5.0 --locked
+hardgate --version
+```
+
+The [npm wrapper](https://www.npmjs.com/package/@tech-byte-frontier/hardgate) is
+published separately and currently remains at `0.4.2`. Pin that version when
+using a JavaScript package manager; the unpublished `0.5.0` wrapper manifests
+in this source tree are not an npm install target:
+
+```sh
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
+npx hardgate --version
+
+pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
+pnpm exec hardgate --version
+
+yarn add --dev --exact @tech-byte-frontier/hardgate@0.4.2
+yarn exec hardgate --version
+
+bun add --dev --exact @tech-byte-frontier/hardgate@0.4.2
+bunx --no-install hardgate --version
+```
+
+For a global npm or pnpm command, use the same published wrapper version:
+
+```sh
+npm install --global @tech-byte-frontier/hardgate@0.4.2
+# or
+pnpm add --global @tech-byte-frontier/hardgate@0.4.2
+
+hardgate --version
+```
+
+For npm, `npm prefix --global` prints the global prefix; its `bin` directory
+must be on `PATH`. For pnpm, run `pnpm setup` if it reports that no global bin
+directory is configured, then open a new shell so `PNPM_HOME` is on `PATH`.
+The wrapper's supported platform packages and `HARDGATE_BINARY` resolution are
+documented in the [wrapper README](npm/hardgate/README.md).
+
+For a source build of the released tag, use the tag explicitly; this is not
+the source checkout containing the unreleased init flow:
+
+```sh
+git clone --branch v0.5.0 https://github.com/Tech-Byte-Frontier/hardgate.git
+cd hardgate
+cargo install --path . --locked
+```
+
+### Uninstall
+
+Use the command matching the installation channel:
+
+```sh
+cargo uninstall hardgate
+npm uninstall --save-dev @tech-byte-frontier/hardgate
+pnpm remove --save-dev @tech-byte-frontier/hardgate
+yarn remove @tech-byte-frontier/hardgate
+bun remove @tech-byte-frontier/hardgate
+npm uninstall --global @tech-byte-frontier/hardgate
+pnpm remove --global @tech-byte-frontier/hardgate
+```
 
 ## What is enforced
 
@@ -273,7 +298,7 @@ validates the full configured reference snapshot, then compares it only to the
 selected current static/dead-code findings; explicit paths do not widen that
 current selection.
 
-Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See the [CLI reference and agent integration](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CLI_AND_INTEGRATION.md) for details.
+Enabled required evidence fails closed when it is missing or empty. CLI `check` and `verify` retain an empty-discovery advisory and still run every enabled report, freshness, and legacy gate; the MCP `hardgate_check` surface rejects empty scopes/discovery instead of returning a successful empty report. Missing or malformed Git evidence, coverage/mutation reports, generated freshness commands, and mutation outcomes are failures in the corresponding path; a valid Git worktree with no changed files is an advisory/no-op for diff selection. Disabled evidence engines do not inspect old report files. See the [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md) for details.
 
 When native mutation is enabled, it requires a source-role target and at least
 one viable mutant. After an explicit scope is validated, a `mutate --diff`
@@ -318,12 +343,12 @@ the archive metadata and binary version/commit before installation.
 
 ## Documentation
 
-- [Vision and paradigm](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/VISION_AND_PARADIGM.md)
-- [Configuration specification](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CONFIGURATION_SPEC.md)
-- [CLI reference and agent integration](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/CLI_AND_INTEGRATION.md)
-- [System architecture](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/ARCHITECTURE.md)
-- [Existing landscape](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/EXISTING_LANDSCAPE.md)
-- [X article](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/docs/X_ARTICLE.md)
+- [Vision and paradigm](docs/VISION_AND_PARADIGM.md)
+- [Configuration specification](docs/CONFIGURATION_SPEC.md)
+- [CLI reference and agent integration](docs/CLI_AND_INTEGRATION.md)
+- [System architecture](docs/ARCHITECTURE.md)
+- [Existing landscape](docs/EXISTING_LANDSCAPE.md)
+- [X article](docs/X_ARTICLE.md)
 - [API reference](https://docs.rs/hardgate)
 
 ## License
