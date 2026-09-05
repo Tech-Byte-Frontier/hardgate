@@ -288,7 +288,8 @@ fn execute_init_command(
         format_check,
         format_command,
         lint,
-    } = cmd else {
+    } = cmd
+    else {
         anyhow::bail!("expected init command");
     };
     anyhow::ensure!(
@@ -314,7 +315,8 @@ fn execute_report_command(cmd: Commands) -> commands::CommandResult {
         metric,
         top,
         output,
-    } = cmd else {
+    } = cmd
+    else {
         anyhow::bail!("expected report command");
     };
     match subcommand {
@@ -378,7 +380,8 @@ fn execute_check_command(
         dead_code,
         coverage_report,
         paths,
-    } = cmd else {
+    } = cmd
+    else {
         anyhow::bail!("expected check command");
     };
     let opts = output.output_options();
@@ -416,7 +419,8 @@ fn execute_mutate_command(
         json,
         summary,
         output_file,
-    } = cmd else {
+    } = cmd
+    else {
         anyhow::bail!("expected mutate command");
     };
     commands::cmd_mutate_in(
@@ -443,7 +447,8 @@ fn execute_verify_command(
         mutation_report,
         output,
         paths,
-    } = cmd else {
+    } = cmd
+    else {
         anyhow::bail!("expected verify command");
     };
     let opts = output.output_options();

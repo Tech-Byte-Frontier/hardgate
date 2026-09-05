@@ -1,4 +1,4 @@
-use super::lcov_details::{DetailValidation, RecordDetails};
+use super::lcov_details::{DetailValidation, RecordDetails, lexical_record_key};
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -53,7 +53,10 @@ pub(crate) fn parse_report(
 
     let mut records = LcovRecords::new(require_functions, require_branches);
     for (line_number, line) in content.lines().enumerate() {
-        let current_source = records.current.as_ref().map(|c| c.coverage.file_path.clone());
+        let current_source = records
+            .current
+            .as_ref()
+            .map(|c| c.coverage.file_path.clone());
         records
             .ingest(line.trim())
             .with_context(|| {
@@ -379,7 +382,11 @@ enum MetricCounterKind {
     Branch,
 }
 
-fn validate_metric_counts(builder: &RecordBuilder, required: bool, kind: MetricCounterKind) -> Result<()> {
+fn validate_metric_counts(
+    builder: &RecordBuilder,
+    required: bool,
+    kind: MetricCounterKind,
+) -> Result<()> {
     let pair = match kind {
         MetricCounterKind::Function => CounterPair {
             found_tag: "FNF",
@@ -474,25 +481,4 @@ fn metric_tag(line: &str) -> Option<&'static str> {
     ]
     .into_iter()
     .find(|candidate| *candidate == tag)
-}
-
-fn lexical_record_key(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('\\', "/");
-    let absolute = raw.starts_with('/');
-    let mut parts = Vec::new();
-    for part in raw.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            value => parts.push(value),
-        }
-    }
-    let joined = parts.join("/");
-    if absolute {
-        format!("/{joined}")
-    } else {
-        joined
-    }
 }

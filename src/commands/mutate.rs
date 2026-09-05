@@ -8,11 +8,11 @@ use std::io::Write;
 mod baselines;
 #[path = "mutate/progress.rs"]
 mod progress;
+#[cfg(test)]
+pub(crate) use progress::outcome_label;
 pub(crate) use progress::{
     increment_stats, print_generation_notice, print_mutant_notice, print_outcome,
 };
-#[cfg(test)]
-pub(crate) use progress::outcome_label;
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
@@ -22,8 +22,7 @@ mod workspace;
 use crate::config::{ConfigContext, HardgateConfig};
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
 use crate::engines::{
-    AstMutant, AstMutationGenerator, MutantExecutionResult, MutationStats,
-    NativeMutationRunner,
+    AstMutant, AstMutationGenerator, MutantExecutionResult, MutationStats, NativeMutationRunner,
 };
 use anyhow::{Context, Result, bail};
 use colored::*;

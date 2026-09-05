@@ -189,3 +189,24 @@ fn validate_branches(details: &BranchDetails, input: &DetailValidation<'_>) -> R
     }
     Ok(())
 }
+
+pub(crate) fn lexical_record_key(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let absolute = raw.starts_with('/');
+    let mut parts = Vec::new();
+    for part in raw.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            value => parts.push(value),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}

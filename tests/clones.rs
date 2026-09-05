@@ -472,4 +472,3 @@ fn test_fingerprint_is_serialized_and_legacy_payloads_default() {
         serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
     assert!(decoded.fingerprint.is_empty());
 }
-

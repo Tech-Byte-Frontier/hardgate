@@ -146,9 +146,18 @@ pub fn compare_reports(
     let before_findings = extract_findings(before);
     let after_findings = extract_findings(after);
 
-    let added: Vec<_> = after_findings.difference(&before_findings).cloned().collect();
-    let removed: Vec<_> = before_findings.difference(&after_findings).cloned().collect();
-    let retained: Vec<_> = before_findings.intersection(&after_findings).cloned().collect();
+    let added: Vec<_> = after_findings
+        .difference(&before_findings)
+        .cloned()
+        .collect();
+    let removed: Vec<_> = before_findings
+        .difference(&after_findings)
+        .cloned()
+        .collect();
+    let retained: Vec<_> = before_findings
+        .intersection(&after_findings)
+        .cloned()
+        .collect();
 
     let mut scope_differences = Vec::new();
     let mut config_differences = Vec::new();
@@ -213,7 +222,10 @@ fn render_differences(out: &mut String, cmp: &CompareResult) {
     if cmp.equivalent {
         return;
     }
-    out.push_str(&format!("\n{}\n", "warning: Non-equivalent comparison".yellow()));
+    out.push_str(&format!(
+        "\n{}\n",
+        "warning: Non-equivalent comparison".yellow()
+    ));
     for diff in &cmp.scope_differences {
         out.push_str(&format!("  - {diff}\n"));
     }
@@ -229,8 +241,14 @@ fn render_finding_group(out: &mut String, header: ColoredString, items: &[Findin
     out.push_str(&format!("\n{header}\n"));
     for item in items {
         match item.line {
-            Some(line) => out.push_str(&format!("  - [{}] {}:{}: {}\n", item.engine, item.file, line, item.identity)),
-            None => out.push_str(&format!("  - [{}] {}: {}\n", item.engine, item.file, item.identity)),
+            Some(line) => out.push_str(&format!(
+                "  - [{}] {}:{}: {}\n",
+                item.engine, item.file, line, item.identity
+            )),
+            None => out.push_str(&format!(
+                "  - [{}] {}: {}\n",
+                item.engine, item.file, item.identity
+            )),
         }
     }
 }
@@ -243,17 +261,29 @@ pub fn render_compare_terminal(cmp: &CompareResult) -> String {
     ));
     out.push_str(&format!("{}\n", "-".repeat(70).dimmed()));
 
-    let before_status = format_verdict_badge(cmp.verdict_before.passed, cmp.verdict_before.total_errors);
-    let after_status = format_verdict_badge(cmp.verdict_after.passed, cmp.verdict_after.total_errors);
-    out.push_str(&format!("verdict: before: {before_status} -> after: {after_status}\n"));
+    let before_status =
+        format_verdict_badge(cmp.verdict_before.passed, cmp.verdict_before.total_errors);
+    let after_status =
+        format_verdict_badge(cmp.verdict_after.passed, cmp.verdict_after.total_errors);
+    out.push_str(&format!(
+        "verdict: before: {before_status} -> after: {after_status}\n"
+    ));
     out.push_str(&format!(
         "diff: +{} added, -{} removed (remediated), {} retained\n",
         cmp.summary.added, cmp.summary.removed, cmp.summary.retained
     ));
 
     render_differences(&mut out, cmp);
-    render_finding_group(&mut out, format!("Remediated (-{}):", cmp.removed.len()).green(), &cmp.removed);
-    render_finding_group(&mut out, format!("New findings (+{}):", cmp.added.len()).red(), &cmp.added);
+    render_finding_group(
+        &mut out,
+        format!("Remediated (-{}):", cmp.removed.len()).green(),
+        &cmp.removed,
+    );
+    render_finding_group(
+        &mut out,
+        format!("New findings (+{}):", cmp.added.len()).red(),
+        &cmp.added,
+    );
 
     out
 }
@@ -263,15 +293,31 @@ pub fn cmd_report_compare(
     after_path: PathBuf,
     opts: OutputOptions,
 ) -> CommandResult {
-    let before_content = std::fs::read_to_string(&before_path)
-        .with_context(|| format!("Failed to read before report from '{}'", before_path.display()))?;
-    let before_report: GateReport = serde_json::from_str(&before_content)
-        .with_context(|| format!("Failed to parse before report JSON from '{}'", before_path.display()))?;
+    let before_content = std::fs::read_to_string(&before_path).with_context(|| {
+        format!(
+            "Failed to read before report from '{}'",
+            before_path.display()
+        )
+    })?;
+    let before_report: GateReport = serde_json::from_str(&before_content).with_context(|| {
+        format!(
+            "Failed to parse before report JSON from '{}'",
+            before_path.display()
+        )
+    })?;
 
-    let after_content = std::fs::read_to_string(&after_path)
-        .with_context(|| format!("Failed to read after report from '{}'", after_path.display()))?;
-    let after_report: GateReport = serde_json::from_str(&after_content)
-        .with_context(|| format!("Failed to parse after report JSON from '{}'", after_path.display()))?;
+    let after_content = std::fs::read_to_string(&after_path).with_context(|| {
+        format!(
+            "Failed to read after report from '{}'",
+            after_path.display()
+        )
+    })?;
+    let after_report: GateReport = serde_json::from_str(&after_content).with_context(|| {
+        format!(
+            "Failed to parse after report JSON from '{}'",
+            after_path.display()
+        )
+    })?;
 
     let cmp = compare_reports(&before_report, &after_report, &before_path, &after_path);
 

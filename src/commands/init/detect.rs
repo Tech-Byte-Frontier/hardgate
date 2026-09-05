@@ -115,10 +115,8 @@ fn detect_ambiguous_ecosystems(
             py_detect.orchestration.format,
             js_detect.orchestration.format,
         );
-        detection.orchestration.lint = combine_commands(
-            py_detect.orchestration.lint,
-            js_detect.orchestration.lint,
-        );
+        detection.orchestration.lint =
+            combine_commands(py_detect.orchestration.lint, js_detect.orchestration.lint);
         detection.orchestration.test_cmd = combine_commands(
             py_detect.orchestration.test_cmd,
             js_detect.orchestration.test_cmd,

@@ -57,7 +57,10 @@ pub(crate) fn increment_stats(stats: &mut crate::engines::MutationStats, outcome
     }
 }
 
-pub(crate) fn print_outcome(stats: &mut crate::engines::MutationStats, outcome: MutantOutcome) -> Result<()> {
+pub(crate) fn print_outcome(
+    stats: &mut crate::engines::MutationStats,
+    outcome: MutantOutcome,
+) -> Result<()> {
     increment_stats(stats, outcome);
     let (label, style) = outcome_label(outcome);
     let label = match style {

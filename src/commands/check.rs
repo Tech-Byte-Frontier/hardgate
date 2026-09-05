@@ -112,21 +112,13 @@ fn execute_check(
     let start_time = Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
-    let static_diff = opts.diff && !ratchet_enabled;
     let GateRun {
         mut report,
         files,
         read_results,
         functions,
         empty,
-    } = run_static_gate_or_empty(StaticRequest {
-        config,
-        root,
-        paths: &opts.paths,
-        diff: static_diff,
-        dead_code: opts.dead_code || config.analysis.dead_code.enabled,
-        snippets: opts.display.snippets,
-    })?;
+    } = run_static_phase(&opts, context, ratchet_enabled)?;
     report.execution = Some(plan);
     if empty {
         report
@@ -135,7 +127,11 @@ fn execute_check(
     }
 
     let progress = opts.progress.as_deref();
-    emit_progress(progress, "static_analysis", start_time.elapsed().as_millis());
+    emit_progress(
+        progress,
+        "static_analysis",
+        start_time.elapsed().as_millis(),
+    );
 
     let reference_evidence = if ratchet_enabled {
         run_legacy_ratchet(
@@ -182,6 +178,22 @@ fn execute_check(
     )
 }
 
+fn run_static_phase(
+    opts: &CheckOptions,
+    context: &ConfigContext,
+    ratchet_enabled: bool,
+) -> Result<GateRun> {
+    let static_diff = opts.diff && !ratchet_enabled;
+    run_static_gate_or_empty(StaticRequest {
+        config: &context.config,
+        root: context.root.as_path(),
+        paths: &opts.paths,
+        diff: static_diff,
+        dead_code: opts.dead_code || context.config.analysis.dead_code.enabled,
+        snippets: opts.display.snippets,
+    })
+}
+
 struct VerificationPhaseContext<'a> {
     opts: &'a CheckOptions,
     context: &'a ConfigContext,
@@ -199,7 +211,11 @@ fn run_verification_phase(
     let config = &phase.context.config;
 
     if opts.all {
-        emit_progress(progress, "orchestration", phase.start_time.elapsed().as_millis());
+        emit_progress(
+            progress,
+            "orchestration",
+            phase.start_time.elapsed().as_millis(),
+        );
         run_orchestration(config, root, report);
     }
 

@@ -146,7 +146,12 @@ impl RoutineDeclFilter {
     }
 }
 
-fn update_quote_state(c: char, in_single: &mut bool, in_double: &mut bool, in_backtick: &mut bool) -> bool {
+fn update_quote_state(
+    c: char,
+    in_single: &mut bool,
+    in_double: &mut bool,
+    in_backtick: &mut bool,
+) -> bool {
     match c {
         '\'' if !*in_double && !*in_backtick => {
             *in_single = !*in_single;
@@ -197,23 +202,20 @@ fn starts_routine_declaration(trimmed: &str) -> Option<bool> {
     }
 }
 
+fn strip_pub_visibility(rest: &str) -> &str {
+    rest.strip_prefix('(')
+        .and_then(|s| s.split_once(')'))
+        .map(|(_, after)| after.trim_start())
+        .unwrap_or(rest)
+}
+
 fn is_use_declaration(trimmed: &str) -> bool {
     if trimmed.starts_with("use ") {
         return true;
     }
     if let Some(rest) = trimmed.strip_prefix("pub") {
         let rest = rest.trim_start();
-        if rest.starts_with("use ") {
-            return true;
-        }
-        if rest.starts_with('(') {
-            if let Some(after_paren) = rest.find(')') {
-                let after = rest[after_paren + 1..].trim_start();
-                if after.starts_with("use ") {
-                    return true;
-                }
-            }
-        }
+        return strip_pub_visibility(rest).starts_with("use ");
     }
     false
 }
@@ -222,7 +224,12 @@ fn is_import_declaration(trimmed: &str) -> bool {
     const IMPORT_PREFIXES: &[&str] = &[
         "import ", "import\t", "import{", "import\"", "import'", "import (",
     ];
-    if IMPORT_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) || trimmed == "import (" || trimmed == "import" {
+    if IMPORT_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+        || trimmed == "import ("
+        || trimmed == "import"
+    {
         return true;
     }
     trimmed.starts_with("from ") && trimmed.contains("import")
@@ -265,19 +272,14 @@ fn strip_export_and_pub(trimmed: &str) -> &str {
         return trimmed;
     };
     let rest = rest.trim_start();
-    if let Some(stripped) = rest.strip_prefix('(') {
-        if let Some(after_paren) = stripped.find(')') {
-            return stripped[after_paren + 1..].trim_start();
-        }
-    }
-    rest
+    strip_pub_visibility(rest)
 }
 
 fn is_valid_type_alias_name(name: &str) -> bool {
     !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']'))
+        && name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']')
+        })
 }
 
 fn is_comment_start(trimmed: &str) -> bool {

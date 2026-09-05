@@ -248,7 +248,6 @@ fn explicit_js_family_imports_keep_module_files_reachable() {
     }));
 }
 
-
 fn assert_referenced_and_unreferenced(
     files: Vec<PathBuf>,
     contents: Vec<(PathBuf, String)>,
@@ -308,16 +307,9 @@ fn test_dead_code_html_and_runtime_references() {
             "index.html",
             r#"<!DOCTYPE html><html><body><script src="src/runtime_bundle.js"></script></body></html>"#,
         ),
-        entry(
-            "src/runtime_bundle.js",
-            "console.log('loaded');",
-        ),
-        entry(
-            "src/orphan.js",
-            "console.log('orphan');",
-        ),
+        entry("src/runtime_bundle.js", "console.log('loaded');"),
+        entry("src/orphan.js", "console.log('orphan');"),
     ];
 
     assert_referenced_and_unreferenced(files, contents, "src/runtime_bundle.js", "src/orphan.js");
 }
-

@@ -109,7 +109,11 @@ fn has_syntax_errors(tree: &tree_sitter::Tree, lang: SupportedLanguage, source: 
     has_genuine_syntax_error(root, lang, source)
 }
 
-fn has_genuine_syntax_error(node: tree_sitter::Node, lang: SupportedLanguage, source: &[u8]) -> bool {
+fn has_genuine_syntax_error(
+    node: tree_sitter::Node,
+    lang: SupportedLanguage,
+    source: &[u8],
+) -> bool {
     if node.is_error() || node.is_missing() {
         if is_benign_jsx_attribute_error(node, lang, source) {
             return false;
@@ -150,4 +154,3 @@ fn is_benign_jsx_attribute_error(
     let text = node.utf8_text(source).unwrap_or_default();
     text.contains('&')
 }
-

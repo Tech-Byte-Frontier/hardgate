@@ -22,8 +22,12 @@ pub struct ReportInspectOptions {
 pub fn cmd_report_inspect(opts: ReportInspectOptions) -> CommandResult {
     let content = std::fs::read_to_string(&opts.file)
         .with_context(|| format!("Failed to read report file '{}'", opts.file.display()))?;
-    let mut report: GateReport = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse gate report JSON from '{}'", opts.file.display()))?;
+    let mut report: GateReport = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Failed to parse gate report JSON from '{}'",
+            opts.file.display()
+        )
+    })?;
 
     if let Some(ref engine) = opts.engine {
         filter_by_engine(&mut report, engine);
@@ -121,15 +125,15 @@ fn retain_verification_violations(report: &mut GateReport, target: FilterEngine)
 
 fn filter_by_metric(report: &mut GateReport, metric: &str) {
     let lower = metric.to_ascii_lowercase();
-    report.complexity_violations.retain(|v| {
-        v.metric.to_string().to_ascii_lowercase().contains(&lower)
-    });
-    report.budget_violations.retain(|v| {
-        v.metric.to_ascii_lowercase().contains(&lower)
-    });
-    report.coverage_violations.retain(|v| {
-        v.metric.to_ascii_lowercase().contains(&lower)
-    });
+    report
+        .complexity_violations
+        .retain(|v| v.metric.to_string().to_ascii_lowercase().contains(&lower));
+    report
+        .budget_violations
+        .retain(|v| v.metric.to_ascii_lowercase().contains(&lower));
+    report
+        .coverage_violations
+        .retain(|v| v.metric.to_ascii_lowercase().contains(&lower));
 }
 
 fn filter_by_top(report: &mut GateReport, top: usize) {
@@ -164,12 +168,28 @@ fn filter_by_top(report: &mut GateReport, top: usize) {
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let top_files: HashSet<PathBuf> = ranked.into_iter().take(top).map(|(p, _)| p).collect();
 
-    report.budget_violations.retain(|v| top_files.contains(&v.file));
-    report.suppression_violations.retain(|v| top_files.contains(&v.file));
-    report.complexity_violations.retain(|v| top_files.contains(&v.file));
-    report.invariant_violations.retain(|v| top_files.contains(&v.file));
-    report.clone_violations.retain(|v| top_files.contains(&v.file_a) || top_files.contains(&v.file_b));
-    report.coverage_violations.retain(|v| top_files.contains(&v.file));
-    report.mutation_violations.retain(|v| top_files.contains(&v.report_file));
-    report.dead_code_violations.retain(|v| top_files.contains(&v.file));
+    report
+        .budget_violations
+        .retain(|v| top_files.contains(&v.file));
+    report
+        .suppression_violations
+        .retain(|v| top_files.contains(&v.file));
+    report
+        .complexity_violations
+        .retain(|v| top_files.contains(&v.file));
+    report
+        .invariant_violations
+        .retain(|v| top_files.contains(&v.file));
+    report
+        .clone_violations
+        .retain(|v| top_files.contains(&v.file_a) || top_files.contains(&v.file_b));
+    report
+        .coverage_violations
+        .retain(|v| top_files.contains(&v.file));
+    report
+        .mutation_violations
+        .retain(|v| top_files.contains(&v.report_file));
+    report
+        .dead_code_violations
+        .retain(|v| top_files.contains(&v.file));
 }

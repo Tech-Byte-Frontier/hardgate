@@ -204,8 +204,11 @@ fn coverage_py_empty_module_and_diagnostic_context() {
     let empty_record_report = "TN:\nSF:pkg/__init__.py\nend_of_record\n";
 
     // Coverage.py omitting all metric groups for empty module must be accepted even with strict branch/func requirements
-    let parsed = parse_report(empty_record_report, true, true).expect("empty module record from Coverage.py must be accepted");
-    let entry = parsed.get(&PathBuf::from("pkg/__init__.py")).expect("should have record for empty module");
+    let parsed = parse_report(empty_record_report, true, true)
+        .expect("empty module record from Coverage.py must be accepted");
+    let entry = parsed
+        .get(&PathBuf::from("pkg/__init__.py"))
+        .expect("should have record for empty module");
     assert_eq!(entry.lines_found, 0);
     assert_eq!(entry.lines_hit, 0);
 
@@ -213,7 +216,12 @@ fn coverage_py_empty_module_and_diagnostic_context() {
     let invalid = "TN:\nSF:pkg/broken.py\nLF:1\nLH:2\nDA:1,1\nend_of_record\n";
     let err = parse_report(invalid, false, false).expect_err("LH > LF must fail");
     let msg = format!("{err:#}");
-    assert!(msg.contains("pkg/broken.py"), "diagnostic must identify source record: {msg}");
-    assert!(msg.contains("Coverage.py"), "diagnostic must mention supported producer formats: {msg}");
+    assert!(
+        msg.contains("pkg/broken.py"),
+        "diagnostic must identify source record: {msg}"
+    );
+    assert!(
+        msg.contains("Coverage.py"),
+        "diagnostic must mention supported producer formats: {msg}"
+    );
 }
-

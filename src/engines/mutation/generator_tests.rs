@@ -121,16 +121,38 @@ fn test_python_mutation_generation() {
     let py_path = Path::new("calculator.py");
     let code = "def double(value):\n    return value * 2\n";
     let mutants = generator.generate_mutants(py_path, code);
-    assert!(!mutants.is_empty(), "Python function should have mutation points");
+    assert!(
+        !mutants.is_empty(),
+        "Python function should have mutation points"
+    );
     assert_eq!(mutants[0].original, "*");
     assert_eq!(mutants[0].replacement, "/");
 
     let bool_code = "def check(a, b):\n    if a == b and a is not None:\n        return True\n    return False\n";
     let bool_mutants = generator.generate_mutants(py_path, bool_code);
-    assert!(bool_mutants.iter().any(|m| m.original == "==" && m.replacement == "!="));
-    assert!(bool_mutants.iter().any(|m| m.original == "and" && m.replacement == "or"));
-    assert!(bool_mutants.iter().any(|m| m.original == "is not" && m.replacement == "is"));
-    assert!(bool_mutants.iter().any(|m| m.original == "True" && m.replacement == "False"));
-    assert!(bool_mutants.iter().any(|m| m.original == "False" && m.replacement == "True"));
+    assert!(
+        bool_mutants
+            .iter()
+            .any(|m| m.original == "==" && m.replacement == "!=")
+    );
+    assert!(
+        bool_mutants
+            .iter()
+            .any(|m| m.original == "and" && m.replacement == "or")
+    );
+    assert!(
+        bool_mutants
+            .iter()
+            .any(|m| m.original == "is not" && m.replacement == "is")
+    );
+    assert!(
+        bool_mutants
+            .iter()
+            .any(|m| m.original == "True" && m.replacement == "False")
+    );
+    assert!(
+        bool_mutants
+            .iter()
+            .any(|m| m.original == "False" && m.replacement == "True")
+    );
 }
-

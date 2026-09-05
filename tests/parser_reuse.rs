@@ -97,9 +97,15 @@ def positional(x, y, /, z):
         .unwrap();
     assert_eq!(functions.len(), 2);
     assert_eq!(functions[0].name, "total");
-    assert_eq!(functions[0].parameters, 4, "bare * should not count as parameter");
+    assert_eq!(
+        functions[0].parameters, 4,
+        "bare * should not count as parameter"
+    );
     assert_eq!(functions[1].name, "positional");
-    assert_eq!(functions[1].parameters, 3, "bare / should not count as parameter");
+    assert_eq!(
+        functions[1].parameters, 3,
+        "bare / should not count as parameter"
+    );
 }
 
 #[test]
@@ -116,4 +122,3 @@ fn test_tsx_jsx_attribute_ampersand_compatibility() {
     assert_eq!(functions.len(), 1);
     assert_eq!(functions[0].name, "TradeView");
 }
-
