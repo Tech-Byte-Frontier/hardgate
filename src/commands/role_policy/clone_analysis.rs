@@ -102,6 +102,10 @@ fn run_clone_group(group: CloneGroup<'_>, input: &CloneRun<'_>, report: &mut Gat
     if files.len() < 2 {
         return;
     }
+    report.observe_engine(
+        crate::diagnostics::execution::EngineId::Clones,
+        crate::diagnostics::execution::EngineState::Completed,
+    );
     match detector.detect_clones_borrowed(&files, input.root, input.changed_files) {
         Ok(mut findings) => {
             if input.diff {

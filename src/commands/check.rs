@@ -29,6 +29,7 @@ pub struct CheckOptions {
     pub no_snippets: bool,
     pub summary: bool,
     pub paths: Vec<PathBuf>,
+    pub display: crate::diagnostics::display::DisplayOptions,
 }
 
 impl CheckOptions {
@@ -39,6 +40,7 @@ impl CheckOptions {
             compact: self.compact,
             no_snippets: self.no_snippets,
             summary: self.summary,
+            display: self.display.clone(),
         }
     }
 }
@@ -51,6 +53,7 @@ pub struct OutputOptions {
     pub compact: bool,
     pub no_snippets: bool,
     pub summary: bool,
+    pub display: crate::diagnostics::display::DisplayOptions,
 }
 
 impl OutputOptions {
@@ -76,13 +79,33 @@ pub fn cmd_check(opts: CheckOptions) -> CommandResult {
 }
 
 pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandResult {
+    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
+    let plan = super::execution_plan::gate_plan(
+        context,
+        super::execution_plan::GateSelection {
+            command: "check",
+            paths: &opts.paths,
+            diff: opts.diff,
+            dead_code: opts.dead_code,
+            all: opts.all,
+            coverage_report: opts.coverage_report.as_deref(),
+            mutation_report: None,
+        },
+    )?;
+
+    super::execution_failure::run_planned(plan, |plan| execute_check(opts, context, plan))
+}
+
+fn execute_check(
+    opts: CheckOptions,
+    context: &ConfigContext,
+    plan: crate::diagnostics::execution::ExecutionPlan,
+) -> CommandResult {
     let ratchet_enabled = context.config.legacy.ratchet;
     let start_time = Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
-    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
     let static_diff = opts.diff && !ratchet_enabled;
-
     let GateRun {
         mut report,
         files,
@@ -95,7 +118,9 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandR
         paths: &opts.paths,
         diff: static_diff,
         dead_code: opts.dead_code || config.analysis.dead_code.enabled,
+        snippets: opts.display.snippets,
     })?;
+    report.execution = Some(plan);
     if empty {
         report
             .advisories
@@ -151,7 +176,13 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandR
 
 fn run_orchestration(config: &HardgateConfig, root: &Path, report: &mut GateReport) {
     let engine = OrchestrationEngine::new(&config.orchestration);
-    let (_, violations) = engine.run_all_checks(root);
+    let (results, violations) = engine.run_all_checks(root);
+    for result in results {
+        report.observe_engine(
+            crate::diagnostics::execution::evidence_engine(&result.step),
+            crate::diagnostics::execution::EngineState::Completed,
+        );
+    }
     report.orchestration_violations.extend(violations);
 }
 
@@ -301,12 +332,23 @@ pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<()> {
             compact: false,
             no_snippets: false,
             summary: false,
+            display: Default::default(),
         },
     )
 }
 
 /// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
 pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<()> {
+    let mut owned;
+    let report = if report.display.snippets != opts.display.snippets
+        || report.display.max_diagnostics != opts.display.max_diagnostics
+    {
+        owned = report.clone();
+        owned.display = opts.display.clone();
+        &owned
+    } else {
+        report
+    };
     let mut output = if opts.is_json() {
         json_report(report, opts)?
     } else {
@@ -320,6 +362,14 @@ pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Res
 }
 
 fn human_report(report: &GateReport, opts: &OutputOptions) -> String {
+    if !opts.is_summary() && (opts.display.max_diagnostics.is_some() || opts.display.snippets) {
+        let display = crate::diagnostics::display::diagnostics(report);
+        return format!(
+            "{}{}",
+            report.render_summary(),
+            crate::diagnostics::display::render_diagnostics(&display)
+        );
+    }
     match opts.format.as_deref() {
         Some("agent") => report.render_agent(),
         _ if opts.is_summary() => report.render_summary(),
@@ -349,6 +399,7 @@ pub struct Emission<'a> {
 
 /// Finalize and render without terminating the caller process.
 pub fn emit_gate_report(report: &mut GateReport, emission: Emission) -> CommandResult {
+    report.display = emission.opts.display.clone();
     report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
     output_report_with_opts(report, emission.opts)?;
     Ok(CommandOutcome::from_report(report))

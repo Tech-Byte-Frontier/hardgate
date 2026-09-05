@@ -48,7 +48,33 @@ hardgate init --preset legacy-migration
 hardgate init --preset custom
 ```
 
-The strict-agent template is the same preset object used by no-config execution. It enables its configured coverage and mutation report policies and includes the configured formatter/linter commands. Supply real evidence and commands before using it as a gate. Balanced disables coverage/mutation report engines. Legacy-migration disables those report engines and enables the static legacy ratchet.
+The default file contains a commented preset and project overrides. `--full`
+expands the effective policy; `--preview` prints valid TOML to stdout, with the
+setup summary on stderr, without writing a file. Existing files, directories and
+symlinks are preserved. `--config` selects existing policy and cannot be used
+with init.
+
+```sh
+hardgate init --preset balanced --preview
+hardgate init --preset strict-agent --full
+hardgate init --preset balanced --format-check 'pnpm run format:check' \
+  --format-command 'pnpm run format' --lint 'pnpm run lint'
+```
+
+Metadata detection covers Rust, JavaScript/TypeScript, Python and Go, without
+installing or executing project tools. Root manifests and existing scripts are
+preferred; mixed ecosystems, conflicting package managers and nested-only
+packages require explicit commands or initialization within the package. JS
+config-based tool fallbacks require repository-local executables. Python tools
+must be installed in the invoking environment; Go format checks require POSIX
+`sh`. No preset assigns JavaScript tools to every ecosystem.
+
+Strict-agent keeps its thresholds and requires real LCOV and mutation reports
+for both `check` and `verify`; start with `hardgate config` to inspect missing
+setup. Balanced is a structural starting point with those evidence engines
+disabled. Custom uses ordinary defaults, including clone and safety policies.
+Legacy-migration enables the static ratchet and requires a resolvable trusted
+reference with a merge-base; init checks `origin/main` but does not fetch it.
 
 ### Reference context and dead-code limits
 
@@ -116,7 +142,7 @@ An absent command is skipped because it was not configured; a configured command
 
 ## `hardgate verify`
 
-`verify` runs the full-tree static/dead-code and configured evidence gate by
+`verify` runs full-tree static analysis, configured dead-code analysis and the evidence gate by
 default. Optional path arguments scope the current static/dead-code inventory
 and coverage source matching only; mutation-report ingestion and generated
 freshness continue to use their configured/full scope. The ratchet still loads
@@ -257,8 +283,20 @@ terminating the calling process.
 
 Argument and runtime errors requested with `--json`, `--format json` or
 `--format=json` emit one JSON document on stdout and no duplicate stderr error.
-The error document includes `schema_version: 1`, command/stage, kind, message,
-status and exit code. Help/version retain their normal text output.
+All gate JSON, summary JSON, mutation/no-op and error documents include
+`schema_version: 1`, `command`, `passed`, `status`, and `exit_code`. Reports also
+carry the execution plan, config identity and individual engine states.
+Runtime errors retain validated policy/scope when available; argument or invalid
+policy errors have no execution plan. Help/version retain normal text output.
+See the [machine-output contract](REPORT_SCHEMA.md) before migrating consumers.
+
+`--max-diagnostics N` caps displayed findings, including `N=0`; analysis,
+exit status and summary counts remain complete. `--snippets` adds excerpts from
+the source bytes captured during analysis, including both sides of a clone.
+Excerpts are limited to eight lines per location, 240 Unicode characters per
+line and 64 KiB of snippet text in total. Summary output omits diagnostic details.
+Stable [rule IDs](DIAGNOSTIC_RULES.md) identify findings independently of wording,
+paths and line movement.
 
 `--threads N` selects a positive analysis worker count without changing policy;
 otherwise Rayon settings apply. Small source captures and AST batches run
@@ -266,6 +304,18 @@ sequentially below eight files. `--timing` adds total elapsed time to stderr.
 `--color auto|always|never` applies to human output. Explicit choices override
 environment; auto honors `NO_COLOR`, then nonzero `CLICOLOR_FORCE`, then TTY,
 `CLICOLOR=0` and `TERM=dumb`. JSON does not contain terminal styling.
+
+## Shell completions
+
+```sh
+hardgate completions bash > hardgate.bash
+hardgate completions zsh > _hardgate
+hardgate completions fish > hardgate.fish
+```
+
+PowerShell and Elvish are also supported. Completion generation loads no policy
+and runs no project tools. Source/install the generated script according to the
+selected shell's completion setup.
 
 ## `hardgate mcp`
 
@@ -284,6 +334,10 @@ It accepts newline-delimited or `Content-Length`-framed JSON-RPC. The tool names
 | `hardgate_get_metrics` | required `path: string`, `symbol: string` | Metrics for one named function |
 
 `hardgate_check` is fail-closed for outer tool errors: invalid arguments/configuration, missing paths, empty path arrays, empty discovery, and Git failures return an explicit failed response. Read/parse failures remain report-level Hardgate `Failed` findings, with effective role severity `error` failing the report, `warning` producing an advisory, and `ignore` omitting the finding. It never runs coverage/mutation reports, generated freshness, dead-code analysis, orchestration, or native mutation. The static report uses the same engine path as the CLI; optional `diff` selects Git-changed/staged scope by default, explicit existing paths add to static/clone selection, and clone matching uses the full repository index. MCP never runs coverage. For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
+
+Check and scan tools return their human report plus `structuredContent` using
+the versioned report schema. An evaluated policy violation remains a report;
+invalid tool requests retain the existing `isError` response contract.
 
 Register the stdio server with an MCP-capable client:
 

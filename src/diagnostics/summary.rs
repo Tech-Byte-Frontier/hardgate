@@ -176,7 +176,9 @@ impl GateReport {
     /// `top_files` for `jq`-friendly CI and agent consumption.
     pub fn render_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&FullJson {
-            report: self,
+            outcome: super::machine::MachineOutcome::from_report(self),
+            display: super::display::diagnostics(self),
+            report: super::display::report_for_display(self),
             summary: self.summary(),
             top_files: self.top_files(10),
         })
@@ -186,6 +188,8 @@ impl GateReport {
     /// files without the full per-violation payloads.
     pub fn render_summary_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&SummaryJson {
+            outcome: super::machine::MachineOutcome::from_report(self),
+            execution: &self.execution,
             gate_name: &self.gate_name,
             passed: self.passed,
             files_scanned: self.files_scanned,
@@ -201,13 +205,20 @@ impl GateReport {
 #[derive(Serialize)]
 struct FullJson<'a> {
     #[serde(flatten)]
-    report: &'a GateReport,
+    display: super::display::DiagnosticDisplay,
+    #[serde(flatten)]
+    outcome: super::machine::MachineOutcome<'a>,
+    #[serde(flatten)]
+    report: std::borrow::Cow<'a, GateReport>,
     summary: GateSummary,
     top_files: Vec<TopFileEntry>,
 }
 
 #[derive(Serialize)]
 struct SummaryJson<'a> {
+    #[serde(flatten)]
+    outcome: super::machine::MachineOutcome<'a>,
+    execution: &'a Option<super::execution::ExecutionPlan>,
     gate_name: &'a str,
     passed: bool,
     files_scanned: usize,

@@ -5,6 +5,9 @@ pub use check::{
 pub mod check;
 mod dead_code;
 mod evidence;
+mod execution_failure;
+pub(crate) mod execution_plan;
+pub use execution_failure::ExecutionFailure;
 pub mod fmt;
 mod gate_evidence;
 pub mod init;

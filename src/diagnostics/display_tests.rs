@@ -190,9 +190,15 @@ fn clone_locations_each_receive_their_own_excerpt() {
 
     let display = diagnostics(&report);
     assert_eq!(display.diagnostics[0].excerpts.len(), 2);
-    assert_eq!(display.diagnostics[0].excerpts[0].file, "src/a.rs");
+    assert_eq!(
+        display.diagnostics[0].excerpts[0].file,
+        PathBuf::from("src/a.rs")
+    );
     assert_eq!(display.diagnostics[0].excerpts[0].first_line, 2);
-    assert_eq!(display.diagnostics[0].excerpts[1].file, "src/b.rs");
+    assert_eq!(
+        display.diagnostics[0].excerpts[1].file,
+        PathBuf::from("src/b.rs")
+    );
     assert_eq!(display.diagnostics[0].excerpts[1].first_line, 5);
 }
 

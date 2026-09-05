@@ -358,3 +358,9 @@ fn existing_file_and_broken_symlink_are_never_overwritten() {
         assert!(!root.join("missing-policy.toml").exists());
     });
 }
+
+fn initialize_manifest(root: &std::path::Path, name: &str, content: &str) -> HardgateConfig {
+    fs::write(root.join(name), content).unwrap();
+    cmd_init_with_options(options("balanced")).unwrap();
+    load_written(root)
+}

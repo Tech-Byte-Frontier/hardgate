@@ -1,0 +1,86 @@
+# Machine output version 1
+
+CLI gate reports, summary reports, mutation results, explicit mutation no-ops,
+configuration inspection and errors use `schema_version: 1`. Gate command names
+are `check`, `verify`, `scan` and `mutate`; parser errors use `arguments` because
+a valid command may not exist. MCP structured reports use `mcp_check` and
+`mcp_scan`, preserving their narrower static scope.
+
+| Field | Contract |
+| --- | --- |
+| `passed` | Whether the evaluated policy has no blocking failure; never proof that every engine ran |
+| `status` | `passed`, `violations`, `incomplete`, `noop`, or `error` |
+| `exit_code` | 0 for pass/no-op, 1 for policy violations, 2 for inability to evaluate required evidence |
+| `execution` | Command, scope, effective config identity and engine records; null when no validated plan exists |
+| `summary` | Complete finding and scan counts, independent of display limits (gate reports) |
+| `diagnostics` | Stable rule IDs, messages, locations, remediation, and optional captured source excerpts (full gate reports) |
+
+Mutation no-ops preserve the existing `stage`, `kind`, and `message` fields.
+Runtime and argument errors include these fields too. Normal mutation results
+retain `stats`, scores and per-mutant outcomes. Configuration inspection retains
+`effective`, `config_path`, `root`, and `invocation_dir`, and adds
+`config_identity`; it does not run analysis engines.
+
+## Execution evidence
+
+`execution.scope.mode` is `repository`, `paths`, or `diff`. Paths are resolved
+from the invocation directory; the config identity records the policy authority
+and root. `policy_sha256` hashes effective policy serialized as canonical JSON
+with recursively sorted object keys. Comments and whitespace do not change it;
+overrides do. The hash identifies policy, not source freshness or a cached verdict.
+
+Each engine has a stable `id`, policy `enabled`, command `selected`,
+`required_evidence`, `state`, and optional `reason`. Evidence paths from policy
+are relative to the configuration root; CLI report overrides are resolved paths.
+Required-evidence descriptions identify inputs, not proof that those inputs exist.
+
+| State | Meaning |
+| --- | --- |
+| `disabled` | Policy disables the engine or its external command is unconfigured |
+| `skipped` | Enabled but outside command scope, or no eligible input was evaluated |
+| `incomplete` | An input, parser, capacity, runner, or required report prevented complete evaluation |
+| `failed` | Completed evaluation found blocking policy violations |
+| `completed` | The selected engine evaluated eligible inputs successfully |
+| `cached` | Reserved; current engines never emit a cached result |
+
+Observations aggregate across files and role groups. Incomplete evidence is not
+overwritten by a later successful group. An aborted command reports selected
+engines as incomplete because complete evidence was not returned. In advisory
+policy modes, an engine can be incomplete while `passed` remains true; its
+advisory explains the gap. Engine reasons retain evidence failures even when
+role severity `ignore` omits the individual finding. Do not use `passed` alone to infer required execution.
+The legacy ratchet can grandfather prior static findings while retaining its
+reference-evidence status.
+
+`verify` evaluates static policy, configured dead code, coverage/mutation reports,
+freshness and the legacy ratchet. `check --all` additionally runs configured
+formatter/linter/test commands. Native mutation execution is exclusive to
+`mutate`; report ingestion is a separate engine. `scan` evaluates one file's
+static metrics and safety policy. MCP check and scan remain static tools.
+
+## Diagnostics and compatibility
+
+Full reports retain the existing category violation arrays, `functions`,
+advisories, top files and aggregate fields. New consumers should use
+`diagnostics[].rule_id` from the [rule catalog](DIAGNOSTIC_RULES.md), not parse
+mutable messages. The category order is budget, suppression, complexity,
+invariant, clone, coverage, mutation, dead code, orchestration. Clone locations
+include both ranges. Missing coordinates remain null; they are not invented.
+
+`--max-diagnostics N` limits the diagnostic stream and legacy category arrays
+with one shared count. `total`, `shown`, and `omitted` describe that presentation;
+`summary`, `passed`, engine states and exit status always use the complete result.
+Summary JSON keeps its lean shape without individual diagnostics.
+
+`--snippets` uses only captured source bytes. Eight lines per location, 240
+Unicode characters per line and 64 KiB of total snippet text bound the output.
+Control characters are escaped. Per-excerpt `truncated`, plus `snippet_bytes`
+and `snippets_truncated`, describe retained text. No source excerpt is fabricated
+when bytes are unavailable. These bounds do not truncate analysis or findings.
+
+Version 1 adds fields to the earlier unversioned report shape and standardizes
+exit codes. Consumers should accept unknown additive fields, check the version,
+and distinguish exit 1 from exit 2. A major schema change requires a new version;
+published rule IDs retain their meanings. Intentionally closed stdout exits 0
+without a panic, so pipelines needing the gate verdict must keep stdout open
+until the command finishes. Signal cancellation uses 130/143 outside the report.

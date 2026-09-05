@@ -1,6 +1,8 @@
 mod classification_gaps;
 use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use classification_gaps::record_classification_gaps;
+mod excerpts;
+mod observations;
 mod selection;
 #[cfg(test)]
 mod snapshot_tests;
@@ -70,6 +72,7 @@ pub fn run_static_gate_snapshot(
         paths: &[],
         diff: false,
         dead_code: false,
+        snippets: false,
     };
     let outcome = analyze_snapshot(request, files, Vec::new(), snapshot)?;
     Ok((
@@ -86,6 +89,7 @@ pub(crate) struct StaticRequest<'a> {
     pub paths: &'a [PathBuf],
     pub diff: bool,
     pub dead_code: bool,
+    pub snippets: bool,
 }
 
 pub(crate) struct StaticAnalysis {
@@ -117,6 +121,7 @@ pub fn run_static_gate_at(
         paths,
         diff,
         dead_code: false,
+        snippets: false,
     })?;
     if run.empty {
         return Ok(None);
@@ -253,6 +258,9 @@ fn analyze_snapshot(
             &mut report,
         )?;
     }
+    if request.snippets {
+        excerpts::capture(&snapshot, request.root, &mut report);
+    }
     Ok(StaticAnalysis {
         report,
         read_results: snapshot.shared_contents(&files),
@@ -289,6 +297,9 @@ fn analyze_loaded_files(
         invariants: &invariants,
     };
     let analyzed = analyze_inputs(analyzed_inputs, &context);
+    for (file, _) in analyzed_inputs {
+        observations::observe_file(file, config, report);
+    }
     merge_file_analysis(analyzed, config, report)
 }
 
@@ -474,5 +485,6 @@ pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec
         invariants: input.invariants,
     };
     let analyzed = analyze_one(&classified, input.content, &context);
+    observations::observe_file(&classified, input.config, report);
     merge_file_analysis(vec![analyzed], input.config, report)
 }

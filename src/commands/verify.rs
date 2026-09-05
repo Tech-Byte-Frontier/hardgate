@@ -5,7 +5,7 @@ use super::gate_evidence::{
     run_static_gate_or_empty,
 };
 use super::outcome::CommandResult;
-use super::role_policy::classify_file;
+use super::role_policy::classify_files;
 use super::static_gate::StaticRequest;
 use crate::config::{ConfigContext, HardgateConfig};
 use crate::diagnostics::GateReport;
@@ -28,6 +28,7 @@ pub struct VerifyOptions {
     pub no_snippets: bool,
     pub summary: bool,
     pub paths: Vec<PathBuf>,
+    pub display: crate::diagnostics::display::DisplayOptions,
 }
 
 /// Run static gates plus coverage and mutation report evaluation.
@@ -37,13 +38,33 @@ pub fn cmd_verify(opts: VerifyOptions) -> CommandResult {
 }
 
 pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> CommandResult {
+    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
+    opts.mutation_report = context.input_report(opts.mutation_report);
+    let plan = super::execution_plan::gate_plan(
+        context,
+        super::execution_plan::GateSelection {
+            command: "verify",
+            paths: &opts.paths,
+            diff: false,
+            dead_code: false,
+            all: false,
+            coverage_report: opts.coverage_report.as_deref(),
+            mutation_report: opts.mutation_report.as_deref(),
+        },
+    )?;
+
+    super::execution_failure::run_planned(plan, |plan| execute_verify(opts, context, plan))
+}
+
+fn execute_verify(
+    opts: VerifyOptions,
+    context: &ConfigContext,
+    plan: crate::diagnostics::execution::ExecutionPlan,
+) -> CommandResult {
     let start_time = Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
-    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
-    opts.mutation_report = context.input_report(opts.mutation_report);
     let scoped = !opts.paths.is_empty();
-
     let GateRun {
         mut report,
         files,
@@ -57,7 +78,9 @@ pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Comman
         paths: &opts.paths,
         diff: false,
         dead_code: config.analysis.dead_code.enabled,
+        snippets: opts.display.snippets,
     })?;
+    report.execution = Some(plan);
     if empty {
         report
             .advisories
@@ -105,6 +128,7 @@ pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Comman
                 compact: opts.compact,
                 no_snippets: opts.no_snippets,
                 summary: opts.summary,
+                display: opts.display.clone(),
             },
         },
     )
@@ -235,8 +259,33 @@ fn append_coverage_violations(
     coverage_map: &std::collections::HashMap<PathBuf, crate::engines::coverage::FileCoverage>,
     scope: Option<CoverageScope<'_>>,
 ) {
+    if coverage_has_inputs(request, coverage_map, scope.as_ref()) {
+        request.report.observe_engine(
+            crate::diagnostics::execution::EngineId::Coverage,
+            crate::diagnostics::execution::EngineState::Completed,
+        );
+    }
     let violations = coverage_violations(request, scorer, coverage_map, scope);
     request.report.coverage_violations.extend(violations);
+}
+
+fn coverage_has_inputs(
+    request: &CoverageVerification<'_>,
+    coverage_map: &std::collections::HashMap<PathBuf, crate::engines::coverage::FileCoverage>,
+    scope: Option<&CoverageScope<'_>>,
+) -> bool {
+    if let Some(lines) = request.changed_lines {
+        return lines.values().any(|lines| !lines.is_empty());
+    }
+    scope.map_or(!coverage_map.is_empty(), |scope| {
+        !scope.source_files.is_empty()
+            || request
+                .config
+                .coverage
+                .critical_paths
+                .as_ref()
+                .is_some_and(|paths| !paths.is_empty())
+    })
 }
 
 fn coverage_violations(
@@ -286,12 +335,24 @@ pub(crate) fn source_files_for_coverage(request: SourceCoverageRequest<'_>) -> V
         root: request.root,
         executable_files: &executable_rust_files,
     };
-    request
-        .files
+    let classified = match classify_files(request.files, request.config, request.root) {
+        Ok(files) => files,
+        Err(error) => {
+            record_evidence_failure(
+                request.report,
+                true,
+                EvidenceFailure {
+                    step: "coverage-source-classification",
+                    target: request.root,
+                    message: format!("Unable to classify source for coverage: {error}"),
+                },
+            );
+            return Vec::new();
+        }
+    };
+    classified
         .iter()
-        .filter_map(|path| {
-            source_file_for_coverage(path, &rust_scope, request.config, request.report)
-        })
+        .filter_map(|file| source_file_for_coverage(file, &rust_scope))
         .collect()
 }
 
@@ -301,26 +362,10 @@ struct RustCoverageScope<'a> {
 }
 
 fn source_file_for_coverage(
-    path: &Path,
+    classified: &crate::discovery::ClassifiedFile,
     rust_scope: &RustCoverageScope<'_>,
-    config: &HardgateConfig,
-    report: &mut GateReport,
 ) -> Option<PathBuf> {
-    let classified = match classify_file(path, config, rust_scope.root) {
-        Ok(classified) => classified,
-        Err(error) => {
-            record_evidence_failure(
-                report,
-                true,
-                EvidenceFailure {
-                    step: "classify-source",
-                    target: path,
-                    message: format!("Unable to classify source for coverage: {error}"),
-                },
-            );
-            return None;
-        }
-    };
+    let path = classified.path.as_path();
     if classified.role != FileRole::Source {
         return None;
     }
@@ -409,7 +454,13 @@ pub fn verify_mutation_at(
             continue;
         }
         match gatekeeper.evaluate_report(p) {
-            Ok(m_violations) => report.mutation_violations.extend(m_violations),
+            Ok(m_violations) => {
+                report.observe_engine(
+                    crate::diagnostics::execution::EngineId::MutationReport,
+                    crate::diagnostics::execution::EngineState::Completed,
+                );
+                report.mutation_violations.extend(m_violations);
+            }
             Err(e) => {
                 record_evidence_failure(
                     report,

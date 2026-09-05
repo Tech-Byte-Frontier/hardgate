@@ -67,6 +67,7 @@ fn emit_error(stage: &str, error: &anyhow::Error) -> io::Result<()> {
         "passed": false,
         "status": "error",
         "exit_code": CommandOutcome::Incomplete.exit_code(),
+        "execution": error.downcast_ref::<hardgate::commands::ExecutionFailure>().map(|failure| &failure.plan),
         "stage": mutation.map_or(stage, |error| error.stage),
         "kind": mutation.map_or("command-error", |error| error.kind),
         "message": format!("{error:#}"),
@@ -100,7 +101,7 @@ fn command_stage(command: &Commands) -> &'static str {
     match command {
         Commands::Check { .. } => "check",
         Commands::Scan { .. } => "scan",
-        Commands::Mutate { .. } => "mutation",
+        Commands::Mutate { .. } => "mutate",
         Commands::Verify { .. } => "verify",
         Commands::Config { .. } => "config",
         _ => utility_stage(command),
@@ -110,6 +111,7 @@ fn command_stage(command: &Commands) -> &'static str {
 fn utility_stage(command: &Commands) -> &'static str {
     match command {
         Commands::Init { .. } => "init",
+        Commands::Completions { .. } => "completions",
         Commands::Fmt { .. } => "fmt",
         _ => "mcp",
     }

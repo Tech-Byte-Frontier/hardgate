@@ -1,3 +1,5 @@
+use super::outcome::CommandOutcome;
+use crate::diagnostics::execution::{EngineId, EngineState, ExecutionPlan};
 use crate::engines::mutation::runner::MutationRunnerError;
 use crate::engines::mutation::{BaselineExecutionResult, BaselineOutcome};
 use crate::engines::{MutantExecutionResult, MutantOutcome, MutationStats};
@@ -56,10 +58,11 @@ impl std::error::Error for MutationFailure {}
 pub(crate) fn render_mutation_output(
     ctx: &MutationSummaryContext,
     format: Option<&str>,
+    execution: Option<&ExecutionPlan>,
 ) -> anyhow::Result<()> {
     match format {
         Some("agent") => render_agent_output(ctx),
-        Some("json") => render_json_output(ctx),
+        Some("json") => render_json_output(ctx, execution),
         _ => {
             write!(
                 std::io::stdout().lock(),
@@ -71,11 +74,21 @@ pub(crate) fn render_mutation_output(
     }
 }
 
-fn render_json_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
+fn render_json_output(
+    ctx: &MutationSummaryContext,
+    execution: Option<&ExecutionPlan>,
+) -> anyhow::Result<()> {
+    let outcome = ctx.outcome();
+    let execution = mutation_execution(execution, outcome);
     writeln!(
         std::io::stdout().lock(),
         "{}",
         serde_json::to_string_pretty(&MutationJson {
+            schema_version: 1,
+            command: "mutate",
+            status: outcome.status(),
+            exit_code: outcome.exit_code(),
+            execution: execution.as_ref(),
             stats: ctx.stats,
             score: ctx.score,
             min_score: ctx.min_score,
@@ -123,6 +136,11 @@ fn render_agent_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
 
 #[derive(Serialize)]
 struct MutationJson<'a> {
+    schema_version: u32,
+    command: &'static str,
+    status: &'static str,
+    exit_code: u8,
+    execution: Option<&'a ExecutionPlan>,
     stats: &'a MutationStats,
     score: f64,
     min_score: f64,
@@ -167,22 +185,33 @@ struct MutationNoopNotice {
 pub(crate) fn render_mutation_noop(
     noop: MutationNoop<'_>,
     format: Option<&str>,
+    execution: Option<&ExecutionPlan>,
 ) -> anyhow::Result<()> {
     if format == Some("json") {
         writeln!(
             std::io::stdout().lock(),
             "{}",
-            serde_json::to_string_pretty(&noop)?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1, "command": "mutate", "exit_code": 0, "execution": execution,
+                "passed": noop.passed, "status": noop.status, "stage": noop.stage, "kind": noop.kind, "message": noop.message,
+            }))?
         )?;
     }
     Ok(())
 }
 
-pub(crate) fn finish_disabled_mutation(format: Option<&str>) -> anyhow::Result<()> {
-    render_noop_or_note(format, DISABLED_MUTATION_NOTICE)
+pub(crate) fn finish_disabled_mutation(
+    format: Option<&str>,
+    execution: &ExecutionPlan,
+) -> anyhow::Result<()> {
+    render_noop_or_note(format, DISABLED_MUTATION_NOTICE, execution)
 }
 
-pub(crate) fn handle_no_targets(diff: bool, format: Option<&str>) -> anyhow::Result<()> {
+pub(crate) fn handle_no_targets(
+    diff: bool,
+    format: Option<&str>,
+    execution: &ExecutionPlan,
+) -> anyhow::Result<()> {
     if !diff {
         return Err(MutationFailure::new(
             "setup",
@@ -191,10 +220,14 @@ pub(crate) fn handle_no_targets(diff: bool, format: Option<&str>) -> anyhow::Res
         )
         .into());
     }
-    render_noop_or_note(format, NO_CHANGED_TARGETS_NOTICE)
+    render_noop_or_note(format, NO_CHANGED_TARGETS_NOTICE, execution)
 }
 
-fn render_noop_or_note(format: Option<&str>, notice: MutationNoopNotice) -> anyhow::Result<()> {
+fn render_noop_or_note(
+    format: Option<&str>,
+    notice: MutationNoopNotice,
+    execution: &ExecutionPlan,
+) -> anyhow::Result<()> {
     if format == Some("json") {
         render_mutation_noop(
             MutationNoop {
@@ -205,6 +238,7 @@ fn render_noop_or_note(format: Option<&str>, notice: MutationNoopNotice) -> anyh
                 message: notice.message,
             },
             format,
+            Some(execution),
         )?;
     } else {
         writeln!(
@@ -347,4 +381,40 @@ fn append_closing_verdict(out: &mut String, ctx: &MutationSummaryContext) {
         ctx.stats.equivalent,
         ctx.stats.unviable
     ));
+}
+
+impl MutationSummaryContext<'_> {
+    pub(crate) fn outcome(&self) -> CommandOutcome {
+        if self.passed {
+            CommandOutcome::Passed
+        } else if self.stats.runner_error > 0
+            || self.stats.timeout > 0
+            || self.stats.compile_error > 0
+            || self.stats.unviable > 0
+            || self.stats.killed + self.stats.survived == 0
+        {
+            CommandOutcome::Incomplete
+        } else {
+            CommandOutcome::Violations
+        }
+    }
+}
+
+fn mutation_execution(
+    plan: Option<&ExecutionPlan>,
+    outcome: CommandOutcome,
+) -> Option<ExecutionPlan> {
+    let mut plan = plan?.clone();
+    let state = match outcome {
+        CommandOutcome::Passed => EngineState::Completed,
+        CommandOutcome::Violations => EngineState::Failed,
+        CommandOutcome::Incomplete => EngineState::Incomplete,
+    };
+    for engine in &mut plan.engines {
+        if engine.id == EngineId::MutationExecution {
+            engine.state = state;
+            engine.reason = None;
+        }
+    }
+    Some(plan)
 }

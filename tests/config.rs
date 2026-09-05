@@ -20,17 +20,17 @@ fn test_clean_toml_formatting() {
     assert!(toml_str.contains("[gate]"));
     assert!(toml_str.contains("[orchestration]"));
     assert!(toml_str.contains("[analysis.dead_code]"));
-    assert!(toml_str.contains("format_check = \"oxfmt --check .\""));
+    assert!(!toml_str.contains("format_check ="));
 
     // The template must deserialize cleanly back into a config.
     let parsed: Result<hardgate::config::HardgateConfig, _> = toml::from_str(&toml_str);
     assert!(parsed.is_ok());
     let cfg = parsed.unwrap();
     assert_eq!(cfg.gate.preset, hardgate::config::Preset::StrictAgent);
-    assert_eq!(
-        cfg.orchestration.format_check.as_deref(),
-        Some("oxfmt --check .")
-    );
+    assert!(cfg.orchestration.format_check.is_none());
+    assert!(cfg.orchestration.format.is_none());
+    assert!(cfg.orchestration.lint.is_none());
+    assert!(cfg.orchestration.test_cmd.is_none());
 }
 
 #[test]

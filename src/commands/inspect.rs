@@ -8,6 +8,11 @@ pub fn cmd_config(context: &ConfigContext, format: &str) -> Result<()> {
     if format == "json" {
         let value = serde_json::json!({
             "schema_version": 1,
+            "command": "config",
+            "status": "passed",
+            "passed": true,
+            "exit_code": 0,
+            "config_identity": crate::diagnostics::execution::ConfigIdentity::from_context(context)?,
             "config_path": context.config_path,
             "root": context.root,
             "invocation_dir": context.invocation_dir,

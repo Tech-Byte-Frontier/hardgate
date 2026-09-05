@@ -113,31 +113,22 @@ timeout_secs = 2
 #[test]
 fn init_uses_strict_agent_by_default_and_supports_each_preset() {
     let cases = [
-        ("default", None, "strict-agent", "StrictAgent"),
-        (
-            "strict",
-            Some("strict-agent"),
-            "strict-agent",
-            "StrictAgent",
-        ),
-        ("balanced", Some("balanced"), "balanced", "Balanced"),
-        (
-            "legacy",
-            Some("legacy-migration"),
-            "legacy-migration",
-            "LegacyMigration",
-        ),
-        ("custom", Some("custom"), "custom", "Custom"),
+        ("default", None, "strict-agent"),
+        ("strict", Some("strict-agent"), "strict-agent"),
+        ("balanced", Some("balanced"), "balanced"),
+        ("legacy", Some("legacy-migration"), "legacy-migration"),
+        ("custom", Some("custom"), "custom"),
     ];
 
-    for (tag, preset, config_value, debug_name) in cases {
+    for (tag, preset, config_value) in cases {
         let fixture = Fixture::new("cli-commands", &format!("init-{tag}"), None);
         let args = preset.map_or_else(|| vec!["init"], |value| vec!["init", "--preset", value]);
         let output = run(fixture.as_ref(), &args);
         assert_status(&output, true, &format!("init {tag}"));
         let config = std::fs::read_to_string(fixture.0.join("hardgate.toml")).unwrap();
         assert!(config.contains(&format!("preset = \"{config_value}\"")));
-        assert!(output_text(&output).contains(&format!("preset [{debug_name}]")));
+        assert!(stderr_text(&output).contains(&format!("preset={config_value}")));
+        assert!(output.stdout.is_empty());
     }
 }
 
@@ -153,7 +144,7 @@ fn init_never_overwrites_an_existing_config() {
         std::fs::read_to_string(fixture.0.join("hardgate.toml")).unwrap(),
         original
     );
-    assert!(output_text(&output).contains("already exists in this directory"));
+    assert!(stderr_text(&output).contains("already exists in this directory"));
 }
 
 #[test]

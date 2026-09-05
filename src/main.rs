@@ -4,6 +4,7 @@ use hardgate::mcp;
 use std::path::PathBuf;
 
 mod build_info;
+mod cli_completions;
 mod cli_runtime;
 
 #[derive(Parser)]
@@ -52,6 +53,12 @@ struct OutputArgs {
     /// Print concise summary only (totals + top files)
     #[arg(long)]
     summary: bool,
+    /// Include bounded excerpts captured during analysis
+    #[arg(long, conflicts_with = "no_snippets")]
+    snippets: bool,
+    /// Display at most N diagnostics; complete analysis and verdict are unchanged
+    #[arg(long, value_name = "N")]
+    max_diagnostics: Option<usize>,
 }
 
 impl OutputArgs {
@@ -62,12 +69,24 @@ impl OutputArgs {
             compact: self.compact,
             no_snippets: self.no_snippets,
             summary: self.summary,
+            display: self.display_options(),
+        }
+    }
+    fn display_options(&self) -> hardgate::diagnostics::display::DisplayOptions {
+        hardgate::diagnostics::display::DisplayOptions {
+            snippets: self.snippets,
+            max_diagnostics: self.max_diagnostics,
         }
     }
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print shell completion script without loading policy or running tools
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Initialize hardgate.toml in the current repository
     Init {
         /// Config preset: strict-agent (AI agents), balanced (hybrid teams),
@@ -80,6 +99,21 @@ enum Commands {
             ignore_case = true
         )]
         preset: String,
+        /// Print proposed TOML without writing a file
+        #[arg(long)]
+        preview: bool,
+        /// Emit the full effective policy instead of preset plus overrides
+        #[arg(long)]
+        full: bool,
+        /// Explicit command that fails when formatting changes are needed
+        #[arg(long)]
+        format_check: Option<String>,
+        /// Explicit formatter command (may change project files when fmt runs)
+        #[arg(long)]
+        format_command: Option<String>,
+        /// Explicit linter command
+        #[arg(long)]
+        lint: Option<String>,
     },
     /// Run fast deterministic static gate checks
     Check {
@@ -184,12 +218,28 @@ fn run_cli(cli: Cli) -> commands::CommandResult {
 
 fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> commands::CommandResult {
     match cmd {
-        Commands::Init { preset } => {
+        Commands::Completions { shell } => cli_completions::generate(shell),
+        Commands::Init {
+            preset,
+            preview,
+            full,
+            format_check,
+            format_command,
+            lint,
+        } => {
             anyhow::ensure!(
                 config.is_none(),
                 "init writes hardgate.toml in the current directory; --config selects an existing policy"
             );
-            commands::cmd_init(&preset).map(|()| commands::CommandOutcome::Passed)
+            commands::init::cmd_init_with_options(commands::init::InitOptions {
+                preset,
+                preview,
+                full,
+                format_check,
+                format: format_command,
+                lint,
+            })
+            .map(|()| commands::CommandOutcome::Passed)
         }
         Commands::Mcp => {
             mcp::run_mcp_server_with_config(config).map(|()| commands::CommandOutcome::Passed)
@@ -238,6 +288,7 @@ fn execute_gate_command(
                     compact: opts.compact,
                     no_snippets: opts.no_snippets,
                     summary: opts.summary,
+                    display: opts.display,
                     paths,
                 },
                 context,
@@ -281,6 +332,7 @@ fn execute_gate_command(
                     compact: opts.compact,
                     no_snippets: opts.no_snippets,
                     summary: opts.summary,
+                    display: opts.display,
                     paths,
                 },
                 context,

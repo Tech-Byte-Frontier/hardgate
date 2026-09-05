@@ -4,7 +4,7 @@ mod support;
 use hardgate::commands::init::cmd_init_with_options;
 use std::fs;
 use std::process::Command;
-use support::{WorkingDirectory, load_written, options, with_root};
+use support::{WorkingDirectory, assert_commands, load_written, options, with_root};
 
 fn assert_nested_case(tag: &str, manifest: &str, manifest_content: &str, expected: [&str; 4]) {
     with_root(tag, |root| {

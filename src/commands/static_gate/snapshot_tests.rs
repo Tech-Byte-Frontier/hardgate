@@ -42,6 +42,7 @@ fn all_engines_keep_captured_bytes_after_the_worktree_changes() {
             paths: &[],
             diff: true,
             dead_code: true,
+            snippets: false,
         },
         files.clone(),
         Vec::new(),

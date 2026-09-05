@@ -12,6 +12,14 @@ pub enum CommandOutcome {
 pub type CommandResult = anyhow::Result<CommandOutcome>;
 
 impl CommandOutcome {
+    pub fn status(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Violations => "violations",
+            Self::Incomplete => "incomplete",
+        }
+    }
+
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Passed => 0,
@@ -37,13 +45,7 @@ fn incomplete_evidence(report: &GateReport) -> bool {
         .iter()
         .any(|failure| failure.exit_code.is_none() || matches!(failure.exit_code, Some(126 | 127)))
         || report.coverage_violations.iter().any(|failure| {
-            matches!(
-                failure.metric.as_str(),
-                "Missing Source Coverage"
-                    | "Missing Diff Coverage"
-                    | "Missing Critical Path"
-                    | "Coverage Count Overflow"
-            )
+            crate::diagnostics::execution_observations::missing_coverage(&failure.metric)
         })
 }
 

@@ -23,6 +23,8 @@ include = [
   "/LICENSE-APACHE",
   "/docs/ARCHITECTURE.md",
   "/docs/CLI_AND_INTEGRATION.md",
+  "/docs/REPORT_SCHEMA.md",
+  "/docs/DIAGNOSTIC_RULES.md",
   "/docs/CONFIGURATION_SPEC.md",
   "/docs/EXISTING_LANDSCAPE.md",
   "/docs/VISION_AND_PARADIGM.md",
@@ -47,6 +49,8 @@ inherits = "release"
 
 [dependencies]
 clap = { version = "=4.6.6", features = ["derive"] }
+clap_complete = "=4.6.9"
+sha2 = "=0.11.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = "=1.1.5"
 rayon = "=1.12.0"

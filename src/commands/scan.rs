@@ -19,20 +19,40 @@ pub fn cmd_scan_in(
     opts: OutputOptions,
     context: &ConfigContext,
 ) -> CommandResult {
+    let file_path = context.input_path(file_path);
+    let plan = super::execution_plan::gate_plan(
+        context,
+        super::execution_plan::GateSelection {
+            command: "scan",
+            paths: std::slice::from_ref(&file_path),
+            diff: false,
+            dead_code: false,
+            all: false,
+            coverage_report: None,
+            mutation_report: None,
+        },
+    )?;
+    super::execution_failure::run_planned(plan, |plan| {
+        execute_scan(&file_path, opts, context, plan)
+    })
+}
+
+fn execute_scan(
+    file_path: &Path,
+    opts: OutputOptions,
+    context: &ConfigContext,
+    plan: crate::diagnostics::execution::ExecutionPlan,
+) -> CommandResult {
     let start_time = std::time::Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
-    let resolved = context.input_path(file_path);
-    let file_path = resolved.as_path();
-
     if !file_path.exists() {
         anyhow::bail!("File not found: {:?}", file_path);
     }
-
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read file: {:?}", file_path))?;
-
     let mut report = GateReport::new(config.gate.name.clone());
+    report.execution = Some(plan);
     let scanner = AntiGamingScanner::new(&config.anti_gaming);
     let invariants = InvariantsChecker::new(&config.invariants.rules);
     let functions = analyze_file_content(
@@ -47,6 +67,12 @@ pub fn cmd_scan_in(
         &mut report,
     );
 
+    if opts.display.snippets {
+        let relative = file_path.strip_prefix(root).unwrap_or(file_path);
+        report
+            .source_text
+            .insert(relative.to_path_buf(), std::sync::Arc::from(content));
+    }
     let fn_len = functions.len();
     report.functions = functions;
     emit_gate_report(

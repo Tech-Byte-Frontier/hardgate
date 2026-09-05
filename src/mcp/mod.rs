@@ -142,7 +142,7 @@ fn get_tools_list() -> serde_json::Value {
         "tools": [
             {
                 "name": "hardgate_check",
-                "description": "Deterministic quality gate verification (budgets, anti-gaming, AST complexity, architectural boundaries).",
+                "description": "Static analysis of budgets, anti-gaming, AST complexity, architectural boundaries and clones. Does not evaluate coverage/mutation reports, dead code, legacy ratchets or run project commands; use CLI check/verify for configured evidence.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -237,20 +237,17 @@ fn execute_check_with_config(
         paths: &paths,
         diff: diff_only,
         dead_code: false,
+        snippets: false,
     }) {
         Ok(outcome) => outcome,
         Err(error) => return tool_error(&format!("Failed to discover source files: {error}")),
     };
     if outcome.empty {
-        return tool_error(if scoped.is_some() {
-            "No source files matched the provided paths; refusing an empty successful check"
-        } else {
-            "No source files discovered; refusing an empty successful check"
-        });
+        return empty_check_error(scoped.is_some());
     }
     let mut report = outcome.report;
     report.finalize(outcome.files.len(), outcome.functions.len(), 0);
-    json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
+    mcp_planned_report(report, mcp_plan(context, "mcp_check", &paths, diff_only))
 }
 
 fn parse_check_args(args: &serde_json::Value) -> Result<(bool, Option<Vec<PathBuf>>), String> {
@@ -350,6 +347,10 @@ fn execute_file_tool(
 fn execute_scan_path(path: &Path, context: &ConfigContext) -> serde_json::Value {
     let config = &context.config;
     let mut report = GateReport::new(config.gate.name.clone());
+    match mcp_plan(context, "mcp_scan", &[path.to_path_buf()], false) {
+        Ok(plan) => report.execution = Some(plan),
+        Err(error) => return tool_error(&format!("Cannot identify policy: {error}")),
+    }
     let read_results = match read_files_content(&[path.to_path_buf()]) {
         Ok(contents) => contents,
         Err(error) => return tool_error(&error),
@@ -357,7 +358,7 @@ fn execute_scan_path(path: &Path, context: &ConfigContext) -> serde_json::Value 
     let func_count = analyze_file_contents(&read_results, context, &context.root, &mut report);
 
     report.finalize(1, func_count, 0);
-    json!({ "content": [{ "type": "text", "text": report.render_agent() }] })
+    mcp_report(&report)
 }
 
 fn analyze_file_contents(
@@ -431,3 +432,57 @@ fn tool_error(msg: &str) -> serde_json::Value {
 #[cfg(test)]
 #[path = "mcp_tests.rs"]
 mod tests;
+
+fn mcp_plan(
+    context: &ConfigContext,
+    command: &str,
+    paths: &[PathBuf],
+    diff: bool,
+) -> anyhow::Result<crate::diagnostics::execution::ExecutionPlan> {
+    crate::commands::execution_plan::gate_plan(
+        context,
+        crate::commands::execution_plan::GateSelection {
+            command,
+            paths,
+            diff,
+            dead_code: false,
+            all: false,
+            coverage_report: None,
+            mutation_report: None,
+        },
+    )
+}
+
+fn mcp_report(report: &GateReport) -> serde_json::Value {
+    match report
+        .render_json()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text))
+    {
+        Ok(value) => {
+            json!({ "content": [{"type": "text", "text": report.render_agent()}], "structuredContent": value })
+        }
+        Err(error) => tool_error(&format!("Cannot render analysis: {error}")),
+    }
+}
+
+fn empty_check_error(scoped: bool) -> serde_json::Value {
+    tool_error(if scoped {
+        "No source files matched the provided paths; refusing an empty successful check"
+    } else {
+        "No source files discovered; refusing an empty successful check"
+    })
+}
+
+fn mcp_planned_report(
+    mut report: GateReport,
+    plan: anyhow::Result<crate::diagnostics::execution::ExecutionPlan>,
+) -> serde_json::Value {
+    match plan {
+        Ok(mut plan) => {
+            plan.reconcile(&report.engine_observations, &report.engine_reasons);
+            report.execution = Some(plan);
+            mcp_report(&report)
+        }
+        Err(error) => tool_error(&format!("Cannot identify policy: {error}")),
+    }
+}

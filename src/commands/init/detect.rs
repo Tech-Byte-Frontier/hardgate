@@ -463,12 +463,12 @@ fn set_script_commands(
     }
 }
 
-fn first_script<'a>(scripts: &'a BTreeSet<String>, names: &[&str]) -> Option<&'a str> {
-    names.iter().find(|name| scripts.contains(*name)).copied()
+fn first_script<'a>(scripts: &BTreeSet<String>, names: &[&'a str]) -> Option<&'a str> {
+    names.iter().find(|name| scripts.contains(**name)).copied()
 }
 
 fn has_toml_table(content: &str, path: &[&str]) -> bool {
-    let Ok(value) = content.parse::<toml::Value>() else {
+    let Ok(value) = toml::from_str::<toml::Value>(content) else {
         return false;
     };
     let mut current = &value;

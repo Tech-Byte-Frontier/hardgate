@@ -1,5 +1,10 @@
 mod agent;
 mod compact;
+pub mod display;
+pub mod execution;
+pub(crate) mod execution_observations;
+mod machine;
+pub mod rules;
 mod summary;
 mod terminal;
 
@@ -16,6 +21,17 @@ pub use summary::{GateSummary, TopFileEntry};
 /// counts needed for terminal, agent, compact, summary, and JSON rendering.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GateReport {
+    #[serde(default)]
+    pub execution: Option<execution::ExecutionPlan>,
+    #[serde(skip)]
+    pub(crate) engine_observations:
+        std::collections::BTreeMap<execution::EngineId, execution::EngineState>,
+    #[serde(skip)]
+    pub(crate) engine_reasons: std::collections::BTreeMap<execution::EngineId, String>,
+    #[serde(skip)]
+    pub display: display::DisplayOptions,
+    #[serde(skip)]
+    pub(crate) source_text: std::collections::BTreeMap<std::path::PathBuf, std::sync::Arc<str>>,
     pub gate_name: String,
     pub files_scanned: usize,
     pub functions_analyzed: usize,
@@ -71,6 +87,7 @@ impl GateReport {
         self.functions_analyzed = functions_analyzed;
         self.duration_ms = duration_ms;
         self.passed = self.total_violations() == 0;
+        self.finalize_execution();
     }
 }
 

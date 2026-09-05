@@ -6,6 +6,9 @@ use super::outcome::{CommandOutcome, CommandResult};
 use std::io::Write;
 #[path = "mutate/baselines.rs"]
 mod baselines;
+#[path = "mutate/progress.rs"]
+mod progress;
+use progress::{print_generation_notice, print_mutant_notice};
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
@@ -45,6 +48,7 @@ struct MutationRun<'a> {
     results: &'a [MutantExecutionResult],
     stats: &'a MutationStats,
     start_time: Instant,
+    plan: crate::diagnostics::execution::ExecutionPlan,
 }
 
 /// Run native Tree-sitter AST mutation testing: generate mutants, execute the
@@ -57,17 +61,39 @@ pub fn cmd_mutate(opts: MutateOptions) -> CommandResult {
 }
 
 pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> CommandResult {
+    opts.scoped = opts.scoped.map(|path| context.input_path(&path));
+    let paths = opts.scoped.iter().cloned().collect::<Vec<_>>();
+    let plan = super::execution_plan::gate_plan(
+        context,
+        super::execution_plan::GateSelection {
+            command: "mutate",
+            paths: &paths,
+            diff: opts.diff,
+            dead_code: false,
+            all: false,
+            coverage_report: None,
+            mutation_report: None,
+        },
+    )?;
+    super::execution_failure::run_planned(plan, |plan| execute_mutate(opts, context, plan))
+}
+
+fn execute_mutate(
+    opts: MutateOptions,
+    context: &ConfigContext,
+    plan: crate::diagnostics::execution::ExecutionPlan,
+) -> CommandResult {
     let start_time = Instant::now();
     let config = &context.config;
     let root = context.root.as_path();
-    opts.scoped = opts.scoped.map(|path| context.input_path(&path));
     if !config.mutation.enabled {
-        return finish_disabled_mutation(opts.format.as_deref()).map(|()| CommandOutcome::Passed);
+        return finish_disabled_mutation(opts.format.as_deref(), &plan)
+            .map(|()| CommandOutcome::Passed);
     }
     let target_files = discover_targets(&opts, config, root)
         .map_err(|error| MutationFailure::new("setup", "setup-error", error.to_string()))?;
     if target_files.is_empty() {
-        return handle_no_targets(opts.diff, opts.format.as_deref())
+        return handle_no_targets(opts.diff, opts.format.as_deref(), &plan)
             .map(|()| CommandOutcome::Passed);
     }
     let workspace = workspace::MutationWorkspace::create(root, &target_files)
@@ -115,19 +141,10 @@ pub fn cmd_mutate_in(mut opts: MutateOptions, context: &ConfigContext) -> Comman
         results: &results,
         stats: &stats,
         start_time,
+        plan,
     })
 }
 
-fn print_generation_notice(files: &[PathBuf], diff: bool) -> Result<()> {
-    writeln!(
-        std::io::stdout().lock(),
-        "{} generating AST mutations across {} source files (diff: {})...",
-        "note:".bold(),
-        files.len().to_string().cyan(),
-        diff
-    )?;
-    Ok(())
-}
 fn resolve_max_mutants(opts: &MutateOptions, config: &HardgateConfig) -> Result<usize> {
     let max_count = opts
         .max_mutants
@@ -201,43 +218,20 @@ fn automatic_full_suite_timeout(
     }
     Ok(recommended)
 }
-fn print_mutant_notice(count: usize, timeout: u64) -> Result<()> {
-    writeln!(
-        std::io::stdout().lock(),
-        "{} running {} mutants (timeout: {}s per mutant)...",
-        "note:".bold(),
-        count.to_string().cyan(),
-        timeout
-    )?;
-    Ok(())
-}
 fn finish_mutation_run(run: MutationRun<'_>) -> CommandResult {
     let score = run.stats.score_percent();
     let min_score = run.config.mutation.min_score.unwrap_or(85.0);
     let passed = mutation_run_passed(run.stats, score, min_score);
-    render_mutation_output(
-        &MutationSummaryContext {
-            stats: run.stats,
-            results: run.results,
-            score,
-            min_score,
-            passed,
-            elapsed: run.start_time.elapsed().as_millis(),
-        },
-        run.opts.format.as_deref(),
-    )?;
-    Ok(if passed {
-        CommandOutcome::Passed
-    } else if run.stats.runner_error > 0
-        || run.stats.timeout > 0
-        || run.stats.compile_error > 0
-        || run.stats.unviable > 0
-        || run.stats.killed + run.stats.survived == 0
-    {
-        CommandOutcome::Incomplete
-    } else {
-        CommandOutcome::Violations
-    })
+    let context = MutationSummaryContext {
+        stats: run.stats,
+        results: run.results,
+        score,
+        min_score,
+        passed,
+        elapsed: run.start_time.elapsed().as_millis(),
+    };
+    render_mutation_output(&context, run.opts.format.as_deref(), Some(&run.plan))?;
+    Ok(context.outcome())
 }
 /// Resolve whether a path is an effective native mutation target under the
 /// built-in role default and any configured role policy override.

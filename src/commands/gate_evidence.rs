@@ -1,6 +1,6 @@
 use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
-use super::role_policy::classify_file;
+use super::role_policy::classify_files;
 use super::source_snapshot::SharedSource;
 pub(crate) use super::static_gate::StaticAnalysis as GateRun;
 use super::static_gate::{StaticRequest, run_shared_gate, run_static_gate_snapshot};
@@ -47,6 +47,10 @@ pub(crate) fn run_generated_freshness(
     let Some(result) = execute_generated_freshness(&config.generated, root) else {
         return;
     };
+    report.observe_engine(
+        crate::diagnostics::execution::EngineId::GeneratedFreshness,
+        crate::diagnostics::execution::EngineState::Completed,
+    );
     match result {
         Ok(result) => report.advisories.push(format!(
             "generated-freshness evidence: `{}` completed successfully.",
@@ -85,6 +89,10 @@ pub(crate) fn run_legacy_ratchet(
 
     match load_reference(root, reference) {
         Ok(loaded) => {
+            current.observe_engine(
+                crate::diagnostics::execution::EngineId::LegacyRatchet,
+                crate::diagnostics::execution::EngineState::Completed,
+            );
             let summary = apply_legacy_baseline(LegacyBaselineRequest {
                 config,
                 root,
@@ -254,14 +262,19 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
         .collect();
     let mut source_files = BTreeSet::new();
     let mut source_contents = std::collections::BTreeMap::new();
-    for (path, content) in request.read_results {
+    let paths = request
+        .read_results
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let classified = classify_files(&paths, request.config, request.root)?;
+    for ((path, content), classified) in request.read_results.iter().zip(classified) {
         let Some(key) = normalized_repository_key(path, request.root) else {
             continue;
         };
         if !selected.contains(&key) {
             continue;
         }
-        let classified = classify_file(path, request.config, request.root)?;
         if classified.ast_supported && classified.role == FileRole::Source {
             source_files.insert(key.clone());
             source_contents.entry(key).or_insert(content.as_ref());

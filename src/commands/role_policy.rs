@@ -151,6 +151,7 @@ pub(crate) fn clone_config_for_role(
 }
 
 pub(crate) fn record_role_evidence_failure(report: &mut GateReport, failure: RoleEvidence<'_>) {
+    report.observe_evidence_failure(failure.step, &failure.message);
     match severity(failure.config, failure.role) {
         Severity::Error => record_evidence_failure(
             report,

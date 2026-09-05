@@ -208,9 +208,9 @@ fn mutation_output_modes_and_noops_are_rendered() {
         passed: true,
         elapsed: 1,
     };
-    render_mutation_output(&context, Some("agent")).unwrap();
-    render_mutation_output(&context, Some("json")).unwrap();
-    render_mutation_output(&context, None).unwrap();
+    render_mutation_output(&context, Some("agent"), None).unwrap();
+    render_mutation_output(&context, Some("json"), None).unwrap();
+    render_mutation_output(&context, None, None).unwrap();
     for format in [Some("json"), None] {
         render_mutation_noop(
             MutationNoop {
@@ -221,6 +221,7 @@ fn mutation_output_modes_and_noops_are_rendered() {
                 message: "nothing selected",
             },
             format,
+            None,
         )
         .unwrap();
     }

@@ -76,6 +76,12 @@ fn run_graph(input: GraphInput<'_>, report: &mut GateReport) {
         .iter()
         .map(|(file, _)| (relative_path(&file.path, input.root), file.role))
         .collect();
+    if !files.is_empty() {
+        report.observe_engine(
+            crate::diagnostics::execution::EngineId::DeadCode,
+            crate::diagnostics::execution::EngineState::Completed,
+        );
+    }
     let analyzer = DeadCodeAnalyzer::new(&input.config.analysis.dead_code);
     for finding in analyzer.analyze_borrowed(&files, &contents, input.root) {
         if input
