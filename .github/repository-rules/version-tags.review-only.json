@@ -17,20 +17,10 @@
       "type": "non_fast_forward"
     },
     {
-      "type": "required_signatures"
+      "type": "update",
+      "parameters": {
+        "update_allows_fetch_and_merge": false
+      }
     }
-  ],
-  "_proposal": {
-    "status": "REVIEW-ONLY",
-    "api_submission": "Keep this payload disabled until the maintainer verifies signed version-tag behavior on the intended repository plan and explicitly authorizes repository settings changes.",
-    "recovery": {
-      "maintainer": "repository administrator",
-      "steps": [
-        "Record the incident, version tag, source commit, and intended recovery in a tracked issue before changing repository rules.",
-        "Never delete, move, or reuse an existing version tag; create a new signed annotated version tag only after CI quality aggregate succeeds for the exact commit.",
-        "If signing is blocked, verify the configured release signer and allowed-signers file; do not bypass signature validation or retag an existing release.",
-        "If an administrative ruleset change is unavoidable, make the smallest time-bounded change through the GitHub ruleset UI or API, capture its audit entry, and restore protection before the next release."
-      ]
-    }
-  }
+  ]
 }

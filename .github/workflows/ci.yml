@@ -18,7 +18,7 @@ env:
   HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS: "1"
   NODE_VERSION: 26.8.1
   # npm/hardgate/package.json declares engines.node >=18; keep that floor in CI.
-  NODE_MIN_VERSION: 18.20.8
+  NODE_MIN_VERSION: 18.0.0
   NPM_VERSION: 12.0.2
   PNPM_VERSION: 11.25.0
   YARN_VERSION: 4.18.0
@@ -152,7 +152,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Run focused Unix process and restoration tests
-        run: cargo test --locked --test orchestration_timeout --test mutation_runner_identity --test mutation_runner_adversarial -- --test-threads=1
+        run: cargo test --locked --test orchestration_timeout --test mutation_runner_identity --test mutation_runner_adversarial --test mutation_isolation -- --test-threads=1
 
   repository-rules:
     name: Repository rules proposal contract

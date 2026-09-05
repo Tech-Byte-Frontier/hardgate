@@ -1,0 +1,15 @@
+{
+  "status": "REVIEW-ONLY",
+  "api_payload": "version-tags.review-only.json",
+  "api_submission": "Keep the API payload disabled until the maintainer verifies immutable version-tag behavior on the intended repository plan and explicitly authorizes repository settings changes.",
+  "signed_tag_authorization": "Signed annotated version tags remain authorized by the existing release preflight: git verify-tag with .github/release-allowed-signers. The ruleset payload protects tag ref updates and deletions; it does not verify tag objects.",
+  "recovery": {
+    "maintainer": "repository administrator",
+    "steps": [
+      "Record the incident, version tag, source commit, and intended recovery in a tracked issue before changing repository rules.",
+      "Never delete, move, or reuse an existing version tag; create a new signed annotated version tag only after CI quality aggregate succeeds for the exact commit.",
+      "If signing is blocked, verify the configured release signer and allowed-signers file through the existing release preflight; do not bypass verification or retag an existing release.",
+      "If an administrative ruleset change is unavoidable, make the smallest time-bounded change through the GitHub ruleset UI or API, capture its audit entry, and restore protection before the next release."
+    ]
+  }
+}

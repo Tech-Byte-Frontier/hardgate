@@ -39,17 +39,5 @@
         "strict_required_status_checks_policy": true
       }
     }
-  ],
-  "_proposal": {
-    "status": "REVIEW-ONLY",
-    "api_submission": "Keep this payload disabled until the maintainer verifies the check name on a completed pull request and explicitly authorizes repository settings changes.",
-    "recovery": {
-      "maintainer": "repository administrator",
-      "steps": [
-        "Record the incident, target commit, and intended recovery in a tracked issue before changing repository rules.",
-        "Resolve the failed CI quality aggregate or review condition through a new reviewed commit; never force-push or delete main.",
-        "If an administrative ruleset change is unavoidable, make the smallest time-bounded change through the GitHub ruleset UI or API, capture its audit entry, and restore protection before the next merge."
-      ]
-    }
-  }
+  ]
 }
