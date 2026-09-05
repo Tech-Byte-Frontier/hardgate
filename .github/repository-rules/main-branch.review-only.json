@@ -1,0 +1,55 @@
+{
+  "name": "REVIEW-ONLY: protect main",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": ["merge", "squash", "rebase"],
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 1,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "CI quality aggregate"
+          }
+        ],
+        "strict_required_status_checks_policy": true
+      }
+    }
+  ],
+  "_proposal": {
+    "status": "REVIEW-ONLY",
+    "api_submission": "Keep this payload disabled until the maintainer verifies the check name on a completed pull request and explicitly authorizes repository settings changes.",
+    "recovery": {
+      "maintainer": "repository administrator",
+      "steps": [
+        "Record the incident, target commit, and intended recovery in a tracked issue before changing repository rules.",
+        "Resolve the failed CI quality aggregate or review condition through a new reviewed commit; never force-push or delete main.",
+        "If an administrative ruleset change is unavoidable, make the smallest time-bounded change through the GitHub ruleset UI or API, capture its audit entry, and restore protection before the next merge."
+      ]
+    }
+  }
+}

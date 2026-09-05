@@ -17,6 +17,8 @@ env:
   CARGO_LLVM_COV_VERSION: 0.9.0
   HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS: "1"
   NODE_VERSION: 26.8.1
+  # npm/hardgate/package.json declares engines.node >=18; keep that floor in CI.
+  NODE_MIN_VERSION: 18.20.8
   NPM_VERSION: 12.0.2
   PNPM_VERSION: 11.25.0
   YARN_VERSION: 4.18.0
@@ -108,6 +110,66 @@ jobs:
       # job already provisions without another runner/toolchain setup.
       - run: node tests/release_contract.sbom.test.mjs
 
+  npm-wrapper-minimum:
+    name: npm wrapper minimum Node compatibility
+    needs: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_MIN_VERSION }}
+      - name: Download the shared native release binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.rust.outputs.native_artifact_id }}
+          path: target/release
+          digest-mismatch: error
+      - run: chmod 755 target/release/hardgate
+      - run: node --version
+      - run: node scripts/sync-npm-version.mjs --check
+      - run: node tests/npm-wrapper.test.mjs
+        env:
+          HARDGATE_BINARY: target/release/hardgate
+      - run: node tests/npm-wrapper-regression.test.mjs
+        env:
+          HARDGATE_BINARY: target/release/hardgate
+
+  macos-process-restoration:
+    name: macOS Unix process and restoration
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Run focused Unix process and restoration tests
+        run: cargo test --locked --test orchestration_timeout --test mutation_runner_identity --test mutation_runner_adversarial -- --test-threads=1
+
+  repository-rules:
+    name: Repository rules proposal contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: node --check scripts/verify-repository-rules.mjs
+      - run: node scripts/verify-repository-rules.mjs
+      - run: node tests/repository_rules.test.mjs
+
   hardgate-self:
     name: Hardgate complete self/evidence gate
     needs: rust
@@ -170,7 +232,7 @@ jobs:
   quality:
     name: CI quality aggregate
     if: ${{ always() }}
-    needs: [rust, npm-wrapper, hardgate-self, release-contract]
+    needs: [rust, npm-wrapper, npm-wrapper-minimum, macos-process-restoration, repository-rules, hardgate-self, release-contract]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every quality job to pass
