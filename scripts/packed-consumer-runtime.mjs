@@ -40,6 +40,14 @@ function clearAmbientConfig(env) {
   ]) delete env[key];
 }
 
+function privateRuntimePath(root) {
+  const directory = path.join(root, "private-bin");
+  const sentinel = path.join(directory, "hardgate");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(sentinel, "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+  return [directory, path.dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"].join(path.delimiter);
+}
+
 function writeNpmConfig(file, registryUrl, cache) {
   fs.writeFileSync(file, [
     `registry=${registryUrl}`, `cache=${cache}`, "audit=false", "fund=false",
@@ -105,6 +113,10 @@ function cleanConsumerEnvironment(root, registryUrl, cache, store) {
   return env;
 }
 
+function invocationEnvironment(root, installEnvironment) {
+  return { ...installEnvironment, PATH: privateRuntimePath(root) };
+}
+
 export function createConsumerRoot(parent, manager) {
   const root = path.join(parent, manager);
   fs.mkdirSync(root, { recursive: true });
@@ -114,7 +126,29 @@ export function createConsumerRoot(parent, manager) {
   return root;
 }
 
-function installedPackageManifest(root, packageName, from = path.join(root, "package.json")) {
+function installedNodeModules(root) {
+  const directory = path.join(root, "node_modules");
+  try {
+    return fs.realpathSync(directory);
+  } catch (error) {
+    fail(`fresh consumer node_modules is missing: ${directory} (${error.message})`);
+  }
+}
+
+function installedPath(root, candidate, label) {
+  const modules = installedNodeModules(root);
+  let resolved;
+  try {
+    resolved = fs.realpathSync(candidate);
+  } catch (error) {
+    fail(`${label} is not inside fresh consumer node_modules: ${candidate} (${error.message})`);
+  }
+  const relative = path.relative(modules, resolved);
+  if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail(`${label} escaped fresh consumer node_modules: ${resolved}`);
+  return resolved;
+}
+
+export function resolveInstalledPackage(root, packageName, from = path.join(root, "package.json")) {
   const requireFromRoot = createRequire(from);
   let manifestPath;
   try {
@@ -122,20 +156,50 @@ function installedPackageManifest(root, packageName, from = path.join(root, "pac
   } catch (error) {
     fail(`installed optional dependency ${packageName} is not resolvable: ${error.message}`);
   }
-  return { path: manifestPath, manifest: JSON.parse(fs.readFileSync(manifestPath, "utf8")) };
+  const resolvedPath = installedPath(root, manifestPath, `installed ${packageName} manifest`);
+  return { path: resolvedPath, manifest: JSON.parse(fs.readFileSync(resolvedPath, "utf8")) };
 }
 
 function installedPackageBinary(root, packageName, from) {
-  const packageManifest = installedPackageManifest(root, packageName, from);
+  const packageManifest = resolveInstalledPackage(root, packageName, from);
   const binary = path.join(path.dirname(packageManifest.path), "bin", "hardgate");
   let stat;
   try {
-    stat = fs.statSync(binary);
+    stat = fs.statSync(installedPath(root, binary, `installed ${packageName} binary`));
   } catch (error) {
     fail(`installed ${packageName} binary is missing: ${binary} (${error.message})`);
   }
   if (!stat.isFile() || (stat.mode & 0o111) === 0) fail(`installed ${packageName} binary is not executable: ${binary}`);
-  return { ...packageManifest, binary };
+  return { ...packageManifest, binary: installedPath(root, binary, `installed ${packageName} binary`) };
+}
+
+function withEnvironment(environment, operation) {
+  const previous = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, environment);
+    return operation();
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, previous);
+  }
+}
+
+export function resolveWrapperBinary({ launcherPath, environment }) {
+  const requireLauncher = createRequire(launcherPath);
+  const launcher = requireLauncher(launcherPath);
+  if (typeof launcher.findBinary !== "function") fail(`installed wrapper does not export findBinary: ${launcherPath}`);
+  return withEnvironment(environment, () => launcher.findBinary());
+}
+
+export function verifyResolvedNative({ root, resolved, expectedNative, label }) {
+  if (!resolved) fail(`${label} did not resolve an installed native binary`);
+  const actual = installedPath(root, resolved, `${label} native resolution`);
+  if (expectedNative) {
+    const expected = installedPath(root, expectedNative, `${label} expected native`);
+    if (actual !== expected) fail(`${label} resolved ${actual}; expected installed native ${expected}`);
+  }
+  return actual;
 }
 
 async function boundedProcess(command, args, options, label) {
@@ -166,25 +230,29 @@ export async function installAndVerify({ manager, root, registry, version, host,
     ? ["install", "--no-audit", "--no-fund", "--include=optional", "--registry", registry.baseUrl, spec]
     : ["add", "--registry", registry.baseUrl, "--store-dir", store, spec];
   await boundedProcess(managerExecutable, args, { cwd: root, env }, `${manager} packed consumer install`);
-  const wrapper = installedPackageManifest(root, WRAPPER_NAME);
+  const wrapper = resolveInstalledPackage(root, WRAPPER_NAME);
   verifyInstalledPackage(wrapper, WRAPPER_NAME, version, `${manager} installed wrapper`);
-  const installedLauncher = path.join(path.dirname(wrapper.path), "bin", "hardgate.js");
+  const installedLauncher = installedPath(root, path.join(path.dirname(wrapper.path), "bin", "hardgate.js"), `${manager} installed wrapper launcher`);
   if (!fs.readFileSync(installedLauncher).equals(wrapperLauncherBytes)) fail(`${manager} installed wrapper launcher bytes differ from the packed wrapper archive`);
   const nativePackage = installedPackageBinary(root, host, wrapper.path);
   verifyInstalledPackage(nativePackage, host, version, `${manager} installed native`);
   const installedHash = crypto.createHash("sha256").update(fs.readFileSync(nativePackage.binary)).digest("hex");
   if (installedHash !== expectedHash) fail(`${manager} resolved ${host} digest ${installedHash} does not match expected ${expectedHash}`);
   const wrapperBinary = path.join(root, "node_modules", ".bin", "hardgate");
+  const installedWrapperBinary = installedPath(root, wrapperBinary, `${manager} installed wrapper .bin entry`);
   let wrapperStat;
   try {
-    wrapperStat = fs.statSync(wrapperBinary);
+    wrapperStat = fs.statSync(installedWrapperBinary);
   } catch (error) {
     fail(`${manager} installed wrapper .bin entry is missing: ${error.message}`);
   }
   if (!wrapperStat.isFile() || (wrapperStat.mode & 0o111) === 0) fail(`${manager} installed wrapper .bin entry is not executable`);
-  const output = (await boundedProcess(wrapperBinary, ["--version"], { cwd: root, env }, `${manager} packed consumer invocation`)).trim();
+  const invocationEnv = invocationEnvironment(root, env);
+  const resolvedNative = resolveWrapperBinary({ launcherPath: installedLauncher, environment: invocationEnv });
+  verifyResolvedNative({ root, resolved: resolvedNative, expectedNative: nativePackage.binary, label: `${manager} wrapper` });
+  const output = (await boundedProcess(installedWrapperBinary, ["--version"], { cwd: root, env: invocationEnv }, `${manager} packed consumer invocation`)).trim();
   if (output !== expectedOutput) fail(`${manager} installed wrapper reported ${JSON.stringify(output)}; expected ${JSON.stringify(expectedOutput)}`);
-  return { manager, root, nativeBinary: fs.realpathSync(nativePackage.binary), nativeSha256: installedHash, versionOutput: output };
+  return { manager, nativeSha256: installedHash, versionOutput: output };
 }
 
 export async function expectedVersion(binary, version, tempRoot) {

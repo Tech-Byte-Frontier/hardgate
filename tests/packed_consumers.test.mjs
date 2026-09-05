@@ -5,12 +5,17 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { checkPackedConsumers } from "../scripts/check-packed-consumers.mjs";
+import { aggregateCleanupErrors, checkPackedConsumers } from "../scripts/check-packed-consumers.mjs";
+import { inspectPackedArtifacts, snapshotArchiveFiles, verifyArchiveSnapshot, MAX_ARCHIVE_BYTES } from "../scripts/packed-consumer-artifacts.mjs";
+import { startLocalRegistry } from "../scripts/packed-consumer-registry.mjs";
+import { resolveInstalledPackage, resolveWrapperBinary, verifyResolvedNative } from "../scripts/packed-consumer-runtime.mjs";
+import { runReleaseProcess } from "../scripts/release-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-packed-consumer-test-"));
@@ -20,6 +25,19 @@ function run(command, args, options = {}) {
   assert.equal(result.error, undefined, `${command} could not start: ${result.error?.message ?? "unknown error"}`);
   assert.equal(result.status, 0, `${command} ${args.join(" ")} failed\n${result.stdout}\n${result.stderr}`);
   return result;
+}
+
+async function runAsync(command, args, options = {}) {
+  try {
+    return await runReleaseProcess(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    assert.fail(`${command} ${args.join(" ")} failed: ${error.message}\n${error.stdout ?? ""}\n${error.stderr ?? ""}`);
+  }
 }
 
 function hash(file) {
@@ -74,6 +92,91 @@ function makeFixtureArchives() {
   return { packagesDir, nativeBinary };
 }
 
+function packModified(sourceName, label, mutate) {
+  const packageDirectory = path.join(fixtureRoot, `bad-${label}`);
+  const packagesDir = path.join(fixtureRoot, `bad-${label}-packages`);
+  fs.cpSync(path.join(fixtureRoot, sourceName), packageDirectory, { recursive: true });
+  const manifestPath = path.join(packageDirectory, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  mutate(manifest);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  fs.mkdirSync(packagesDir, { recursive: true });
+  run("npm", ["pack", "--json", "--loglevel=error", "--pack-destination", packagesDir], {
+    cwd: packageDirectory,
+    env: fixtureEnvironment(),
+  });
+  const modifiedArchives = new Set(fs.readdirSync(packagesDir).filter((name) => name.endsWith(".tgz")));
+  for (const archive of fs.readdirSync(path.join(fixtureRoot, "packages")).filter((name) => name.endsWith(".tgz"))) {
+    if (!modifiedArchives.has(archive)) fs.copyFileSync(path.join(fixtureRoot, "packages", archive), path.join(packagesDir, archive));
+  }
+  return packagesDir;
+}
+
+function httpStatus(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode));
+    });
+    request.once("error", reject);
+  });
+}
+
+async function makeSkippedOptionalRoot(nativeBinary, registry) {
+  const root = path.join(fixtureRoot, "skipped-optional");
+  const ambient = path.join(fixtureRoot, "ambient-bin");
+  const sentinel = path.join(fixtureRoot, "sentinel-bin");
+  const cache = path.join(root, "cache");
+  const home = path.join(root, "home");
+  const userConfig = path.join(root, "npmrc");
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(ambient, { recursive: true });
+  fs.mkdirSync(sentinel, { recursive: true });
+  fs.writeFileSync(path.join(root, "package.json"), "{}\n");
+  const env = {
+    ...fixtureEnvironment(),
+    HOME: home,
+    NPM_CONFIG_CACHE: cache,
+    npm_config_cache: cache,
+    NPM_CONFIG_USERCONFIG: userConfig,
+    npm_config_userconfig: userConfig,
+    NPM_CONFIG_REGISTRY: registry.baseUrl,
+    npm_config_registry: registry.baseUrl,
+    NPM_CONFIG_OMIT: "optional",
+    npm_config_omit: "optional",
+    NPM_CONFIG_INCLUDE: "",
+    npm_config_include: "",
+    NPM_CONFIG_IGNORE_SCRIPTS: "false",
+    npm_config_ignore_scripts: "false",
+    HTTP_PROXY: "",
+    HTTPS_PROXY: "",
+    ALL_PROXY: "",
+    http_proxy: "",
+    https_proxy: "",
+    all_proxy: "",
+    NPM_CONFIG_PROXY: "",
+    npm_config_proxy: "",
+    NPM_CONFIG_HTTPS_PROXY: "",
+    npm_config_https_proxy: "",
+  };
+  fs.mkdirSync(cache, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(userConfig, `registry=${registry.baseUrl}\ncache=${cache}\nomit=optional\nignore-scripts=false\naudit=false\nfund=false\n`);
+  await runAsync("npm", ["install", "--no-audit", "--no-fund", "--omit=optional", "--registry", registry.baseUrl, "@tech-byte-frontier/hardgate@0.5.0"], {
+    cwd: root,
+    env,
+  });
+  fs.copyFileSync(nativeBinary, path.join(ambient, "hardgate"));
+  fs.chmodSync(path.join(ambient, "hardgate"), 0o755);
+  fs.writeFileSync(path.join(sentinel, "hardgate"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+  return {
+    root,
+    launcher: path.join(root, "node_modules", "@tech-byte-frontier", "hardgate", "bin", "hardgate.js"),
+    environment: { PATH: [sentinel, ambient, path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter) },
+    ambient: path.join(ambient, "hardgate"),
+  };
+}
+
 try {
   const fixture = makeFixtureArchives();
   const archiveFiles = fs.readdirSync(fixture.packagesDir).filter((name) => name.endsWith(".tgz"));
@@ -106,6 +209,83 @@ try {
     checkPackedConsumers({ packagesDir: missingHost, binary: fixture.nativeBinary, version: "0.5.0" }),
     /missing host optional dependency hardgate-linux-x64/,
   );
+
+  const badUrl = packModified("hardgate-linux-x64", "url", (manifest) => {
+    manifest.optionalDependencies = { "fixture-redirect": "https://registry.example.invalid/redirect.tgz" };
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: badUrl, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /optionalDependency fixture-redirect must be a registry version/,
+  );
+
+  const badPlatformDeps = packModified("hardgate-linux-x64", "platform-deps", (manifest) => {
+    manifest.optionalDependencies = { "fixture-extra": "0.5.0" };
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: badPlatformDeps, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /hardgate-linux-x64 must not declare optionalDependencies/,
+  );
+
+  const badHook = packModified("hardgate", "hook", (manifest) => {
+    manifest.scripts.postinstall = "curl https://registry.example.invalid/install";
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: badHook, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /must not declare npm lifecycle hook postinstall/,
+  );
+
+  const inspected = inspectPackedArtifacts(fixture.packagesDir, "0.5.0", fixture.nativeBinary);
+  const registry = await startLocalRegistry(inspected.artifacts);
+  try {
+    const skipped = await makeSkippedOptionalRoot(fixture.nativeBinary, registry);
+    assert.throws(
+      () => resolveInstalledPackage(skipped.root, "hardgate-linux-x64"),
+      /installed optional dependency hardgate-linux-x64 is not resolvable/,
+    );
+    const ambientResolved = resolveWrapperBinary({ launcherPath: skipped.launcher, environment: skipped.environment });
+    assert.equal(fs.realpathSync(ambientResolved), fs.realpathSync(skipped.ambient));
+    assert.throws(
+      () => verifyResolvedNative({ root: skipped.root, resolved: ambientResolved, label: "skipped optional" }),
+      /escaped fresh consumer node_modules/,
+    );
+  } finally {
+    await registry.close();
+  }
+
+  const limitedRegistry = await startLocalRegistry(inspected.artifacts, { maxRequests: 1, requestTimeoutMs: 1_000 });
+  try {
+    assert.equal(await httpStatus(`${limitedRegistry.baseUrl}missing-package`), 404);
+    assert.equal(await httpStatus(`${limitedRegistry.baseUrl}missing-package`), 429);
+  } finally {
+    await limitedRegistry.close();
+  }
+
+  const ancestorRoot = path.join(fixtureRoot, "ancestor");
+  fs.mkdirSync(path.join(ancestorRoot, "node_modules", "hardgate-linux-x64"), { recursive: true });
+  fs.mkdirSync(path.join(ancestorRoot, "child", "node_modules"), { recursive: true });
+  fs.writeFileSync(path.join(ancestorRoot, "child", "package.json"), "{}\n");
+  fs.writeFileSync(path.join(ancestorRoot, "node_modules", "hardgate-linux-x64", "package.json"), JSON.stringify({ name: "hardgate-linux-x64", version: "0.5.0" }));
+  await assert.rejects(
+    Promise.resolve().then(() => resolveInstalledPackage(path.join(ancestorRoot, "child"), "hardgate-linux-x64")),
+    /escaped fresh consumer node_modules/,
+  );
+
+  const oversizedDir = path.join(fixtureRoot, "oversized");
+  fs.mkdirSync(oversizedDir);
+  const oversized = path.join(oversizedDir, "oversized.tgz");
+  const fd = fs.openSync(oversized, "w");
+  fs.ftruncateSync(fd, MAX_ARCHIVE_BYTES + 1);
+  fs.closeSync(fd);
+  assert.throws(
+    () => inspectPackedArtifacts(oversizedDir, "0.5.0", fixture.nativeBinary),
+    /archive exceeds 67108864 bytes/,
+  );
+
+  const snapshot = snapshotArchiveFiles(inspected.artifacts);
+  fs.appendFileSync(snapshot[0].path, "changed");
+  assert.throws(() => verifyArchiveSnapshot(snapshot), /packed archive snapshot changed/);
+  const primary = new Error("primary");
+  assert.equal(aggregateCleanupErrors(primary, [new Error("cleanup")]).errors[0], primary);
   console.log("packed_consumers.test: OK");
 } finally {
   fs.rmSync(fixtureRoot, { recursive: true, force: true });

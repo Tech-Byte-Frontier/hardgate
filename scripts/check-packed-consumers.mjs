@@ -6,14 +6,47 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { inspectPackedArtifacts } from "./packed-consumer-artifacts.mjs";
+import { inspectPackedArtifacts, snapshotArchiveFiles, verifyArchiveSnapshot } from "./packed-consumer-artifacts.mjs";
 import { startLocalRegistry } from "./packed-consumer-registry.mjs";
 import { createConsumerRoot, expectedVersion, installAndVerify } from "./packed-consumer-runtime.mjs";
 
+export function aggregateCleanupErrors(primaryError, cleanupErrors) {
+  if (!primaryError && cleanupErrors.length === 0) return null;
+  if (!primaryError && cleanupErrors.length === 1) return cleanupErrors[0];
+  if (!primaryError) return new AggregateError(cleanupErrors, "packed consumer cleanup failed");
+  if (cleanupErrors.length === 0) return primaryError;
+  return new AggregateError([primaryError, ...cleanupErrors], "packed consumer check and cleanup failed", { cause: primaryError });
+}
+
+async function finalizePackedCheck({ snapshot, registry, tempRoot, result, primaryError }) {
+  const cleanupErrors = [];
+  try {
+    verifyArchiveSnapshot(snapshot);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    if (registry) await registry.close();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  const failure = aggregateCleanupErrors(primaryError, cleanupErrors);
+  if (failure) throw failure;
+  return result;
+}
+
 export async function checkPackedConsumers({ packagesDir, binary, version }) {
   const inspected = inspectPackedArtifacts(packagesDir, version, binary);
+  const snapshot = snapshotArchiveFiles(inspected.artifacts);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-packed-consumers-"));
   let registry;
+  let result;
+  let primaryError;
   try {
     const expectedOutput = await expectedVersion(inspected.expectedBinary, inspected.expectedVersion, tempRoot);
     registry = await startLocalRegistry(inspected.artifacts);
@@ -32,7 +65,8 @@ export async function checkPackedConsumers({ packagesDir, binary, version }) {
         tempRoot,
       }));
     }
-    return {
+    verifyArchiveSnapshot(snapshot);
+    result = {
       version: inspected.expectedVersion,
       hostPackage: inspected.host,
       binarySha256: inspected.expectedHash,
@@ -45,10 +79,10 @@ export async function checkPackedConsumers({ packagesDir, binary, version }) {
       consumers,
       registryRequests: registry.requests,
     };
-  } finally {
-    if (registry) await registry.close();
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } catch (error) {
+    primaryError = error;
   }
+  return finalizePackedCheck({ snapshot, registry, tempRoot, result, primaryError });
 }
 
 function parseArgs(argv) {

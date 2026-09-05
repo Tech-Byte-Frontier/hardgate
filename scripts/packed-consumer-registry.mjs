@@ -4,7 +4,8 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-const MAX_REGISTRY_REQUESTS = 10_000;
+const DEFAULT_MAX_REGISTRY_REQUESTS = 10_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 function sendResponse(response, status, body, contentType = "text/plain; charset=utf-8") {
   const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -25,7 +26,6 @@ function registryManifest(artifact, baseUrl) {
   const manifest = structuredClone(artifact.manifest);
   manifest._id = `${artifact.name}@${artifact.version}`;
   manifest.dist = {
-    ...(manifest.dist ?? {}),
     shasum: artifact.shasum,
     integrity: artifact.integrity,
     tarball: `${baseUrl}__hardgate-tarball/${artifactKey(artifact.name)}.tgz`,
@@ -48,7 +48,6 @@ function packageMetadata(artifact, baseUrl) {
 }
 
 function recordRequest(requests, request, pathname, status) {
-  if (requests.length >= MAX_REGISTRY_REQUESTS) return;
   requests.push({ method: request.method, path: pathname, status });
 }
 
@@ -62,7 +61,13 @@ function tarballForPath(artifacts, pathname) {
   return [...artifacts.values()].find((artifact) => artifactKey(artifact.name) === key) ?? false;
 }
 
-function requestHandler({ artifacts, requests, server, request, response }) {
+function requestHandler({ artifacts, requests, server, request, response, maxRequests, requestTimeoutMs }) {
+  if (requests.length >= maxRequests) {
+    request.resume();
+    sendResponse(response, 429, "registry request limit exceeded\n");
+    return;
+  }
+  request.setTimeout(requestTimeoutMs, () => request.destroy());
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(request.url, "http://127.0.0.1").pathname);
@@ -101,9 +106,16 @@ function requestHandler({ artifacts, requests, server, request, response }) {
   sendResponse(response, 200, body, "application/json; charset=utf-8");
 }
 
-export async function startLocalRegistry(artifacts) {
+export async function startLocalRegistry(artifacts, { maxRequests = DEFAULT_MAX_REGISTRY_REQUESTS, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 1) throw new Error("registry maxRequests must be a positive integer");
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) throw new Error("registry requestTimeoutMs must be a positive integer");
   const requests = [];
-  const server = http.createServer((request, response) => requestHandler({ artifacts, requests, server, request, response }));
+  const server = http.createServer((request, response) => requestHandler({ artifacts, requests, server, request, response, maxRequests, requestTimeoutMs }));
+  server.headersTimeout = requestTimeoutMs;
+  server.requestTimeout = requestTimeoutMs;
+  server.timeout = requestTimeoutMs;
+  server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 64;
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -115,6 +127,7 @@ export async function startLocalRegistry(artifacts) {
     requests,
     async close() {
       server.closeAllConnections?.();
+      server.closeIdleConnections?.();
       await new Promise((resolve) => server.close(() => resolve()));
     },
   };
