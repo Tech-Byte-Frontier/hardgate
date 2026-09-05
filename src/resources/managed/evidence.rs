@@ -452,3 +452,7 @@ fn resource_io(operation: &str, error: io::Error) -> io::Error {
 #[cfg(test)]
 #[path = "evidence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "evidence_failure_tests.rs"]
+mod failure_tests;
