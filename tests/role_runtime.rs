@@ -232,3 +232,71 @@ fn snapshot_uses_role_function_policy() {
             .any(|finding| finding.metric == "Cyclomatic Complexity")
     );
 }
+
+#[test]
+fn recognized_non_ast_inventory_sources_such_as_sql_and_css_validate_truthfully() {
+    let mut config = HardgateConfig::default();
+    config.clones.enabled = false;
+    config.roles.source.max_lines = Some(5);
+
+    // CSS and SQL sources in src/ should NOT fail on unsupported-source
+    let report = snapshot(
+        &config,
+        &[
+            ("src/styles.css", "body { color: red; }\n"),
+            ("src/queries.sql", "SELECT id, name FROM users;\n"),
+        ],
+    );
+
+    // No unsupported-source failures
+    assert!(
+        report
+            .orchestration_violations
+            .iter()
+            .all(|finding| finding.step != "unsupported-source"),
+        "recognized SQL/CSS sources must not fail on unsupported-source: {:?}",
+        report.orchestration_violations
+    );
+    assert!(
+        report.advisories.iter().any(|adv| adv.contains("styles.css")),
+        "advisories must mention styles.css was validated without AST"
+    );
+    assert!(
+        report.advisories.iter().any(|adv| adv.contains("queries.sql")),
+        "advisories must mention queries.sql was validated without AST"
+    );
+
+    // Truthful budget validation: exceeding max_lines still triggers budget violations!
+    let big_css = "body { margin: 0; }\n".repeat(10);
+    let budget_report = snapshot(&config, &[("src/styles.css", &big_css)]);
+    assert!(
+        budget_report
+            .budget_violations
+            .iter()
+            .any(|finding| finding.file.ends_with("styles.css")),
+        "budget validation must still apply to CSS files"
+    );
+}
+
+#[test]
+fn uninventoried_source_fails_closed_on_unsupported_source() {
+    let mut config = HardgateConfig::default();
+    config.clones.enabled = false;
+    config.classification = toml::from_str(
+        r#"
+        [[rules]]
+        glob = "src/script.xyz"
+        role = "source"
+        "#,
+    )
+    .unwrap();
+
+    let report = snapshot(&config, &[("src/script.xyz", "puts 'hello'\n")]);
+    assert!(
+        report
+            .orchestration_violations
+            .iter()
+            .any(|finding| finding.step == "unsupported-source"),
+        "uninventoried source extension must fail closed on unsupported-source"
+    );
+}

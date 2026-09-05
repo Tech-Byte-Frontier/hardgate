@@ -42,7 +42,28 @@ fn record_classification_gap(
                 message: "No repository role matched this file.".to_string(),
             },
         );
-    } else if matches!(file.role, FileRole::Source | FileRole::Migration) && !file.ast_supported {
+    } else if file.role == FileRole::Source && !file.ast_supported {
+        if crate::discovery::classification::is_inventory_file(&file.path) {
+            report.advisories.push(format!(
+                "role Source: `{}` is a recognized inventory source without AST parser; validated for file budgets, suppressions, and invariants.",
+                rel.display()
+            ));
+        } else {
+            record_role_evidence_failure(
+                report,
+                RoleEvidence {
+                    config,
+                    role: file.role,
+                    step: "unsupported-source",
+                    target: rel,
+                    message: format!(
+                        "File is classified as {:?}, but no AST engine supports its extension.",
+                        file.role
+                    ),
+                },
+            );
+        }
+    } else if file.role == FileRole::Migration && !file.ast_supported {
         record_role_evidence_failure(
             report,
             RoleEvidence {

@@ -177,7 +177,7 @@ pub const AST_EXTENSIONS: &[&str] = &[
 /// them. This prevents Markdown/SQL/data files from disappearing silently.
 pub const INVENTORY_EXTENSIONS: &[&str] = &[
     "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "go", "css", "mdx", "sql",
-    "json", "jsonc", "graphql", "gql", "snap", "toml", "yaml", "yml",
+    "json", "jsonc", "graphql", "gql", "snap", "toml", "yaml", "yml", "lock", "lockb",
 ];
 
 pub fn is_inventory_file(path: &Path) -> bool {
@@ -213,6 +213,9 @@ fn classify_builtin_parts(path: &str, file_name: &str) -> (FileRole, &'static st
     if has_directory_component(path, VENDOR_DIRS) {
         return (FileRole::Vendor, "dependency or build-output directory");
     }
+    if is_lockfile(file_name) {
+        return (FileRole::Generated, "lockfile convention");
+    }
     if is_generated(path, file_name) {
         return (FileRole::Generated, "generated-code convention");
     }
@@ -237,6 +240,23 @@ fn classify_builtin_parts(path: &str, file_name: &str) -> (FileRole, &'static st
     (FileRole::Unknown, "no built-in classification rule")
 }
 
+const LOCKFILES: &[&str] = &[
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "cargo.lock",
+    "poetry.lock",
+    "pipfile.lock",
+    "bun.lock",
+    "bun.lockb",
+    "composer.lock",
+];
+
+pub fn is_lockfile(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    LOCKFILES.contains(&lower.as_str())
+}
+
 const VENDOR_DIRS: &[&str] = &[
     "node_modules",
     "target",
@@ -249,7 +269,8 @@ const VENDOR_DIRS: &[&str] = &[
 ];
 
 fn is_generated(path: &str, file_name: &str) -> bool {
-    has_directory_component(path, &["__generated__", "generated", "gen"])
+    is_lockfile(file_name)
+        || has_directory_component(path, &["__generated__", "generated", "gen"])
         || has_filename_token(file_name, "generated")
         || has_filename_token(file_name, "gen")
         || matches!(file_name, "database.types.ts" | "schema.gen.ts")

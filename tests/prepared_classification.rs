@@ -94,3 +94,28 @@ fn prepared_classifier_marks_all_supported_javascript_extensions() {
         assert!(classified.ast_supported, "{path}");
     }
 }
+
+#[test]
+fn lockfiles_are_classified_as_generated() {
+    let prepared = PreparedClassifier::new(&ClassificationConfig::default()).unwrap();
+
+    for lockfile in [
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+        "Cargo.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "bun.lock",
+        "composer.lock",
+    ] {
+        let classified = prepared.classify(Path::new(lockfile));
+        assert_eq!(
+            classified.role,
+            FileRole::Generated,
+            "lockfile {lockfile} must be classified as Generated"
+        );
+        assert_eq!(classified.reason, "lockfile convention");
+        assert!(!classified.ast_supported);
+    }
+}
