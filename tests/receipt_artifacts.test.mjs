@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { CHANNELS } from "../scripts/release-receipt-validation.mjs";
-import { selectReceiptArtifacts } from "../scripts/select-receipt-artifacts.mjs";
+import { parseArtifactPages, selectReceiptArtifacts } from "../scripts/select-receipt-artifacts.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "scripts", "select-receipt-artifacts.mjs");
@@ -49,6 +49,26 @@ rejected([...allCurrent(1000).filter((_, index) => index !== 1), artifact(packag
 rejected(allCurrent(1100).map((item, index) => index === 0 ? { ...item, workflow_run: { id: "7" } } : item), /another run/);
 rejected(allCurrent(1200).map((item, index) => index === 0 ? { ...item, payload: "x".repeat(70 * 1024) } : item), /too large/);
 rejected(allCurrent(1300).map((item, index) => index === 0 ? { ...item, id: Number.MAX_SAFE_INTEGER + 1 } : item), /positive/);
+
+const largePageArtifacts = [
+  ...allCurrent(1400),
+  ...Array.from({ length: 94 }, (_, index) => ({
+    id: String(1500 + index),
+    name: `ordinary-build-${index}`,
+    expired: false,
+    workflow_run: { id: runId },
+    metadata: "x".repeat(800),
+  })),
+];
+assert.ok(Buffer.byteLength(JSON.stringify({ total_count: 100, artifacts: largePageArtifacts }), "utf8") > 64 * 1024);
+assert.equal(parseArtifactPages(JSON.stringify([{ total_count: 100, artifacts: largePageArtifacts }])).length, 100);
+assert.throws(
+  () => parseArtifactPages(JSON.stringify([{
+    total_count: 100,
+    artifacts: largePageArtifacts.map((item) => ({ ...item, metadata: "x".repeat(50 * 1024) })),
+  }])),
+  /page 0 metadata is too large/,
+);
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-receipt-artifacts-"));
 try {

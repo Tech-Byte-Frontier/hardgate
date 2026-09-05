@@ -55,14 +55,14 @@ function normalizeOptions(options) {
   };
 }
 
-function validateMetadataSize(value, label) {
+function validateMetadataSize(value, label, maximum = MAX_METADATA_BYTES) {
   let serialized;
   try {
     serialized = JSON.stringify(value);
   } catch {
     fail(`${label} metadata is malformed`);
   }
-  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > MAX_METADATA_BYTES) {
+  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > maximum) {
     fail(`${label} metadata is too large`);
   }
 }
@@ -154,14 +154,14 @@ function validatePageTotal(page, label) {
 function appendPageArtifacts(page, index, artifacts) {
   const label = `page ${index}`;
   assertPlainObject(page, label);
-  validateMetadataSize(page, label);
+  validateMetadataSize(page, label, MAX_OUTPUT_BYTES);
   if (!Array.isArray(page.artifacts)) fail(`${label}.artifacts must be an array`);
   validatePageTotal(page, label);
   if (artifacts.length + page.artifacts.length > MAX_ARTIFACTS) fail("artifact metadata exceeds the limit");
   artifacts.push(...page.artifacts);
 }
 
-function parseArtifactPages(output) {
+export function parseArtifactPages(output) {
   let pages;
   try {
     pages = JSON.parse(output);
