@@ -41,13 +41,13 @@ async function rejects(action, pattern) {
 
 const existing = operations([{ state: "present", version: target }]);
 assert.deepEqual(await promoteVerifiedChannel(request(), existing.operations), { publication: "existing", state: "default_consumer_verified" });
-assert.deepEqual(existing.events, ["probe", "default"]);
+assert.deepEqual(existing.events, ["probe", "immutable", "default", "probe"]);
 
 const promoted = operations([{ state: "present", version: "1.1.0" }, { state: "present", version: target }]);
 assert.deepEqual(await promoteVerifiedChannel(request(), promoted.operations), { publication: "promoted", state: "default_consumer_verified" });
 assert.deepEqual(promoted.events, ["probe", "immutable", "promote", "probe", "default"]);
 
-const missing = operations([{ state: "missing", version: target }, { state: "present", version: target }]);
+const missing = operations([{ state: "missing" }, { state: "present", version: target }]);
 assert.equal((await promoteVerifiedChannel(request(), missing.operations)).publication, "promoted");
 assert.deepEqual(missing.events, ["probe", "immutable", "promote", "probe", "default"]);
 
@@ -57,7 +57,7 @@ const ambiguous = operations([new Error("ETIMEDOUT"), { state: "present", versio
 assert.equal((await promoteVerifiedChannel(request({ policy: policy({ attempts: 2 }) }), ambiguous.operations)).publication, "ambiguous");
 assert.deepEqual(ambiguous.events, ["probe", "probe", "immutable", "promote", "probe", "probe", "default"]);
 
-const noProof = operations([{ state: "missing", version: target }]);
+const noProof = operations([{ state: "missing" }]);
 await rejects(promoteVerifiedChannel(request({ exactConsumerVerified: false }), noProof.operations), /exact consumer/);
 assert.deepEqual(noProof.events, []);
 
@@ -70,9 +70,13 @@ assert.deepEqual(immutableFalse.events, ["probe", "immutable"]);
 
 const defaultMismatch = operations([{ state: "present", version: target }], { verifyDefault: () => { throw new Error("default bytes mismatch"); } });
 await rejects(promoteVerifiedChannel(request(), defaultMismatch.operations), /default bytes mismatch/);
-assert.deepEqual(defaultMismatch.events, ["probe", "default"]);
+assert.deepEqual(defaultMismatch.events, ["probe", "immutable", "default"]);
 const defaultUnknown = operations([{ state: "present", version: target }], { verifyDefault: () => { throw new Error("default endpoint unavailable"); } });
 await rejects(promoteVerifiedChannel(request(), defaultUnknown.operations), /endpoint unavailable/);
+
+const deadlineDuringDefault = operations([{ state: "present", version: target }], { verifyDefault: (input) => { input.policy.deadline = performance.now() - 1; } });
+await rejects(promoteVerifiedChannel(request(), deadlineDuringDefault.operations), /deadline/);
+assert.deepEqual(deadlineDuringDefault.events, ["probe", "immutable", "default"]);
 
 for (const observed of ["1.2.1", "1.2.0+other"]) {
   const rollback = operations([{ state: "present", version: observed }]);
@@ -96,7 +100,7 @@ const exhausted = operations([{ state: "missing", version: target }]);
 await rejects(promoteVerifiedChannel(request({ policy: policy({ deadline: performance.now() - 1 }) }), exhausted.operations), /deadline/);
 assert.deepEqual(exhausted.events, []);
 
-const ambiguousMissing = operations([{ state: "present", version: "1.1.0" }, { state: "missing", version: target }, { state: "missing", version: target }], {
+const ambiguousMissing = operations([{ state: "present", version: "1.1.0" }, { state: "missing" }, { state: "missing" }], {
   promote: () => { throw new Error("publish response lost"); },
 });
 await rejects(promoteVerifiedChannel(request({ policy: policy({ attempts: 2 }) }), ambiguousMissing.operations), /not observed|publish response/);
@@ -115,5 +119,8 @@ for (const badVersion of ["1.2", "v1.2.0", "1.2.0-01"]) {
 const invalidPolicy = operations([]);
 await rejects(promoteVerifiedChannel(request({ policy: policy({ attempts: 0 }) }), invalidPolicy.operations), /attempts/);
 assert.deepEqual(invalidPolicy.events, []);
+
+const missingWithVersion = operations([{ state: "missing", version: target }]);
+await rejects(promoteVerifiedChannel(request(), missingWithVersion.operations), /unknown keys/);
 
 console.log("channel_promotion.test: OK (proof ordering, rollback, ambiguity, bounded retries, verification mismatches)");

@@ -60,10 +60,13 @@ function assertOperations(operations) {
 
 function validateProbe(value) {
   assertPlainObject(value, "probe result");
-  assertKeys(value, ["state", "version"], "probe result");
   if (!PROBE_STATES.has(value.state)) fail("probe result.state is unknown");
-  assertVersion(value.version, "probe result.version");
-  return value;
+  if (value.state === "missing") {
+    assertKeys(value, ["state"], "probe result");
+    return { state: "missing" };
+  }
+  assertKeys(value, ["state", "version"], "probe result");
+  return { state: "present", version: assertVersion(value.version, "probe result.version") };
 }
 
 function remainingMs(policy) {
@@ -87,13 +90,19 @@ function temporaryProbeFailure(error) {
   return /\b(?:EAI_AGAIN|ECONNRESET|ETIMEDOUT|ECONNREFUSED|E429|E5\d\d|HTTP(?:\/\d(?:\.\d)?)?\s*(?:404|429|5\d\d)|\b404\b)\b/i.test(error?.code ?? errorText(error));
 }
 
+async function readProbe(request, operations) {
+  const result = await operations.probe(request);
+  remainingMs(request.policy);
+  return validateProbe(result);
+}
+
 async function probeCurrent(request, operations) {
   let lastError;
   for (let attempt = 1; attempt <= request.policy.attempts; attempt += 1) {
     remainingMs(request.policy);
     try {
-      const observed = validateProbe(await operations.probe(request));
-      compareObservedVersion(request, observed);
+      const observed = await readProbe(request, operations);
+      if (observed.state === "present") compareObservedVersion(request, observed);
       return observed;
     } catch (error) {
       if (!temporaryProbeFailure(error)) throw error;
@@ -117,9 +126,9 @@ async function observeTarget(request, operations) {
   for (let attempt = 1; attempt <= request.policy.attempts; attempt += 1) {
     remainingMs(request.policy);
     try {
-      const observed = validateProbe(await operations.probe(request));
+      const observed = await readProbe(request, operations);
       lastObservation = observed;
-      const comparison = compareObservedVersion(request, observed);
+      const comparison = observed.state === "present" ? compareObservedVersion(request, observed) : -1;
       if (observed.state === "present" && comparison === 0 && observed.version === request.version) return observed;
     } catch (error) {
       if (!temporaryProbeFailure(error)) throw error;
@@ -135,18 +144,31 @@ function assertProof(result, label) {
   if (result === false || (result && typeof result === "object" && result.verified === false)) fail(`${label} did not verify the expected bytes`);
 }
 
+async function verifyDefault(request, operations) {
+  remainingMs(request.policy);
+  const result = await operations.verifyDefault(request);
+  remainingMs(request.policy);
+  assertProof(result, "default consumer verification");
+}
+
+function requireExactVersion(request, observed, label) {
+  if (observed.state !== "present" || observed.version !== request.version) fail(`${label} no longer exposes the requested version`);
+}
+
 export async function promoteVerifiedChannel(request, operations) {
   assertRequest(request);
   assertOperations(operations);
   if (request.exactConsumerVerified !== true) fail("exact consumer verification is required before promotion");
   const initial = await probeCurrent(request, operations);
-  if (initial.state === "present" && compareObservedVersion(request, initial) === 0 && initial.version === request.version) {
-    assertProof(await operations.verifyDefault(request), "default consumer verification");
-    return { publication: "existing", state: "default_consumer_verified" };
-  }
   remainingMs(request.policy);
   assertProof(await operations.verifyImmutable(request), "immutable verification");
   remainingMs(request.policy);
+  const existing = initial.state === "present" && initial.version === request.version;
+  if (existing) {
+    await verifyDefault(request, operations);
+    requireExactVersion(request, await probeCurrent(request, operations), "default channel");
+    return { publication: "existing", state: "default_consumer_verified" };
+  }
   let promotionError;
   try {
     assertProof(await operations.promote(request), "promotion");
@@ -154,6 +176,6 @@ export async function promoteVerifiedChannel(request, operations) {
     promotionError = error;
   }
   await observeTarget(request, operations);
-  assertProof(await operations.verifyDefault(request), "default consumer verification");
+  await verifyDefault(request, operations);
   return { publication: promotionError ? "ambiguous" : "promoted", state: "default_consumer_verified" };
 }
