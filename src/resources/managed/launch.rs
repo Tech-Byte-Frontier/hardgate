@@ -26,10 +26,10 @@ pub(super) fn available_tools() -> io::Result<Option<(PathBuf, PathBuf)>> {
     {
         return Ok(None);
     }
-    let Some(launcher) = find_program(OsStr::new("systemd-run"), None) else {
+    let Some(launcher) = find_program(OsStr::new("systemd-run"), None, None) else {
         return Ok(None);
     };
-    let Some(controller) = find_program(OsStr::new("systemctl"), None) else {
+    let Some(controller) = find_program(OsStr::new("systemctl"), None, None) else {
         return Ok(None);
     };
     // v254 introduced literal argument handling. Older managers keep the
@@ -127,9 +127,8 @@ fn resolve_original_program(command: &Command) -> io::Result<PathBuf> {
         return Ok(if program.is_absolute() {
             program.to_path_buf()
         } else {
-            command
-                .get_current_dir()
-                .unwrap_or(Path::new("."))
+            std::env::current_dir()?
+                .join(command.get_current_dir().unwrap_or(Path::new(".")))
                 .join(program)
         });
     }
@@ -137,15 +136,26 @@ fn resolve_original_program(command: &Command) -> io::Result<PathBuf> {
         .get_envs()
         .find(|(name, _)| *name == "PATH")
         .and_then(|(_, value)| value);
-    find_program(command.get_program(), path).ok_or_else(|| {
+    find_program(command.get_program(), path, command.get_current_dir()).ok_or_else(|| {
         resource_error("Failed to execute mutation command: executable was not found in PATH")
     })
 }
 
-fn find_program(program: &OsStr, path: Option<&OsStr>) -> Option<PathBuf> {
+fn find_program(
+    program: &OsStr,
+    path: Option<&OsStr>,
+    directory: Option<&Path>,
+) -> Option<PathBuf> {
     let inherited = std::env::var_os("PATH");
     let path = path.or(inherited.as_deref())?;
+    let directory = std::env::current_dir()
+        .ok()?
+        .join(directory.unwrap_or(Path::new(".")));
     std::env::split_paths(path)
-        .map(|entry| entry.join(program))
+        .map(|entry| directory.join(entry).join(program))
         .find(|entry| entry.is_file())
 }
+
+#[cfg(test)]
+#[path = "launch_tests.rs"]
+mod tests;

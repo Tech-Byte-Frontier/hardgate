@@ -161,17 +161,7 @@ fn cleanup_distinguishes_removed_pinned_groups_from_missing_live_counters() {
 
 #[test]
 fn scope_startup_has_its_own_bound_before_the_command_timeout() {
-    let mut managed = ManagedCommand {
-        controller: PathBuf::from("/unavailable-test-controller"),
-        high_bytes: 1024,
-        evidence: CommandEvidence::create(1024 * 1024).unwrap(),
-        invocation: None,
-        cgroup: None,
-        cgroup_directory: None,
-        last_poll: None,
-        owned: false,
-        started: None,
-    };
+    let mut managed = super::failure_tests::managed();
     let launched = Instant::now() - Duration::from_secs(2);
     let timeout = Duration::from_secs(1);
     assert!(!managed.timed_out(launched, timeout));

@@ -1,5 +1,5 @@
-use super::super::MutationBudget;
 use crate::engines::process::{ProcessOutcome, run_control_command};
+use crate::resources::MutationBudget;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -329,3 +329,7 @@ fn resource_error(message: &str) -> io::Error {
 #[cfg(test)]
 #[path = "linux_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "linux_failure_tests.rs"]
+mod failure_tests;
