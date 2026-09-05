@@ -50,7 +50,7 @@ struct OutputArgs {
     /// Alias for --compact (no source snippets or breakdowns)
     #[arg(long = "no-snippets")]
     no_snippets: bool,
-    /// Print concise summary only (totals + top files)
+    /// Print concise summary only (totals + top files; combine as '--json --summary' for compact machine-readable rollup)
     #[arg(long)]
     summary: bool,
     /// Include bounded excerpts captured during analysis
@@ -59,6 +59,12 @@ struct OutputArgs {
     /// Display at most N diagnostics; complete analysis and verdict are unchanged
     #[arg(long, value_name = "N")]
     max_diagnostics: Option<usize>,
+    /// Write output directly to a file atomically
+    #[arg(long = "output", value_name = "PATH")]
+    output_file: Option<PathBuf>,
+    /// Stream progress events to stderr (e.g. --progress jsonl)
+    #[arg(long, value_parser = ["jsonl"])]
+    progress: Option<String>,
 }
 
 impl OutputArgs {
@@ -70,6 +76,8 @@ impl OutputArgs {
             no_snippets: self.no_snippets,
             summary: self.summary,
             display: self.display_options(),
+            output_file: self.output_file.clone(),
+            progress: self.progress.clone(),
         }
     }
     fn display_options(&self) -> hardgate::diagnostics::display::DisplayOptions {
@@ -165,14 +173,39 @@ enum Commands {
         /// Maximum number of mutants to evaluate
         #[arg(long)]
         max_mutants: Option<usize>,
-        /// Format output (terminal | agent | json)
-        #[arg(long, value_parser = ["terminal", "agent", "json"])]
+        /// Format output (terminal | agent | json | summary)
+        #[arg(long, value_parser = ["terminal", "agent", "json", "summary"])]
         format: Option<String>,
         /// Shorthand for --format json
         #[arg(long)]
         json: bool,
+        /// Print concise summary only (totals, score, and survivors)
+        #[arg(long)]
+        summary: bool,
+        /// Write output directly to a file atomically
+        #[arg(long = "output", value_name = "PATH")]
+        output_file: Option<PathBuf>,
     },
-    /// Evaluate static policy and verify configured coverage/mutation evidence reports
+    /// Inspect or compare saved gate reports without rescanning
+    Report {
+        #[command(subcommand)]
+        subcommand: Option<ReportCommand>,
+        /// Saved gate report JSON file to inspect
+        #[arg(value_name = "FILE")]
+        file: Option<PathBuf>,
+        /// Filter findings to a specific engine
+        #[arg(long)]
+        engine: Option<String>,
+        /// Filter findings by metric name
+        #[arg(long)]
+        metric: Option<String>,
+        /// Show only top N files with most violations
+        #[arg(long, value_name = "N")]
+        top: Option<usize>,
+        #[command(flatten)]
+        output: OutputArgs,
+    },
+    /// Evaluate static policy and verify configured coverage/mutation evidence reports without executing tools (report ingestion only)
     Verify {
         /// Path to coverage report (e.g., coverage/lcov.info)
         #[arg(long)]
@@ -193,6 +226,19 @@ enum Commands {
     },
     /// Launch as a Model Context Protocol (MCP) server over stdio
     Mcp,
+}
+
+#[derive(Subcommand)]
+enum ReportCommand {
+    /// Compare two saved gate reports and report differences in findings, scope, and policy
+    Compare {
+        /// Baseline / before gate report JSON
+        before: PathBuf,
+        /// Current / after gate report JSON
+        after: PathBuf,
+        #[command(flatten)]
+        output: OutputArgs,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -219,34 +265,77 @@ fn run_cli(cli: Cli) -> commands::CommandResult {
 fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> commands::CommandResult {
     match cmd {
         Commands::Completions { shell } => cli_completions::generate(shell),
-        Commands::Init {
-            preset,
-            preview,
-            full,
-            format_check,
-            format_command,
-            lint,
-        } => {
-            anyhow::ensure!(
-                config.is_none(),
-                "init writes hardgate.toml in the current directory; --config selects an existing policy"
-            );
-            commands::init::cmd_init_with_options(commands::init::InitOptions {
-                preset,
-                preview,
-                full,
-                format_check,
-                format: format_command,
-                lint,
-            })
-            .map(|()| commands::CommandOutcome::Passed)
-        }
+        Commands::Init { .. } => execute_init_command(cmd, config),
+        Commands::Report { .. } => execute_report_command(cmd),
         Commands::Mcp => {
             mcp::run_mcp_server_with_config(config).map(|()| commands::CommandOutcome::Passed)
         }
         command => {
             let context = hardgate::config::ConfigContext::load(config)?;
             execute_resolved_command(command, &context)
+        }
+    }
+}
+
+fn execute_init_command(
+    cmd: Commands,
+    config: Option<&std::path::Path>,
+) -> commands::CommandResult {
+    let Commands::Init {
+        preset,
+        preview,
+        full,
+        format_check,
+        format_command,
+        lint,
+    } = cmd else {
+        anyhow::bail!("expected init command");
+    };
+    anyhow::ensure!(
+        config.is_none(),
+        "init writes hardgate.toml in the current directory; --config selects an existing policy"
+    );
+    commands::init::cmd_init_with_options(commands::init::InitOptions {
+        preset,
+        preview,
+        full,
+        format_check,
+        format: format_command,
+        lint,
+    })
+    .map(|()| commands::CommandOutcome::Passed)
+}
+
+fn execute_report_command(cmd: Commands) -> commands::CommandResult {
+    let Commands::Report {
+        subcommand,
+        file,
+        engine,
+        metric,
+        top,
+        output,
+    } = cmd else {
+        anyhow::bail!("expected report command");
+    };
+    match subcommand {
+        Some(ReportCommand::Compare {
+            before,
+            after,
+            output,
+        }) => commands::cmd_report_compare(before, after, output.output_options()),
+        None => {
+            let Some(file) = file else {
+                anyhow::bail!(
+                    "Specify a report JSON file to inspect, or use `report compare <BEFORE> <AFTER>`"
+                );
+            };
+            commands::cmd_report_inspect(commands::ReportInspectOptions {
+                file,
+                engine,
+                metric,
+                top,
+                output: output.output_options(),
+            })
         }
     }
 }
@@ -268,78 +357,110 @@ fn execute_gate_command(
     context: &hardgate::config::ConfigContext,
 ) -> commands::CommandResult {
     match cmd {
-        Commands::Check {
-            output,
+        Commands::Check { .. } => execute_check_command(cmd, context),
+        Commands::Scan { file, output } => {
+            commands::cmd_scan_in(&file, output.output_options(), context)
+        }
+        Commands::Mutate { .. } => execute_mutate_command(cmd, context),
+        Commands::Verify { .. } => execute_verify_command(cmd, context),
+        _ => anyhow::bail!("internal command routing error"),
+    }
+}
+
+fn execute_check_command(
+    cmd: Commands,
+    context: &hardgate::config::ConfigContext,
+) -> commands::CommandResult {
+    let Commands::Check {
+        output,
+        diff,
+        all,
+        dead_code,
+        coverage_report,
+        paths,
+    } = cmd else {
+        anyhow::bail!("expected check command");
+    };
+    let opts = output.output_options();
+    commands::cmd_check_in(
+        commands::CheckOptions {
+            format: opts.format,
             diff,
             all,
             dead_code,
             coverage_report,
+            json: opts.json,
+            compact: opts.compact,
+            no_snippets: opts.no_snippets,
+            summary: opts.summary,
+            display: opts.display,
             paths,
-        } => {
-            let opts = output.output_options();
-            commands::cmd_check_in(
-                commands::CheckOptions {
-                    format: opts.format,
-                    diff,
-                    all,
-                    dead_code,
-                    coverage_report,
-                    json: opts.json,
-                    compact: opts.compact,
-                    no_snippets: opts.no_snippets,
-                    summary: opts.summary,
-                    display: opts.display,
-                    paths,
-                },
-                context,
-            )
-        }
-        Commands::Scan { file, output } => {
-            commands::cmd_scan_in(&file, output.output_options(), context)
-        }
-        Commands::Mutate {
+            output_file: opts.output_file,
+            progress: opts.progress,
+        },
+        context,
+    )
+}
+
+fn execute_mutate_command(
+    cmd: Commands,
+    context: &hardgate::config::ConfigContext,
+) -> commands::CommandResult {
+    let Commands::Mutate {
+        diff,
+        scoped,
+        test_cmd,
+        timeout,
+        max_mutants,
+        format,
+        json,
+        summary,
+        output_file,
+    } = cmd else {
+        anyhow::bail!("expected mutate command");
+    };
+    commands::cmd_mutate_in(
+        commands::MutateOptions {
             diff,
             scoped,
             test_cmd,
-            timeout,
+            timeout_secs: timeout,
             max_mutants,
-            format,
-            json,
-        } => commands::cmd_mutate_in(
-            commands::MutateOptions {
-                diff,
-                scoped,
-                test_cmd,
-                timeout_secs: timeout,
-                max_mutants,
-                format: resolve_mutate_format(format, json),
-            },
-            context,
-        ),
-        Commands::Verify {
+            format: resolve_mutate_format(format, json),
+            summary,
+            output_file,
+        },
+        context,
+    )
+}
+
+fn execute_verify_command(
+    cmd: Commands,
+    context: &hardgate::config::ConfigContext,
+) -> commands::CommandResult {
+    let Commands::Verify {
+        coverage_report,
+        mutation_report,
+        output,
+        paths,
+    } = cmd else {
+        anyhow::bail!("expected verify command");
+    };
+    let opts = output.output_options();
+    commands::cmd_verify_in(
+        commands::VerifyOptions {
             coverage_report,
             mutation_report,
-            output,
+            format: opts.format,
+            json: opts.json,
+            compact: opts.compact,
+            no_snippets: opts.no_snippets,
+            summary: opts.summary,
+            display: opts.display,
             paths,
-        } => {
-            let opts = output.output_options();
-            commands::cmd_verify_in(
-                commands::VerifyOptions {
-                    coverage_report,
-                    mutation_report,
-                    format: opts.format,
-                    json: opts.json,
-                    compact: opts.compact,
-                    no_snippets: opts.no_snippets,
-                    summary: opts.summary,
-                    display: opts.display,
-                    paths,
-                },
-                context,
-            )
-        }
-        _ => anyhow::bail!("internal command routing error"),
-    }
+        },
+        context,
+    )
 }
 
 fn resolve_mutate_format(format: Option<String>, json: bool) -> Option<String> {

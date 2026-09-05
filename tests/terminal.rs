@@ -59,6 +59,7 @@ fn summarize<'a>(
 
 #[test]
 fn test_terminal_pass_report() {
+    colored::control::set_override(false);
     let mut report = GateReport::new("demo".to_string());
     report.finalize(10, 50, 42);
 
@@ -78,6 +79,7 @@ fn test_terminal_pass_report() {
 
 #[test]
 fn test_terminal_fail_report() {
+    colored::control::set_override(false);
     let mut report = failing_report();
     report.finalize(3, 12, 7);
 
@@ -99,6 +101,7 @@ fn test_terminal_fail_report() {
 
 #[test]
 fn test_mutation_terminal_pass_repeats_verdict_at_end() {
+    colored::control::set_override(false);
     let stats = tally(2, 0);
     let results = vec![
         execution(1, MutantOutcome::Killed),
@@ -113,6 +116,7 @@ fn test_mutation_terminal_pass_repeats_verdict_at_end() {
 
 #[test]
 fn test_mutation_terminal_fail_lists_survivors_then_verdict() {
+    colored::control::set_override(false);
     let stats = tally(1, 1);
     let results = vec![
         execution(1, MutantOutcome::Killed),

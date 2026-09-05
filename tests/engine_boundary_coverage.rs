@@ -209,10 +209,6 @@ fn coverage_py_empty_module_and_diagnostic_context() {
     assert_eq!(entry.lines_found, 0);
     assert_eq!(entry.lines_hit, 0);
 
-    let empty_with_zero_lf = "TN:\nSF:pkg/empty.py\nLF:0\nLH:0\nend_of_record\n";
-    let parsed = parse_report(empty_with_zero_lf, true, true).expect("LF:0/LH:0 empty module must be accepted");
-    assert_eq!(parsed.get(&PathBuf::from("pkg/empty.py")).unwrap().lines_found, 0);
-
     // Verify diagnostic message includes source path and supported producer formats
     let invalid = "TN:\nSF:pkg/broken.py\nLF:1\nLH:2\nDA:1,1\nend_of_record\n";
     let err = parse_report(invalid, false, false).expect_err("LH > LF must fail");

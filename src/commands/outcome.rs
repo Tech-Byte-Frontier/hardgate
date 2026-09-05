@@ -55,6 +55,16 @@ pub(crate) fn write_stdout(text: &str) -> io::Result<()> {
     output.flush()
 }
 
+pub(crate) fn write_atomic_file(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// A downstream consumer intentionally closing stdout is successful termination.
 pub fn is_broken_pipe(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {

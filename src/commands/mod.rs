@@ -16,11 +16,14 @@ pub mod mutate;
 mod mutation_output;
 pub mod outcome;
 pub use outcome::{CommandOutcome, CommandResult};
+pub mod report;
 mod role_policy;
 pub mod scan;
 mod source_snapshot;
 mod static_gate;
 pub mod verify;
+
+pub use report::{ReportInspectOptions, cmd_report_compare, cmd_report_inspect};
 
 pub use fmt::{cmd_fmt, cmd_fmt_in};
 pub use init::cmd_init;

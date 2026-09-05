@@ -1,6 +1,6 @@
 use super::mutation_output::{
     MutationFailure, MutationSummaryContext, finish_disabled_mutation, handle_no_targets,
-    render_mutation_output, runtime_failure,
+    render_mutation_output_with_options, runtime_failure,
 };
 use super::outcome::{CommandOutcome, CommandResult};
 use std::io::Write;
@@ -8,7 +8,11 @@ use std::io::Write;
 mod baselines;
 #[path = "mutate/progress.rs"]
 mod progress;
-use progress::{print_generation_notice, print_mutant_notice};
+pub(crate) use progress::{
+    increment_stats, print_generation_notice, print_mutant_notice, print_outcome,
+};
+#[cfg(test)]
+pub(crate) use progress::outcome_label;
 #[cfg(test)]
 #[path = "mutate_tests.rs"]
 mod mutate_tests;
@@ -18,7 +22,7 @@ mod workspace;
 use crate::config::{ConfigContext, HardgateConfig};
 use crate::engines::mutation::FULL_SUITE_TIMEOUT_SECS;
 use crate::engines::{
-    AstMutant, AstMutationGenerator, MutantExecutionResult, MutantOutcome, MutationStats,
+    AstMutant, AstMutationGenerator, MutantExecutionResult, MutationStats,
     NativeMutationRunner,
 };
 use anyhow::{Context, Result, bail};
@@ -40,6 +44,8 @@ pub struct MutateOptions {
     pub timeout_secs: Option<u64>,
     pub max_mutants: Option<usize>,
     pub format: Option<String>,
+    pub summary: bool,
+    pub output_file: Option<PathBuf>,
 }
 
 struct MutationRun<'a> {
@@ -232,7 +238,15 @@ fn finish_mutation_run(run: MutationRun<'_>) -> CommandResult {
         passed,
         elapsed: run.start_time.elapsed().as_millis(),
     };
-    render_mutation_output(&context, run.opts.format.as_deref(), Some(&run.plan))?;
+    render_mutation_output_with_options(
+        &context,
+        super::mutation_output::MutationRenderOptions {
+            format: run.opts.format.as_deref(),
+            summary: run.opts.summary,
+            output_file: run.opts.output_file.as_deref(),
+        },
+        Some(&run.plan),
+    )?;
     Ok(context.outcome())
 }
 /// Resolve whether a path is an effective native mutation target under the
@@ -427,61 +441,20 @@ fn run_mutant_batch(
         if let Some(error) = runtime_failure(&res) {
             if !json {
                 print_outcome(&mut stats, res.outcome)?;
+            } else {
+                increment_stats(&mut stats, res.outcome);
             }
             return Err(error);
         }
-        if json {
-            increment_stats(&mut stats, res.outcome);
-        } else {
+        if !json {
             print_outcome(&mut stats, res.outcome)?;
+        } else {
+            increment_stats(&mut stats, res.outcome);
         }
         results.push(res);
     }
 
     Ok((results, stats))
-}
-
-fn print_outcome(stats: &mut MutationStats, outcome: MutantOutcome) -> Result<()> {
-    let (label, style) = outcome_label(outcome);
-    increment_stats(stats, outcome);
-    let label = match style {
-        OutcomeStyle::Green => label.green().bold(),
-        OutcomeStyle::Red => label.red().bold(),
-        OutcomeStyle::Yellow => label.yellow().bold(),
-    };
-    writeln!(std::io::stdout().lock(), "{label}")?;
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum OutcomeStyle {
-    Green,
-    Red,
-    Yellow,
-}
-
-fn outcome_label(outcome: MutantOutcome) -> (&'static str, OutcomeStyle) {
-    match outcome {
-        MutantOutcome::Killed => ("killed", OutcomeStyle::Green),
-        MutantOutcome::Survived => ("survived", OutcomeStyle::Red),
-        MutantOutcome::Timeout => ("timeout", OutcomeStyle::Yellow),
-        MutantOutcome::CompileError => ("compile error", OutcomeStyle::Red),
-        MutantOutcome::RunnerError => ("runner error", OutcomeStyle::Red),
-        MutantOutcome::Equivalent => ("equivalent", OutcomeStyle::Yellow),
-        MutantOutcome::Unviable => ("unviable", OutcomeStyle::Red),
-    }
-}
-
-fn increment_stats(stats: &mut MutationStats, outcome: MutantOutcome) {
-    match outcome {
-        MutantOutcome::Killed => stats.killed += 1,
-        MutantOutcome::Survived => stats.survived += 1,
-        MutantOutcome::Timeout => stats.timeout += 1,
-        MutantOutcome::CompileError => stats.compile_error += 1,
-        MutantOutcome::RunnerError => stats.runner_error += 1,
-        MutantOutcome::Equivalent => stats.equivalent += 1,
-        MutantOutcome::Unviable => stats.unviable += 1,
-    }
 }
 
 fn mutation_run_passed(stats: &MutationStats, score: f64, min_score: f64) -> bool {

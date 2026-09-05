@@ -129,6 +129,7 @@ fn execute_verify(
                 no_snippets: opts.no_snippets,
                 summary: opts.summary,
                 display: opts.display.clone(),
+                ..Default::default()
             },
         },
     )

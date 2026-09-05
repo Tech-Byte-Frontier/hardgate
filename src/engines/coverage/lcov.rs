@@ -278,24 +278,25 @@ impl RecordBuilder {
         Ok(())
     }
 
-    fn finish(self, require_functions: bool, require_branches: bool) -> Result<FileCoverage> {
-        let file_path = self.coverage.file_path.clone();
+    fn finish(self, req_fn: bool, req_br: bool) -> Result<FileCoverage> {
+        let is_empty = self.coverage.line_hits.is_empty() && !self.seen_counts.contains("LF");
+        let (req_fn, req_br) = (req_fn && !is_empty, req_br && !is_empty);
         validate_lines(&self)
-            .and_then(|()| validate_function_counts(&self, require_functions))
-            .and_then(|()| validate_branch_counts(&self, require_branches))
+            .and_then(|()| validate_function_counts(&self, req_fn))
+            .and_then(|()| validate_branch_counts(&self, req_br))
             .and_then(|()| {
                 self.details.validate(DetailValidation {
                     seen_counts: &self.seen_counts,
                     functions_found: self.coverage.functions_found,
                     functions_hit: self.coverage.functions_hit,
-                    require_functions,
-                    require_branches,
+                    require_functions: req_fn,
+                    require_branches: req_br,
                 })
             })
             .with_context(|| {
                 format!(
                     "Failed to validate LCOV record for source `{}`; supported producer formats include Coverage.py, cargo-llvm-cov, and lcov",
-                    file_path.display()
+                    self.coverage.file_path.display()
                 )
             })?;
         Ok(self.coverage)
@@ -330,8 +331,7 @@ fn ensure_unique_count(seen_counts: &mut HashSet<&'static str>, tag: &'static st
 fn validate_lines(builder: &RecordBuilder) -> Result<()> {
     let has_lf = builder.seen_counts.contains("LF");
     let has_lh = builder.seen_counts.contains("LH");
-    let is_empty_module = builder.coverage.line_hits.is_empty()
-        && (builder.coverage.lines_found == 0 || (!has_lf && !has_lh));
+    let is_empty_module = builder.coverage.line_hits.is_empty() && !has_lf && !has_lh;
 
     if is_empty_module {
         return Ok(());

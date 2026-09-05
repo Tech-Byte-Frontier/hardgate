@@ -68,15 +68,9 @@ impl Detection {
     }
 }
 
-#[derive(Debug, Default)]
-struct ManifestInventory {
-    cargo: Vec<PathBuf>,
-    packages: Vec<PathBuf>,
-    python: Vec<PathBuf>,
-    go: Vec<PathBuf>,
-    js_config: bool,
-    python_config: bool,
-}
+pub(crate) use super::manifest::{ManifestInventory, collect_manifests};
+#[cfg(test)]
+pub(crate) use super::manifest::{collect_manifests_at, is_pruned_directory, record_manifest};
 
 pub(crate) fn detect_project(root: &Path) -> Detection {
     let inventory = collect_manifests(root);
@@ -87,15 +81,67 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
         Ecosystem::JavaScript => detect_javascript(root, &inventory, &mut detection),
         Ecosystem::Python => detect_root_python(root, &inventory, &mut detection),
         Ecosystem::Go => detect_root_go(root, &inventory, &mut detection),
-        Ecosystem::Ambiguous => detection.add_missing(
-            "multiple supported ecosystems were detected; configure [orchestration] commands explicitly",
-        ),
+        Ecosystem::Ambiguous => {
+            detect_ambiguous_ecosystems(root, &inventory, &mut detection);
+        }
         Ecosystem::Unknown => detection.add_missing(
             "no supported manifest or configured formatter was detected; configure [orchestration] commands explicitly",
         ),
     }
     add_unconfigured_commands(&mut detection);
     detection
+}
+
+fn detect_ambiguous_ecosystems(
+    root: &Path,
+    inventory: &ManifestInventory,
+    detection: &mut Detection,
+) {
+    let has_js = !inventory.packages.is_empty() || inventory.js_config;
+    let has_py = !inventory.python.is_empty() || inventory.python_config;
+
+    if has_js && has_py {
+        let mut js_detect = Detection::new(Ecosystem::JavaScript);
+        detect_javascript(root, inventory, &mut js_detect);
+
+        let mut py_detect = Detection::new(Ecosystem::Python);
+        detect_root_python(root, inventory, &mut py_detect);
+
+        detection.orchestration.format_check = combine_commands(
+            py_detect.orchestration.format_check,
+            js_detect.orchestration.format_check,
+        );
+        detection.orchestration.format = combine_commands(
+            py_detect.orchestration.format,
+            js_detect.orchestration.format,
+        );
+        detection.orchestration.lint = combine_commands(
+            py_detect.orchestration.lint,
+            js_detect.orchestration.lint,
+        );
+        detection.orchestration.test_cmd = combine_commands(
+            py_detect.orchestration.test_cmd,
+            js_detect.orchestration.test_cmd,
+        );
+        detection.orchestration.timeout_secs = Some(300);
+        detection.add_note(
+            "Multi-ecosystem project detected (Python + JavaScript/TypeScript); combined orchestration commands",
+        );
+        return;
+    }
+
+    detection.add_missing(
+        "multiple supported ecosystems were detected; configure [orchestration] commands explicitly",
+    );
+}
+
+fn combine_commands(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(format!("{a} && {b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 fn detect_root_rust(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
@@ -123,90 +169,6 @@ fn detect_root_go(root: &Path, inventory: &ManifestInventory, detection: &mut De
 }
 
 pub(crate) use super::reference::legacy_reference_status;
-
-fn collect_manifests(root: &Path) -> ManifestInventory {
-    let mut inventory = ManifestInventory::default();
-    collect_manifests_at(root, 3, &mut inventory);
-    inventory.cargo.sort();
-    inventory.packages.sort();
-    inventory.python.sort();
-    inventory.go.sort();
-    inventory.js_config = has_any(
-        root,
-        &[
-            "biome.json",
-            "biome.jsonc",
-            "prettier.config.js",
-            "prettier.config.cjs",
-            "prettier.config.mjs",
-            ".prettierrc",
-            ".prettierrc.json",
-            ".eslintrc",
-            ".eslintrc.json",
-            ".eslintrc.js",
-            "eslint.config.js",
-            "eslint.config.mjs",
-            "oxlint.config.js",
-        ],
-    );
-    inventory.python_config = has_any(
-        root,
-        &[
-            "ruff.toml",
-            ".ruff.toml",
-            ".flake8",
-            "tox.ini",
-            "pytest.ini",
-        ],
-    );
-    inventory
-}
-
-fn collect_manifests_at(directory: &Path, depth: usize, inventory: &mut ManifestInventory) {
-    if depth == 0 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_file() {
-            record_manifest(&path, inventory);
-        } else if file_type.is_dir() && !is_pruned_directory(&path) {
-            collect_manifests_at(&path, depth.saturating_sub(1), inventory);
-        }
-    }
-}
-
-fn record_manifest(path: &Path, inventory: &mut ManifestInventory) {
-    match path.file_name().and_then(|name| name.to_str()) {
-        Some("Cargo.toml") => inventory.cargo.push(path.to_path_buf()),
-        Some("package.json") => inventory.packages.push(path.to_path_buf()),
-        Some("pyproject.toml") | Some("setup.py") | Some("requirements.txt") => {
-            inventory.python.push(path.to_path_buf())
-        }
-        Some("go.mod") => inventory.go.push(path.to_path_buf()),
-        _ => {}
-    }
-}
-
-fn is_pruned_directory(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                ".git" | "target" | "node_modules" | "vendor" | "dist" | "build"
-            )
-        })
-}
 
 pub(crate) fn has_any(root: &Path, names: &[&str]) -> bool {
     names.iter().any(|name| root.join(name).is_file())

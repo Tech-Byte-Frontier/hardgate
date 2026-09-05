@@ -193,6 +193,7 @@ fn assert_contains_all(output: &str, needles: &[&str]) {
 
 #[test]
 fn empty_report_uses_pass_paths_for_each_renderer() {
+    colored::control::set_override(false);
     let mut report = GateReport::new("empty".to_string());
     report.finalize(0, 0, 1);
 
@@ -213,6 +214,7 @@ fn empty_report_uses_pass_paths_for_each_renderer() {
 
 #[test]
 fn every_category_is_rendered_with_actionable_details() {
+    colored::control::set_override(false);
     let report = every_category_report();
     assert!(!report.passed);
     assert_eq!(report.total_violations(), 13);

@@ -1,13 +1,14 @@
 use super::outcome::CommandOutcome;
 use crate::diagnostics::execution::{EngineId, EngineState, ExecutionPlan};
-use crate::engines::mutation::runner::MutationRunnerError;
-use crate::engines::mutation::{BaselineExecutionResult, BaselineOutcome};
 use crate::engines::{MutantExecutionResult, MutantOutcome, MutationStats};
 use colored::*;
 use serde::Serialize;
-use std::fmt;
 use std::io::Write;
 use std::path::Path;
+
+#[path = "mutate/failure.rs"]
+mod failure;
+pub use failure::*;
 
 /// Borrowed inputs for rendering one mutation run in any output mode.
 pub struct MutationSummaryContext<'a> {
@@ -19,88 +20,159 @@ pub struct MutationSummaryContext<'a> {
     pub elapsed: u128,
 }
 
-#[derive(Debug)]
-pub struct MutationFailure {
-    pub stage: &'static str,
-    pub kind: &'static str,
-    pub message: String,
+#[derive(Debug, Clone, Default)]
+pub struct MutationRenderOptions<'a> {
+    pub format: Option<&'a str>,
+    pub summary: bool,
+    pub output_file: Option<&'a Path>,
 }
 
-impl MutationFailure {
-    pub(crate) fn new(stage: &'static str, kind: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            stage,
-            kind,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn from_runner_error(error: MutationRunnerError) -> Self {
-        match error {
-            MutationRunnerError::Resolution(message) => {
-                Self::new("resolution", "resolution-error", message)
-            }
-            MutationRunnerError::Integrity(message) => {
-                Self::new("execution", "execution-error", message)
-            }
-        }
-    }
-}
-
-impl fmt::Display for MutationFailure {
-    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        out.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for MutationFailure {}
-
+#[cfg(test)]
 pub(crate) fn render_mutation_output(
     ctx: &MutationSummaryContext,
     format: Option<&str>,
     execution: Option<&ExecutionPlan>,
 ) -> anyhow::Result<()> {
-    match format {
-        Some("agent") => render_agent_output(ctx),
-        Some("json") => render_json_output(ctx, execution),
-        _ => {
-            write!(
-                std::io::stdout().lock(),
-                "{}",
-                format_mutation_terminal(ctx)
-            )?;
-            Ok(())
-        }
-    }
+    render_mutation_output_with_options(
+        ctx,
+        MutationRenderOptions {
+            format,
+            summary: false,
+            output_file: None,
+        },
+        execution,
+    )
 }
 
-fn render_json_output(
+pub(crate) fn render_mutation_output_with_options(
     ctx: &MutationSummaryContext,
+    opts: MutationRenderOptions<'_>,
     execution: Option<&ExecutionPlan>,
 ) -> anyhow::Result<()> {
-    let outcome = ctx.outcome();
-    let execution = mutation_execution(execution, outcome);
-    writeln!(
-        std::io::stdout().lock(),
-        "{}",
-        serde_json::to_string_pretty(&MutationJson {
-            schema_version: 1,
-            command: "mutate",
-            status: outcome.status(),
-            exit_code: outcome.exit_code(),
-            execution: execution.as_ref(),
-            stats: ctx.stats,
-            score: ctx.score,
-            min_score: ctx.min_score,
-            passed: ctx.passed,
-            duration_ms: ctx.elapsed,
-            results: ctx.results,
-        })?
-    )?;
+    let output = format_mutation_content(ctx, opts.format, opts.summary, execution)?;
+    if let Some(path) = opts.output_file {
+        super::outcome::write_atomic_file(path, &output)?;
+    }
+    write!(std::io::stdout().lock(), "{output}")?;
     Ok(())
 }
 
-fn render_agent_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
+fn format_mutation_content(
+    ctx: &MutationSummaryContext,
+    format: Option<&str>,
+    summary: bool,
+    execution: Option<&ExecutionPlan>,
+) -> anyhow::Result<String> {
+    match format {
+        Some("agent") => Ok(format_agent_output(ctx)),
+        Some("json") if summary => render_json_summary(ctx, execution),
+        Some("json") => render_json_full(ctx, execution),
+        _ if summary => Ok(format_mutation_summary_terminal(ctx)),
+        _ => Ok(format_mutation_terminal(ctx)),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MutationSummaryJson<'a> {
+    schema_version: u32,
+    command: &'static str,
+    status: &'static str,
+    exit_code: u8,
+    passed: bool,
+    score: f64,
+    min_score: f64,
+    duration_ms: u128,
+    stats: &'a MutationStats,
+    all_sources_restored: bool,
+    survivors: Vec<SurvivorSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SurvivorSummary {
+    id: usize,
+    file: String,
+    line: usize,
+    description: String,
+    original: String,
+    replacement: String,
+}
+
+fn render_json_summary(
+    ctx: &MutationSummaryContext,
+    _execution: Option<&ExecutionPlan>,
+) -> anyhow::Result<String> {
+    let outcome = ctx.outcome();
+    let all_sources_restored = ctx.results.iter().all(|r| r.source_restored);
+    let survivors: Vec<_> = ctx
+        .results
+        .iter()
+        .filter(|r| r.outcome == MutantOutcome::Survived)
+        .map(|r| SurvivorSummary {
+            id: r.mutant.id,
+            file: r.mutant.file.display().to_string(),
+            line: r.mutant.line,
+            description: r.mutant.description.clone(),
+            original: r.mutant.original.clone(),
+            replacement: r.mutant.replacement.clone(),
+        })
+        .collect();
+
+    let json = serde_json::to_string_pretty(&MutationSummaryJson {
+        schema_version: 1,
+        command: "mutate",
+        status: outcome.status(),
+        exit_code: outcome.exit_code(),
+        passed: ctx.passed,
+        score: ctx.score,
+        min_score: ctx.min_score,
+        duration_ms: ctx.elapsed,
+        stats: ctx.stats,
+        all_sources_restored,
+        survivors,
+    })?;
+    Ok(format!("{json}\n"))
+}
+
+fn render_json_full(
+    ctx: &MutationSummaryContext,
+    execution: Option<&ExecutionPlan>,
+) -> anyhow::Result<String> {
+    let outcome = ctx.outcome();
+    let execution = mutation_execution(execution, outcome);
+    let json = serde_json::to_string_pretty(&MutationJson {
+        schema_version: 1,
+        command: "mutate",
+        status: outcome.status(),
+        exit_code: outcome.exit_code(),
+        execution: execution.as_ref(),
+        stats: ctx.stats,
+        score: ctx.score,
+        min_score: ctx.min_score,
+        passed: ctx.passed,
+        duration_ms: ctx.elapsed,
+        results: ctx.results,
+    })?;
+    Ok(format!("{json}\n"))
+}
+
+pub fn format_mutation_summary_terminal(ctx: &MutationSummaryContext) -> String {
+    let mut out = format_mutation_terminal(ctx);
+    let all_restored = ctx.results.iter().all(|r| r.source_restored);
+    if all_restored {
+        out.push_str(&format!(
+            "\nrestoration: all {} mutated sources successfully restored to baseline\n",
+            ctx.results.len()
+        ));
+    } else {
+        out.push_str(&format!(
+            "\n{}\n",
+            "warning: some source files failed restoration verification!".yellow()
+        ));
+    }
+    out
+}
+
+fn format_agent_output(ctx: &MutationSummaryContext) -> String {
     let mut out = format!(
         "### 🧬 Native AST Mutation Results ({}ms)\n- Evaluated: {}\n- Killed: {}\n- Survived: {}\n- Timed Out: {}\n- Compile Errors: {}\n- Runner Errors: {}\n- Equivalent: {}\n- Unviable: {}\n- Mutation Score: {:.1}% (Floor: {:.1}%)\n- Verdict: {}\n\n",
         ctx.elapsed,
@@ -130,8 +202,7 @@ fn render_agent_output(ctx: &MutationSummaryContext) -> anyhow::Result<()> {
             result.mutant.replacement
         ));
     }
-    write!(std::io::stdout().lock(), "{out}")?;
-    Ok(())
+    out
 }
 
 #[derive(Serialize)]
@@ -147,164 +218,6 @@ struct MutationJson<'a> {
     passed: bool,
     duration_ms: u128,
     results: &'a [MutantExecutionResult],
-}
-
-#[derive(Serialize)]
-pub(crate) struct MutationNoop<'a> {
-    pub passed: bool,
-    pub status: &'static str,
-    pub stage: &'static str,
-    pub kind: &'static str,
-    pub message: &'a str,
-}
-
-const DISABLED_MUTATION_MESSAGE: &str =
-    "mutation testing is disabled by \u{60}[mutation].enabled = false\u{60}.";
-const NO_CHANGED_TARGETS_MESSAGE: &str =
-    "no git-modified files found for mutation testing; no changed production source targets.";
-const DISABLED_MUTATION_NOTICE: MutationNoopNotice = MutationNoopNotice {
-    stage: "policy",
-    kind: "disabled",
-    message: DISABLED_MUTATION_MESSAGE,
-    note: DISABLED_MUTATION_MESSAGE,
-};
-const NO_CHANGED_TARGETS_NOTICE: MutationNoopNotice = MutationNoopNotice {
-    stage: "selection",
-    kind: "no-changed-targets",
-    message: NO_CHANGED_TARGETS_MESSAGE,
-    note: "no git-modified files found for mutation testing; no changed production source targets (no-op).",
-};
-
-struct MutationNoopNotice {
-    stage: &'static str,
-    kind: &'static str,
-    message: &'static str,
-    note: &'static str,
-}
-
-pub(crate) fn render_mutation_noop(
-    noop: MutationNoop<'_>,
-    format: Option<&str>,
-    execution: Option<&ExecutionPlan>,
-) -> anyhow::Result<()> {
-    if format == Some("json") {
-        writeln!(
-            std::io::stdout().lock(),
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "schema_version": 1, "command": "mutate", "exit_code": 0, "execution": execution,
-                "passed": noop.passed, "status": noop.status, "stage": noop.stage, "kind": noop.kind, "message": noop.message,
-            }))?
-        )?;
-    }
-    Ok(())
-}
-
-pub(crate) fn finish_disabled_mutation(
-    format: Option<&str>,
-    execution: &ExecutionPlan,
-) -> anyhow::Result<()> {
-    render_noop_or_note(format, DISABLED_MUTATION_NOTICE, execution)
-}
-
-pub(crate) fn handle_no_targets(
-    diff: bool,
-    format: Option<&str>,
-    execution: &ExecutionPlan,
-) -> anyhow::Result<()> {
-    if !diff {
-        return Err(MutationFailure::new(
-            "setup",
-            "setup-error",
-            "no source files found for mutation testing: no production source files are eligible; full/native runs require at least one production target",
-        )
-        .into());
-    }
-    render_noop_or_note(format, NO_CHANGED_TARGETS_NOTICE, execution)
-}
-
-fn render_noop_or_note(
-    format: Option<&str>,
-    notice: MutationNoopNotice,
-    execution: &ExecutionPlan,
-) -> anyhow::Result<()> {
-    if format == Some("json") {
-        render_mutation_noop(
-            MutationNoop {
-                passed: true,
-                status: "noop",
-                stage: notice.stage,
-                kind: notice.kind,
-                message: notice.message,
-            },
-            format,
-            Some(execution),
-        )?;
-    } else {
-        writeln!(
-            std::io::stdout().lock(),
-            "{} {}",
-            "note:".green().bold(),
-            notice.note
-        )?;
-    }
-    Ok(())
-}
-
-pub(crate) fn baseline_failure(result: &BaselineExecutionResult, file: &Path) -> anyhow::Error {
-    let diagnostic = if result.diagnostic.trim().is_empty() {
-        "no diagnostic output".to_string()
-    } else {
-        result.diagnostic.clone()
-    };
-    let kind = match result.outcome {
-        BaselineOutcome::Failed => "test-failure",
-        BaselineOutcome::Timeout => "timeout",
-        BaselineOutcome::RunnerError => "runner-error",
-        BaselineOutcome::Passed => "test-failure",
-    };
-    MutationFailure::new(
-        "baseline",
-        kind,
-        format!(
-            "unmutated baseline {:?} for \u{60}{}\u{60} using \u{60}{}\u{60}:\n{}",
-            result.outcome,
-            file.display(),
-            result.command,
-            diagnostic
-        ),
-    )
-    .into()
-}
-
-pub(crate) fn runtime_failure(result: &MutantExecutionResult) -> Option<anyhow::Error> {
-    let kind = match result.outcome {
-        MutantOutcome::RunnerError => "execution-error",
-        MutantOutcome::Timeout => "timeout",
-        MutantOutcome::Killed
-        | MutantOutcome::Survived
-        | MutantOutcome::CompileError
-        | MutantOutcome::Equivalent
-        | MutantOutcome::Unviable => return None,
-    };
-    Some(
-        MutationFailure::new(
-            "execution",
-            kind,
-            format!(
-                "mutant {} {:?} for \u{60}{}\u{60}: {}",
-                result.mutant.id,
-                result.outcome,
-                result.mutant.file.display(),
-                if result.diagnostic.trim().is_empty() {
-                    "no diagnostic output"
-                } else {
-                    result.diagnostic.as_str()
-                }
-            ),
-        )
-        .into(),
-    )
 }
 
 /// Terminal rendering of a mutation run as a plain string (testable).
