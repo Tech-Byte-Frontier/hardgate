@@ -53,7 +53,10 @@ pub(crate) fn parse_report(
 
     let mut records = LcovRecords::new(require_functions, require_branches);
     for (line_number, line) in content.lines().enumerate() {
-        let current_source = records.current.as_ref().map(|c| c.coverage.file_path.clone());
+        let current_source = records
+            .current
+            .as_ref()
+            .map(|c| c.coverage.file_path.clone());
         records
             .ingest(line.trim())
             .with_context(|| {
@@ -331,7 +334,9 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
     let has_lf = builder.seen_counts.contains("LF");
     let has_lh = builder.seen_counts.contains("LH");
     let is_empty_module = builder.coverage.line_hits.is_empty()
-        && (builder.coverage.lines_found == 0 || (!has_lf && !has_lh));
+        && has_lf == has_lh
+        && builder.coverage.lines_found == 0
+        && builder.coverage.lines_hit == 0;
 
     if is_empty_module {
         return Ok(());
@@ -379,7 +384,11 @@ enum MetricCounterKind {
     Branch,
 }
 
-fn validate_metric_counts(builder: &RecordBuilder, required: bool, kind: MetricCounterKind) -> Result<()> {
+fn validate_metric_counts(
+    builder: &RecordBuilder,
+    required: bool,
+    kind: MetricCounterKind,
+) -> Result<()> {
     let pair = match kind {
         MetricCounterKind::Function => CounterPair {
             found_tag: "FNF",

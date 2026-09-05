@@ -146,7 +146,12 @@ impl RoutineDeclFilter {
     }
 }
 
-fn update_quote_state(c: char, in_single: &mut bool, in_double: &mut bool, in_backtick: &mut bool) -> bool {
+fn update_quote_state(
+    c: char,
+    in_single: &mut bool,
+    in_double: &mut bool,
+    in_backtick: &mut bool,
+) -> bool {
     match c {
         '\'' if !*in_double && !*in_backtick => {
             *in_single = !*in_single;
@@ -177,12 +182,9 @@ fn adjust_delimiter_depths(tracker: &mut RoutineDeclFilter, c: char) {
 }
 
 fn is_routine_terminal_line(line: &str) -> bool {
-    if line.contains("import ") || line.starts_with("from ") || line.ends_with(')') {
-        return true;
-    }
-    let has_import_pattern = line.contains(" from ") || line.starts_with("import ");
-    let ends_with_quote = line.ends_with('\'') || line.ends_with('"') || line.ends_with('`');
-    has_import_pattern && ends_with_quote
+    // Balanced declarations may end without semicolons. Keep skipping only
+    // when an explicit continuation remains; otherwise index subsequent code.
+    !line.ends_with(['=', '|', '&', ','])
 }
 
 fn starts_routine_declaration(trimmed: &str) -> Option<bool> {
@@ -222,7 +224,12 @@ fn is_import_declaration(trimmed: &str) -> bool {
     const IMPORT_PREFIXES: &[&str] = &[
         "import ", "import\t", "import{", "import\"", "import'", "import (",
     ];
-    if IMPORT_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) || trimmed == "import (" || trimmed == "import" {
+    if IMPORT_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+        || trimmed == "import ("
+        || trimmed == "import"
+    {
         return true;
     }
     trimmed.starts_with("from ") && trimmed.contains("import")
@@ -275,9 +282,9 @@ fn strip_export_and_pub(trimmed: &str) -> &str {
 
 fn is_valid_type_alias_name(name: &str) -> bool {
     !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']'))
+        && name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>' | ',' | ' ' | '[' | ']')
+        })
 }
 
 fn is_comment_start(trimmed: &str) -> bool {

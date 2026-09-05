@@ -97,9 +97,15 @@ def positional(x, y, /, z):
         .unwrap();
     assert_eq!(functions.len(), 2);
     assert_eq!(functions[0].name, "total");
-    assert_eq!(functions[0].parameters, 4, "bare * should not count as parameter");
+    assert_eq!(
+        functions[0].parameters, 4,
+        "bare * should not count as parameter"
+    );
     assert_eq!(functions[1].name, "positional");
-    assert_eq!(functions[1].parameters, 3, "bare / should not count as parameter");
+    assert_eq!(
+        functions[1].parameters, 3,
+        "bare / should not count as parameter"
+    );
 }
 
 #[test]
@@ -109,6 +115,7 @@ fn test_tsx_jsx_attribute_ampersand_compatibility() {
     let code = r#"export function TradeView() {
     return <div label="Unrealized P&L">Trade</div>;
 }
+
 "#;
     let functions = analyzer
         .analyze_file_checked(Path::new("Trade.tsx"), code, root)
@@ -117,3 +124,17 @@ fn test_tsx_jsx_attribute_ampersand_compatibility() {
     assert_eq!(functions[0].name, "TradeView");
 }
 
+#[test]
+fn jsx_attribute_ampersands_do_not_hide_invalid_expressions() {
+    for path in ["broken.tsx", "broken.jsx"] {
+        for value in ["{a & & b}", "{a &&}"] {
+            let code = format!("function view() {{ return <div label={value} />; }}");
+            assert!(
+                ComplexityAnalyzer::new()
+                    .analyze_file_checked(Path::new(path), &code, Path::new("."))
+                    .is_err(),
+                "accepted invalid JSX: {code}"
+            );
+        }
+    }
+}

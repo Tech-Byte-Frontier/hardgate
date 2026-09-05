@@ -4,6 +4,24 @@ mod fs;
 use hardgate::engines::{AstMutant, BaselineOutcome, MutantOutcome, NativeMutationRunner};
 use std::path::{Path, PathBuf};
 
+#[test]
+fn python_automatic_plan_runs_suite_without_selecting_production_source() {
+    let root = fs::tempdir("python-suite-plan");
+    std::fs::write(root.join("pytest.ini"), "[pytest]\n").unwrap();
+    let runner = NativeMutationRunner::new(10, None);
+    let plan = runner
+        .resolve_test_plan(Path::new("src/calculator with spaces.py"), &root)
+        .unwrap();
+    assert_eq!(plan.command, "pytest");
+    assert!(plan.selection.is_full_suite());
+    assert_eq!(plan.working_dir, root);
+    let explicit = NativeMutationRunner::new(10, Some("python -m unittest".into()))
+        .resolve_test_plan(Path::new("src/calculator.py"), &root)
+        .unwrap();
+    assert_eq!(explicit.command, "python -m unittest");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[path = "mutation_runner/coverage.rs"]
 mod coverage;
 

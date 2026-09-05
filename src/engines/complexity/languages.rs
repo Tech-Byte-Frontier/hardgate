@@ -109,7 +109,11 @@ fn has_syntax_errors(tree: &tree_sitter::Tree, lang: SupportedLanguage, source: 
     has_genuine_syntax_error(root, lang, source)
 }
 
-fn has_genuine_syntax_error(node: tree_sitter::Node, lang: SupportedLanguage, source: &[u8]) -> bool {
+fn has_genuine_syntax_error(
+    node: tree_sitter::Node,
+    lang: SupportedLanguage,
+    source: &[u8],
+) -> bool {
     if node.is_error() || node.is_missing() {
         if is_benign_jsx_attribute_error(node, lang, source) {
             return false;
@@ -135,19 +139,16 @@ fn is_benign_jsx_attribute_error(
     if !matches!(lang, SupportedLanguage::Tsx | SupportedLanguage::JavaScript) {
         return false;
     }
-    let mut current = Some(node);
-    let mut in_jsx_attribute = false;
-    while let Some(parent) = current.and_then(|n| n.parent()) {
-        if parent.kind() == "jsx_attribute" {
-            in_jsx_attribute = true;
-            break;
-        }
-        current = Some(parent);
-    }
-    if !in_jsx_attribute {
+    let Some(string) = node.parent().filter(|parent| parent.kind() == "string") else {
         return false;
-    }
-    let text = node.utf8_text(source).unwrap_or_default();
-    text.contains('&')
+    };
+    // Only the grammar's bare ampersand error in a quoted attribute is benign.
+    // Expressions such as label={a & & b} must still fail parsing.
+    string
+        .parent()
+        .is_some_and(|parent| parent.kind() == "jsx_attribute")
+        && !node.is_missing()
+        && node
+            .utf8_text(source)
+            .is_ok_and(|text| text.starts_with('&'))
 }
-

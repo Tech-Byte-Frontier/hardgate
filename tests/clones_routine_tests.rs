@@ -12,6 +12,31 @@ fn clone_config() -> CloneConfig {
 }
 
 #[test]
+fn semicolon_free_type_alias_does_not_hide_following_executable_clones() {
+    let detector = CloneDetector::new(&clone_config());
+    let body = "\nfunction calculate(value: number) {\n const first = value + 1\n const second = first * 2\n const third = second - 3\n const fourth = third / 4\n return fourth + value\n}\n";
+    for declaration in ["type Amount = number", "type Amount = {\n value: number\n}"] {
+        let files = vec![
+            (
+                PathBuf::from("src/first.ts"),
+                format!("{declaration}{body}"),
+            ),
+            (
+                PathBuf::from("src/second.ts"),
+                format!("{declaration}{body}"),
+            ),
+        ];
+        assert!(
+            !detector
+                .detect_clones(&files, Path::new("."))
+                .unwrap()
+                .is_empty(),
+            "declaration hid executable duplication: {declaration}"
+        );
+    }
+}
+
+#[test]
 fn clone_detector_ignores_python_routine_declarations() {
     let detector = CloneDetector::new(&clone_config());
 

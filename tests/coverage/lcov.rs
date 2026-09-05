@@ -300,7 +300,9 @@ fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
     for body in [
         "LF:1\n",
         "SF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\n",
-        "SF:src/lib.rs\nLF:0\nLH:0\nend_of_record\n",
+        "SF:src/lib.rs\nLF:0\nLH:1\nend_of_record\n",
+        "SF:src/lib.rs\nLF:0\nend_of_record\n",
+        "SF:src/lib.rs\nLH:0\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1\nend_of_record\n",
         "SF:src/lib.rs\nDA:1,1\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
         "SF:src/lib.rs\nDA:0,1\nLF:1\nLH:1\nend_of_record\n",
@@ -318,6 +320,19 @@ fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
         "SF:src/../src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
     ] {
         assert_invalid_lcov(&config, body);
+    }
+}
+
+#[test]
+fn lcov_empty_modules_accept_zero_counts_or_omitted_line_counts() {
+    let config = detail_config(None, None);
+    for counts in ["", "LF:0\nLH:0\n"] {
+        let body = format!("SF:src/__init__.py\n{counts}end_of_record\n");
+        let parsed = parse_valid_lcov(&config, &body, "lcov-empty-module");
+        let module = parsed.values().next().unwrap();
+        assert_eq!(module.lines_found, 0);
+        assert_eq!(module.lines_hit, 0);
+        assert!(module.line_hits.is_empty());
     }
 }
 
