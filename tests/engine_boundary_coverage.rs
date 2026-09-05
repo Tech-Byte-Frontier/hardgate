@@ -169,27 +169,28 @@ fn lcov_details_keep_ambiguous_names_and_reject_malformed_fields() {
         false,
     )
     .expect_err("function details require aggregate counts");
-    assert!(
-        missing_function_counts
-            .to_string()
-            .contains("matching FNF/FNH")
-    );
+    let missing_function_counts = format!("{missing_function_counts:#}");
+    assert!(missing_function_counts.contains("LCOV FN/FNDA details require matching FNF/FNH"));
 
     for (details, expected) in [
-        ("FN:1,\0\nFNDA:0,\0\nFNF:1\nFNH:0\n", "function name"),
-        ("BRDA:1,,0,1\n", "BRDA block field"),
-        ("BRDA:1,0,\0,1\n", "BRDA branch field"),
-        ("BRDA:1,0,,1\n", "BRDA branch field"),
+        (
+            "FN:1,\0\nFNDA:0,\0\nFNF:1\nFNH:0\n",
+            "Malformed LCOV FN function name",
+        ),
+        ("BRDA:1,,0,1\n", "Malformed LCOV BRDA block field"),
+        ("BRDA:1,0,\0,1\n", "Malformed LCOV BRDA branch field"),
+        ("BRDA:1,0,,1\n", "Malformed LCOV BRDA branch field"),
     ] {
         let error = parse_report(&report(details, ""), false, false)
-            .expect_err("malformed detail records must fail closed")
-            .to_string();
+            .expect_err("malformed detail records must fail closed");
+        let error = format!("{error:#}");
         assert!(error.contains(expected), "{error}");
     }
 
     let branch_error = parse_report(&report("BRDA:1,0,0,1\n", ""), false, false)
         .expect_err("branch details require aggregate counts");
-    assert!(branch_error.to_string().contains("matching BRF/BRH"));
+    let branch_error = format!("{branch_error:#}");
+    assert!(branch_error.contains("LCOV BRDA details require matching BRF/BRH"));
     let not_taken = parse_report(&report("BRDA:1,0,0,-\n", "BRF:1\nBRH:0"), false, true)
         .expect("not-taken branches are valid LCOV details");
     let coverage = &not_taken[&PathBuf::from("src/lib.rs")];
