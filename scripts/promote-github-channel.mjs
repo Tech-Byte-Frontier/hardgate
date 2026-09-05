@@ -39,6 +39,7 @@ function remainingMs(policy) {
 
 function readOption(argv, index, options) {
   const argument = argv[index];
+  if (typeof argument !== "string" || !argument.startsWith("--") || argument.length === 2) fail(`unknown option ${argument}`);
   const key = argument.slice(2);
   if (!Object.hasOwn(options, key)) fail(`unknown option ${argument}`);
   if (options[key] !== null) fail(`${argument} was specified more than once`);
@@ -83,10 +84,13 @@ function assertHashable(stats, label) {
 async function digestStream(handle, policy) {
   const stream = handle.createReadStream({ autoClose: false, highWaterMark: HASH_CHUNK_BYTES });
   const digest = crypto.createHash("sha256");
+  let bytesRead = 0;
   const timer = setTimeout(() => stream.destroy(new Error("asset hashing exceeded the operation deadline")), remainingMs(policy));
   try {
     for await (const chunk of stream) {
       remainingMs(policy);
+      bytesRead += chunk.byteLength;
+      if (bytesRead > MAX_ASSET_BYTES) fail("asset exceeds the bounded hash size");
       digest.update(chunk);
     }
     remainingMs(policy);
@@ -104,6 +108,7 @@ async function hashRegularFile(file, label, policy) {
     assertHashable(stats, label);
     const digest = await digestStream(handle, policy);
     const finalStats = await handle.stat();
+    assertHashable(finalStats, label);
     if (finalStats.size !== stats.size) fail(`${label} changed while hashing`);
     return digest;
   } finally {
@@ -172,7 +177,10 @@ function parseLatestMetadata(output) {
 
 function assertExactAssets(names, assets, label) {
   const expected = new Set(assets);
-  if (names.length !== assets.length || names.some((name) => !expected.has(name))) fail(`${label} does not contain the exact expected asset set`);
+  const actual = new Set(names);
+  if (names.length !== assets.length || actual.size !== names.length || actual.size !== expected.size || [...expected].some((name) => !actual.has(name))) {
+    fail(`${label} does not contain the exact expected asset set`);
+  }
 }
 
 function assertReleaseShape(metadata) {
@@ -238,7 +246,7 @@ function buildOperations(context) {
       return parseLatestMetadata(await runGh(["api", "-X", "GET", `repos/${options.repo}/releases/latest`]));
     } catch (error) {
       if (isNotFound(error)) return { state: "missing" };
-      throw new Error(`latest release probe failed: ${error.message}`);
+      throw new Error("latest release probe failed");
     }
   };
   const inspect = async (stable) => {
@@ -302,9 +310,8 @@ async function main(argv) {
   console.log(["github channel:", result.publication, `(${result.state})`].join(" "));
 }
 
-function reportFailure(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(message + "\n");
+function reportFailure() {
+  process.stderr.write(`${EXPECTED_FAILURE_CODE}: ${EXPECTED_FAILURE_MESSAGE}\n`);
   process.exitCode = 1;
 }
 

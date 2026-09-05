@@ -142,7 +142,7 @@ try {
   const digests = assets.map((name) => crypto.createHash("sha256").update(fs.readFileSync(path.join(dist, name))).digest("hex"));
   const receipt = path.join(fixture, "receipt.json");
   writeReceiptAtomicSync(receipt, gatedReceiptWithDigests(digests), identity(digests));
-  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: null }));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: null, duplicateAssets: false }));
   const fakeGh = [
     "#!/usr/bin/env node",
     "const fs=require(\"node:fs\"); const path=require(\"node:path\");",
@@ -151,14 +151,14 @@ try {
     "const log=(kind)=>fs.appendFileSync(logFile,JSON.stringify({kind,args,env:Object.fromEntries([\"GH_TOKEN\",\"GH_HOST\",\"GITHUB_TOKEN\",\"NPM_TOKEN\",\"CARGO_REGISTRY_TOKEN\",\"ACTIONS_ID_TOKEN_REQUEST_TOKEN\"].map(k=>[k,process.env[k]??null]))})+\"\\n\");",
     "const fail=(text)=>{process.stderr.write(text+\"\\n\");process.exit(1);}; const save=()=>fs.writeFileSync(stateFile,JSON.stringify(state));",
     "log(args[0]+\"-\"+args[1]);",
-    "if(args[0]===\"api\"){if(state.latest===\"missing\")fail(\"HTTP 404: Not Found\");if(state.latest===\"error\")fail(\"HTTP 500: Internal Server Error\");if(state.latest===\"unauthorized\")fail(\"HTTP 401: Unauthorized\");process.stdout.write(JSON.stringify({tag_name:state.latest,draft:false,prerelease:false}));}",
-    "else if(args[0]===\"release\"&&args[1]===\"view\"){const names=fs.readdirSync(dist);process.stdout.write(JSON.stringify({tagName:state.viewTag||\"v1.2.3\",isDraft:false,isPrerelease:state.targetPrerelease,assets:names.map(name=>({name}))}));}",
+    "if(args[0]===\"api\"){if(state.latest===\"missing\")fail(\"HTTP 404: Not Found\");if(state.latest===\"error\")fail(\"HTTP 500: Internal Server Error\");if(state.latest===\"credential\")fail(\"credential-like sentinel\");if(state.latest===\"unauthorized\")fail(\"HTTP 401: Unauthorized\");process.stdout.write(JSON.stringify({tag_name:state.latest,draft:false,prerelease:false}));}",
+    "else if(args[0]===\"release\"&&args[1]===\"view\"){const names=fs.readdirSync(dist);if(state.duplicateAssets)names[1]=names[0];process.stdout.write(JSON.stringify({tagName:state.viewTag||\"v1.2.3\",isDraft:false,isPrerelease:state.targetPrerelease,assets:names.map(name=>({name}))}));}",
     "else if(args[0]===\"release\"&&args[1]===\"download\"){const name=args[args.indexOf(\"--pattern\")+1];const directory=args[args.indexOf(\"--dir\")+1];if(state.mismatch===name)fs.writeFileSync(path.join(directory,name),\"wrong bytes\");else fs.copyFileSync(path.join(dist,name),path.join(directory,name));}",
     "else if(args[0]===\"release\"&&args[1]===\"edit\"){state.editCount+=1;state.latest=\"v1.2.3\";state.targetPrerelease=false;save();}",
     "else fail(\"unexpected gh command\");",
   ].join("\n");
   fs.writeFileSync(path.join(bin, "gh"), fakeGh, { mode: 0o755 });
-  const runCli = (receiptPath = receipt) => spawnSync(process.execPath, [path.join(projectRoot, "scripts/promote-github-channel.mjs"), "--receipt", receiptPath, "--dist", dist, "--repo", "owner/repo"], {
+  const runCli = (receiptPath = receipt, prefix = []) => spawnSync(process.execPath, [path.join(projectRoot, "scripts/promote-github-channel.mjs"), ...prefix, "--receipt", receiptPath, "--dist", dist, "--repo", "owner/repo"], {
     cwd: projectRoot,
     encoding: "utf8",
     env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, GH_TOKEN: "fixture-token", GITHUB_TOKEN: "must-not-leak", NPM_TOKEN: "must-not-leak", CARGO_REGISTRY_TOKEN: "must-not-leak", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "must-not-leak" },
@@ -178,6 +178,12 @@ try {
   assert.deepEqual(fs.readFileSync(receipt), stableBytes);
   assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).editCount, 1);
 
+  const callsBeforeBadOption = fs.readFileSync(logFile);
+  const badOption = runCli(receipt, ["xxreceipt"]);
+  assert.notEqual(badOption.status, 0);
+  assert.deepEqual(fs.readFileSync(logFile), callsBeforeBadOption);
+  assert.doesNotMatch(badOption.stderr, /credential|sentinel/i);
+
   const localMismatchReceipt = path.join(fixture, "local-mismatch.json");
   writeReceiptAtomicSync(localMismatchReceipt, gatedReceiptWithDigests(digests), identity(digests));
   const localAsset = path.join(dist, assets[0]);
@@ -190,23 +196,39 @@ try {
 
   const mismatchReceipt = path.join(fixture, "mismatch.json");
   writeReceiptAtomicSync(mismatchReceipt, gatedReceiptWithDigests(digests), identity(digests));
-  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: assets[0] }));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: assets[0], duplicateAssets: false }));
   const mismatch = runCli(mismatchReceipt);
   assert.notEqual(mismatch.status, 0);
   assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).editCount, 0);
   assert.equal(readReceipt(mismatchReceipt).channels[CHANNELS.githubAssets].events.at(-1).type, "failure");
 
+  const duplicateReceipt = path.join(fixture, "duplicate.json");
+  writeReceiptAtomicSync(duplicateReceipt, gatedReceiptWithDigests(digests), identity(digests));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: null, duplicateAssets: true }));
+  const duplicate = runCli(duplicateReceipt);
+  assert.notEqual(duplicate.status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).editCount, 0);
+
   const errorReceipt = path.join(fixture, "error.json");
   writeReceiptAtomicSync(errorReceipt, gatedReceiptWithDigests(digests), identity(digests));
-  fs.writeFileSync(stateFile, JSON.stringify({ latest: "error", targetPrerelease: true, editCount: 0, mismatch: null }));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "error", targetPrerelease: true, editCount: 0, mismatch: null, duplicateAssets: false }));
   const errorResult = runCli(errorReceipt);
   assert.notEqual(errorResult.status, 0);
   assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).editCount, 0);
-  assert.match(errorResult.stderr, /latest release probe failed/);
+  assert.match(errorResult.stderr, /github-promotion-failed: GitHub channel promotion failed/);
+
+  const credentialReceipt = path.join(fixture, "credential.json");
+  writeReceiptAtomicSync(credentialReceipt, gatedReceiptWithDigests(digests), identity(digests));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "credential", targetPrerelease: true, editCount: 0, mismatch: null, duplicateAssets: false }));
+  const credential = runCli(credentialReceipt);
+  assert.notEqual(credential.status, 0);
+  assert.doesNotMatch(credential.stdout, /credential-like sentinel/);
+  assert.doesNotMatch(credential.stderr, /credential-like sentinel/);
+  assert.doesNotMatch(fs.readFileSync(credentialReceipt, "utf8"), /credential-like sentinel/);
 
   const wrongTagReceipt = path.join(fixture, "wrong-tag.json");
   writeReceiptAtomicSync(wrongTagReceipt, gatedReceiptWithDigests(digests), identity(digests));
-  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: null, viewTag: "v9.9.9" }));
+  fs.writeFileSync(stateFile, JSON.stringify({ latest: "missing", targetPrerelease: true, editCount: 0, mismatch: null, viewTag: "v9.9.9", duplicateAssets: false }));
   const wrongTag = runCli(wrongTagReceipt);
   assert.notEqual(wrongTag.status, 0);
   assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).editCount, 0);
