@@ -34,6 +34,7 @@ fn cgroup_paths_reject_empty_malformed_and_unsafe_entries() {
         "0",
         "0:",
         "0::relative",
+        "0::/bad\0path",
         "0::/../outside",
         "7:memory:relative",
         "not-a-number::/job",
@@ -90,7 +91,17 @@ fn mountinfo_rejects_missing_separator_fields_and_missing_cgroup2() {
 
 #[test]
 fn mountinfo_rejects_relative_traversal_nul_and_bad_escapes() {
-    for root in ["relative", "/../escape", "/bad\\", "/bad\\999", "/bad\\000"] {
+    for root in [
+        "relative",
+        "/../escape",
+        "/bad\\",
+        "/bad\\999",
+        "/bad\\000",
+        "/bad\\0",
+        "/bad\\00",
+        "/bad\\090",
+        "/bad\\009",
+    ] {
         let line = format!("42 1 0:42 {root} /sys rw - cgroup2 cgroup rw");
         assert_eq!(
             invalid_with_context(find_cgroup2_mounts(&line), format!("root={root}")).kind(),
@@ -145,4 +156,32 @@ fn cgroup_directories_reject_unsafe_mount_points() {
             io::ErrorKind::InvalidData
         );
     }
+}
+
+#[test]
+fn mountinfo_ignores_lines_without_separator_but_rejects_relative_mount_points() {
+    let valid = "42 1 0:42 / /sys rw - cgroup2 cgroup rw";
+    assert_eq!(
+        find_cgroup2_mounts(&format!("unrelated line\n{valid}"))
+            .unwrap()
+            .len(),
+        1
+    );
+    let invalid_mount = valid.replace("/sys", "relative");
+    assert_eq!(
+        invalid(find_cgroup2_mounts(&invalid_mount)).kind(),
+        io::ErrorKind::InvalidData
+    );
+}
+
+#[test]
+fn resolved_membership_cannot_escape_the_mount_directory() {
+    assert_eq!(
+        invalid(cgroup_directories(
+            &mount("/", "/sys/fs/cgroup"),
+            &components(&["/elsewhere"])
+        ))
+        .kind(),
+        io::ErrorKind::InvalidData
+    );
 }

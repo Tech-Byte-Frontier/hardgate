@@ -349,9 +349,19 @@ line and 64 KiB of snippet text in total. Summary output omits diagnostic detail
 Stable [rule IDs](DIAGNOSTIC_RULES.md) identify findings independently of wording,
 paths and line movement.
 
-`--threads N` selects a positive analysis worker count without changing policy;
-otherwise Rayon settings apply. Small source captures and AST batches run
+Analysis defaults to at most two workers, preserving a smaller Rayon setting.
+`--threads N` selects a smaller positive count within that ceiling; it cannot
+remove the OS resource boundary. Small source captures and AST batches run
 sequentially below eight files. `--timing` adds total elapsed time to stderr.
+
+Workload commands require verified CPU, memory, swap and task limits before
+loading project input. On Linux, Hardgate establishes a systemd user scope when
+it does not already inherit suitable cgroup-v2 limits. The scope covers analysis
+and every child tool, including detached descendants. Separate invocations share
+one per-user workload slot. Help, version and shell completion generation do not
+need a workload scope. Unsupported environments fail with exit 2 before work;
+there is no implicit unrestricted fallback. See [resource limits](MUTATION_RESOURCES.md).
+
 `--color auto|always|never` applies to human output. Explicit choices override
 environment; auto honors `NO_COLOR`, then nonzero `CLICOLOR_FORCE`, then TTY,
 `CLICOLOR=0` and `TERM=dumb`. JSON does not contain terminal styling.

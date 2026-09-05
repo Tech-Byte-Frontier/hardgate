@@ -1,3 +1,4 @@
+import { validateEnvelope, validateStatus, validatePresentation } from "./consumer-envelope.mjs";
 "use strict";
 
 const MAX_DIAGNOSTIC = 4096;
@@ -19,14 +20,16 @@ export function bounded(value, limit = MAX_DIAGNOSTIC) {
   return text.length <= limit ? text : `${text.slice(0, limit)}…[truncated]`;
 }
 
+const ENVELOPE_KEYS = ["schema_version", "command", "status", "exit_code", "execution"];
 const GATE_KEYS = [
+  ...ENVELOPE_KEYS, "functions", "total", "shown", "omitted", "snippet_bytes", "snippets_truncated", "diagnostics",
   "gate_name", "files_scanned", "functions_analyzed", "duration_ms", "passed", "advisories",
   "budget_violations", "suppression_violations", "complexity_violations", "invariant_violations",
   "clone_violations", "coverage_violations", "mutation_violations", "dead_code_violations",
   "orchestration_violations", "summary", "top_files",
 ];
 const SUMMARY_KEYS = [
-  "total_errors", "clones", "ast_violations", "complexity", "file_budgets", "suppressions",
+  "code_findings", "analysis_blockers", "total_errors", "clones", "ast_violations", "complexity", "file_budgets", "suppressions",
   "architecture", "coverage", "mutation", "dead_code", "tool", "files_scanned",
   "functions_analyzed", "files_with_violations", "passed",
 ];
@@ -41,7 +44,7 @@ const SHAPES = {
   dead_code_violations: ["file", "line_number", "symbol", "violation_type", "message", "recommendation"],
   orchestration_violations: ["step", "command", "exit_code", "output", "recommendation"],
 };
-const MUTATION_KEYS = ["stats", "score", "min_score", "passed", "duration_ms", "results"];
+const MUTATION_KEYS = [...ENVELOPE_KEYS, "stats", "score", "min_score", "passed", "duration_ms", "results"];
 const STATS_KEYS = ["killed", "survived", "timeout", "compile_error", "runner_error", "equivalent", "unviable", "total"];
 const MUTANT_KEYS = ["id", "file", "line", "column", "start_byte", "end_byte", "original", "replacement", "description"];
 const RESULT_KEYS = ["mutant", "outcome", "duration_ms", "command", "diagnostic", "source_restored"];
@@ -61,12 +64,10 @@ const FIELD_VALIDATORS = {
   lines_b: validateLinePair,
 };
 
-function exactKeys(value, keys, label) {
+function requiredKeys(value, keys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("report-schema", `${label} must be an object`);
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-    fail("report-schema", `${label} keys must be exactly ${expected.join(",")}`);
+  if (keys.some((key) => !Object.hasOwn(value, key))) {
+    fail("report-schema", `${label} must contain ${keys.join(",")}`);
   }
 }
 
@@ -114,7 +115,7 @@ function validateBreakdown(value, label) {
   arrayValue(value, `${label}.breakdown`);
   for (const [index, entry] of value.entries()) {
     const itemLabel = `${label}.breakdown[${index}]`;
-    exactKeys(entry, ["line", "column", "kind", "description", "score"], itemLabel);
+    requiredKeys(entry, ["line", "column", "kind", "description", "score"], itemLabel);
     integerValue(entry.line, `${itemLabel}.line`);
     integerValue(entry.column, `${itemLabel}.column`);
     stringValue(entry.kind, `${itemLabel}.kind`);
@@ -124,13 +125,14 @@ function validateBreakdown(value, label) {
 }
 
 function validateViolation(value, shape, label) {
-  exactKeys(value, shape, label);
+  requiredKeys(value, shape, label);
   for (const key of shape) validateViolationField(value[key], key, label, shape);
   if (shape.includes("breakdown")) validateBreakdown(value.breakdown, label);
 }
 
 function validateGateEnvelope(report) {
-  exactKeys(report, GATE_KEYS, "Hardgate report");
+  requiredKeys(report, GATE_KEYS, "Hardgate report");
+  validateEnvelope(report, "check");
   stringValue(report.gate_name, "gate_name");
   integerValue(report.files_scanned, "files_scanned");
   integerValue(report.functions_analyzed, "functions_analyzed");
@@ -148,7 +150,7 @@ function validateViolationArrays(report) {
 }
 
 function validateSummaryShape(report) {
-  exactKeys(report.summary, SUMMARY_KEYS, "summary");
+  requiredKeys(report.summary, SUMMARY_KEYS, "summary");
   for (const key of SUMMARY_KEYS) {
     if (key === "passed") booleanValue(report.summary[key], `summary.${key}`);
     else integerValue(report.summary[key], `summary.${key}`);
@@ -159,7 +161,7 @@ function validateTopFiles(report) {
   arrayValue(report.top_files, "top_files");
   for (const [index, entry] of report.top_files.entries()) {
     const label = `top_files[${index}]`;
-    exactKeys(entry, ["file", "violations"], label);
+    requiredKeys(entry, ["file", "violations"], label);
     stringValue(entry.file, `${label}.file`);
     integerValue(entry.violations, `${label}.violations`);
     if (entry.violations === 0) fail("report-status", `${label} must have a positive violation count`);
@@ -186,6 +188,8 @@ function topFileEntries(report) {
 function expectedGateSummary(report) {
   const counts = Object.fromEntries(Object.entries(SHAPES).map(([field]) => [field, report[field].length]));
   return {
+    code_findings: Object.entries(counts).filter(([field]) => field !== "orchestration_violations").reduce((sum, [, count]) => sum + count, 0),
+    analysis_blockers: counts.orchestration_violations,
     total_errors: Object.values(counts).reduce((sum, value) => sum + value, 0),
     clones: counts.clone_violations,
     ast_violations: counts.complexity_violations,
@@ -211,8 +215,9 @@ function summaryMatches(actual, expected) {
 
 function validateGateConsistency(report) {
   const total = expectedGateSummary(report).total_errors;
+  validateStatus(report, report.orchestration_violations.some((item) => item.exit_code === null || [126, 127].includes(item.exit_code)) || report.coverage_violations.some((item) => ["Missing Source Coverage", "Missing Diff Coverage", "Missing Critical Path", "Coverage Count Overflow"].includes(item.metric)));
   if (report.passed !== (total === 0)) fail("report-status", `passed must equal ${total === 0} when violations are counted`);
-  if (JSON.stringify(report.top_files) !== JSON.stringify(topFileEntries(report))) fail("report-status", "top_files is inconsistent with report violations");
+  if (JSON.stringify(report.top_files.map(({ file, violations }) => ({ file, violations }))) !== JSON.stringify(topFileEntries(report))) fail("report-status", "top_files is inconsistent with report violations");
   if (!summaryMatches(report.summary, expectedGateSummary(report))) fail("report-status", "summary is inconsistent with report violations");
 }
 
@@ -222,12 +227,14 @@ export function validateGateReport(report) {
   validateSummaryShape(report);
   validateTopFiles(report);
   validateGateConsistency(report);
+  validatePresentation(report);
   return report;
 }
 
 function validateMutationShape(report) {
-  exactKeys(report, MUTATION_KEYS, "mutation report");
-  exactKeys(report.stats, STATS_KEYS, "mutation stats");
+  requiredKeys(report, MUTATION_KEYS, "mutation report");
+  validateEnvelope(report, "mutate");
+  requiredKeys(report.stats, STATS_KEYS, "mutation stats");
   for (const key of STATS_KEYS) integerValue(report.stats[key], `stats.${key}`);
   numberValue(report.score, "score");
   numberValue(report.min_score, "min_score");
@@ -238,7 +245,7 @@ function validateMutationShape(report) {
 }
 
 function validateMutant(mutant, label) {
-  exactKeys(mutant, MUTANT_KEYS, label);
+  requiredKeys(mutant, MUTANT_KEYS, label);
   for (const key of ["id", "line", "column", "start_byte", "end_byte"]) integerValue(mutant[key], `${label}.${key}`);
   for (const key of ["file", "original", "replacement", "description"]) stringValue(mutant[key], `${label}.${key}`);
   if (mutant.end_byte < mutant.start_byte) fail("report-schema", `${label} has a reversed byte range`);
@@ -246,7 +253,7 @@ function validateMutant(mutant, label) {
 
 function validateMutationResult(result, index) {
   const label = `mutation.results[${index}]`;
-  exactKeys(result, RESULT_KEYS, label);
+  requiredKeys(result, RESULT_KEYS, label);
   validateMutant(result.mutant, `${label}.mutant`);
   stringValue(result.outcome, `${label}.outcome`);
   if (!["Killed", "Survived", "CompileError", "RunnerError", "Timeout", "Equivalent", "Unviable"].includes(result.outcome)) fail("report-schema", `${label} has an unknown outcome`);
@@ -279,6 +286,8 @@ function validateMutationScore(report) {
   const viable = report.stats.killed + report.stats.survived;
   const score = viable === 0 ? 0 : (report.stats.killed / viable) * 100;
   if (Math.abs(report.score - score) > 1e-9) fail("report-status", "mutation score is not truthful for killed and survived counts");
+  const incomplete = viable === 0 || ["timeout", "compile_error", "runner_error", "unviable"].some((key) => report.stats[key] > 0);
+  validateStatus(report, incomplete);
   return viable;
 }
 

@@ -256,3 +256,148 @@ fn scope_advice_adds_only_omitted_flags_and_requires_enabling_evidence() {
         assert!(!advice.contains("for complete evidence"));
     }
 }
+
+fn compare_plans(before: ExecutionPlan, after: ExecutionPlan) -> serde_json::Value {
+    let fixture = Fixture::new("report-review", "metadata", None);
+    let mut input = report();
+    input.execution = Some(before);
+    save(&fixture, "before.json", &input);
+    input.execution = Some(after);
+    save(&fixture, "after.json", &input);
+    let output = run(
+        fixture.as_ref(),
+        &["report", "compare", "before.json", "after.json", "--json"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    json(&output)
+}
+
+#[test]
+fn comparison_distinguishes_policy_scope_command_root_and_required_evidence() {
+    let baseline = execution(true);
+    let same = compare_plans(baseline.clone(), baseline.clone());
+    assert_eq!(same["equivalent"], true);
+    let changes: [fn(&mut ExecutionPlan); 6] = [
+        |p| p.config.policy_sha256 = "different".into(),
+        |p| p.scope.paths.push("src".into()),
+        |p| p.scope.mode = "paths".into(),
+        |p| p.command = "verify".into(),
+        |p| p.config.root = "/other".into(),
+        |p| p.engines[0].required_evidence.push("coverage".into()),
+    ];
+    for (index, change) in changes.into_iter().enumerate() {
+        let mut after = baseline.clone();
+        change(&mut after);
+        let compared = compare_plans(baseline.clone(), after);
+        assert_eq!(compared["equivalent"], false, "case {index}");
+        let field = if index == 0 {
+            "config_differences"
+        } else {
+            "scope_differences"
+        };
+        assert_eq!(compared[field].as_array().unwrap().len(), 1, "case {index}");
+    }
+}
+
+#[test]
+fn comparison_refuses_diff_inventory_on_either_side() {
+    let mut diff = execution(true);
+    diff.scope.mode = "diff".into();
+    for (before, after) in [(diff.clone(), execution(true)), (execution(true), diff)] {
+        let compared = compare_plans(before, after);
+        assert_eq!(compared["equivalent"], false);
+        assert!(
+            compared["scope_differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v
+                    .as_str()
+                    .unwrap()
+                    .contains("complete resolved source inventory"))
+        );
+    }
+}
+
+#[test]
+fn comparison_refuses_selected_incomplete_or_skipped_evidence_on_either_side() {
+    for state in [EngineState::Incomplete, EngineState::Skipped] {
+        let mut partial = execution(true);
+        partial.engines[0].state = state;
+        for (before, after) in [
+            (partial.clone(), execution(true)),
+            (execution(true), partial),
+        ] {
+            let compared = compare_plans(before, after);
+            assert_eq!(compared["equivalent"], false);
+            assert!(
+                compared["scope_differences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|v| v.as_str().unwrap().contains("incomplete or skipped"))
+            );
+        }
+    }
+}
+
+#[test]
+fn equivalent_terminal_comparison_has_no_warning_but_changed_policy_does() {
+    let fixture = Fixture::new("report-review", "terminal-policy", None);
+    let mut input = report();
+    input.execution = Some(execution(true));
+    save(&fixture, "before.json", &input);
+    let same = run(
+        fixture.as_ref(),
+        &["report", "compare", "before.json", "before.json"],
+    );
+    assert_eq!(same.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&same.stdout).contains("Non-equivalent"));
+    input.execution.as_mut().unwrap().config.policy_sha256 = "changed".into();
+    save(&fixture, "after.json", &input);
+    let changed = run(
+        fixture.as_ref(),
+        &["report", "compare", "before.json", "after.json"],
+    );
+    assert_eq!(changed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&changed.stdout).contains("Config policy changed"));
+}
+
+#[test]
+fn comparison_of_filtered_views_never_claims_equivalent_evidence() {
+    let fixture = Fixture::new("report-review", "filtered-compare", None);
+    let mut input = report();
+    input.execution = Some(execution(true));
+    save(&fixture, "input.json", &input);
+    let slice = run(
+        fixture.as_ref(),
+        &[
+            "report",
+            "input.json",
+            "--top",
+            "0",
+            "--json",
+            "--output",
+            "slice.json",
+        ],
+    );
+    assert_eq!(slice.status.code(), Some(1));
+    for (before, after) in [("input.json", "slice.json"), ("slice.json", "input.json")] {
+        let output = run(
+            fixture.as_ref(),
+            &["report", "compare", before, after, "--json"],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let compared = json(&output);
+        assert_eq!(compared["equivalent"], false);
+        assert_eq!(compared["verdict_before"]["total_errors"], 1);
+        assert_eq!(compared["verdict_after"]["total_errors"], 1);
+        assert!(
+            compared["scope_differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("Filtered report views"))
+        );
+    }
+}

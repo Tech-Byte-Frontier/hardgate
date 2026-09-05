@@ -15,6 +15,7 @@ impl Drop for TemporaryOutput {
 }
 
 pub(crate) fn write_atomic_file(path: &Path, content: &str) -> Result<()> {
+    crate::resources::runtime::verify_active()?;
     let name = path.file_name().context("output path must name a file")?;
     let parent = path
         .parent()
@@ -43,6 +44,7 @@ pub(crate) fn write_atomic_file(path: &Path, content: &str) -> Result<()> {
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
         drop(file);
+        crate::resources::runtime::verify_active()?;
         fs::rename(&temporary.0, path)
             .with_context(|| format!("Failed to replace output file `{}`", path.display()))?;
         return Ok(());

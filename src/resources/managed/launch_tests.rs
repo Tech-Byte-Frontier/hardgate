@@ -129,3 +129,45 @@ fn removed_path_never_resolves_an_executable_only_in_the_parent_path() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
 }
+
+#[test]
+fn tool_discovery_refuses_untrusted_runtime_and_missing_or_old_managers() {
+    use std::os::unix::net::UnixListener;
+    let evidence = CommandEvidence::create(1024 * 1024).unwrap();
+    let root = evidence.shim_path().parent().unwrap();
+    let uid = rustix::process::getuid().as_raw();
+    let bin = root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let probe = |owner| available_tools_at(root, owner, Some(bin.as_os_str()));
+    assert!(
+        available_tools_at(&root.join("missing"), uid, Some(bin.as_os_str()))
+            .unwrap()
+            .is_none()
+    );
+    assert!(probe(uid).unwrap().is_none());
+    fs::create_dir(root.join("systemd")).unwrap();
+    let socket = root.join("systemd/private");
+    fs::write(&socket, "not a socket").unwrap();
+    assert!(probe(uid).unwrap().is_none());
+    fs::remove_file(&socket).unwrap();
+    let _listener = UnixListener::bind(&socket).unwrap();
+    assert!(probe(uid.wrapping_add(1)).unwrap().is_none());
+    fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(probe(uid).unwrap().is_none());
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(probe(uid).unwrap().is_none());
+    let launcher = bin.join("systemd-run");
+    fs::write(&launcher, "#!/bin/sh\nprintf 'systemd 255\\n'\n").unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(probe(uid).unwrap().is_none());
+    let controller = bin.join("systemctl");
+    fs::write(&controller, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&controller, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(probe(uid).unwrap().unwrap(), (launcher.clone(), controller));
+    for version in ["systemd 253", "unrecognized"] {
+        fs::write(&launcher, format!("#!/bin/sh\nprintf '{version}\\n'\n")).unwrap();
+        assert!(probe(uid).unwrap().is_none());
+    }
+    fs::write(&launcher, "#!/bin/sh\nexit 7\n").unwrap();
+    assert!(probe(uid).is_err());
+}

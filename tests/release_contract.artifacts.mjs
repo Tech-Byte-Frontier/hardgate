@@ -50,6 +50,7 @@ assert.deepEqual(
     "/tests/**/*.rs",
     "/tests/common/*.txt",
     "/README.md",
+    "/SECURITY.md",
     "/CHANGELOG.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",

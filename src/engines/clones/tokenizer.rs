@@ -350,3 +350,7 @@ fn lex_string(chars: &mut std::iter::Peekable<std::str::Chars>, quote: char) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tokenizer_tests.rs"]
+mod tests;

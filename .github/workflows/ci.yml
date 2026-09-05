@@ -44,15 +44,19 @@ jobs:
         with:
           tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
           fallback: none
+      - name: Start the runner resource manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
       - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --all-targets --all-features --locked
+      - run: scripts/with-resource-limits.sh cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: scripts/with-resource-limits.sh cargo test --all-targets --all-features --locked
       - name: RustSec dependency audit
         run: scripts/dependency-audit.sh
       - name: Validate the crates.io package without publishing
-        run: cargo publish --dry-run --locked
+        run: scripts/with-resource-limits.sh cargo publish --dry-run --locked
       - name: Build the shared native release binary
-        run: cargo build --locked --release
+        run: scripts/with-resource-limits.sh cargo build --locked --release
         env:
           HARDGATE_BUILD_GIT_SHA: ${{ github.sha }}
           SOURCE_DATE_EPOCH: 0
@@ -94,6 +98,10 @@ jobs:
           artifact-ids: ${{ needs.rust.outputs.native_artifact_id }}
           path: target/release
           digest-mismatch: error
+      - name: Start the runner resource manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
       - run: chmod 755 target/release/hardgate
       - run: node scripts/sync-npm-version.mjs --check
       - run: node scripts/check-npm-quality.mjs
@@ -130,6 +138,10 @@ jobs:
           artifact-ids: ${{ needs.rust.outputs.native_artifact_id }}
           path: target/release
           digest-mismatch: error
+      - name: Start the runner resource manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
       - run: chmod 755 target/release/hardgate
       - run: node --version
       - run: node scripts/sync-npm-version.mjs --check
@@ -210,6 +222,10 @@ jobs:
           artifact-ids: ${{ needs.rust.outputs.native_artifact_id }}
           path: target/release
           digest-mismatch: error
+      - name: Start the runner resource manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
       - run: chmod 755 target/release/hardgate
       - name: Run complete configured static/orchestration/evidence gate
         run: scripts/self-gate.sh

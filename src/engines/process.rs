@@ -75,6 +75,12 @@ pub(crate) fn run_command_with_roots(
     if operation == "mutation" {
         return mutation::run(tokens, roots, timeout);
     }
+    if let Err(error) = require_containment() {
+        return ProcessOutcome::Failed {
+            message: error.to_string(),
+            output: String::new(),
+        };
+    }
     let mut child = match spawn_command(tokens, roots, operation) {
         Ok(child) => child,
         Err(error) => return spawn_failure(program, error),
@@ -85,6 +91,15 @@ pub(crate) fn run_command_with_roots(
         &mut child,
         &mut captured,
     )
+}
+
+fn require_containment() -> std::io::Result<()> {
+    if !crate::resources::runtime::inherited()? {
+        return Err(crate::resources::runtime::error(
+            "external tools require a verified CPU and memory boundary; command was not started",
+        ));
+    }
+    crate::resources::check_pressure()
 }
 
 pub(crate) fn append_output(existing: String, extra: String) -> String {
@@ -123,6 +138,16 @@ fn command_for_tokens(tokens: &[String], roots: CommandRoots<'_>, operation: &st
         .stderr(Stdio::piped());
     if operation == "mutation" {
         command.env("CARGO_TARGET_DIR", roots.workspace_root.join("target"));
+    }
+    crate::resources::runtime::constrain_command(&mut command);
+    #[cfg(target_os = "linux")]
+    if operation == "resource control" {
+        command
+            .env(
+                "XDG_RUNTIME_DIR",
+                format!("/run/user/{}", rustix::process::getuid().as_raw()),
+            )
+            .env_remove("DBUS_SESSION_BUS_ADDRESS");
     }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
@@ -373,7 +398,7 @@ enum ChildPoll {
 }
 
 fn poll_child(child: &mut Child) -> ChildPoll {
-    if let Err(error) = crate::cancellation::check() {
+    if let Err(error) = crate::resources::check_pressure() {
         return ChildPoll::Error(error);
     }
     match child.try_wait() {

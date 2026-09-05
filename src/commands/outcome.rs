@@ -54,6 +54,7 @@ fn incomplete_evidence(report: &GateReport) -> bool {
 }
 
 pub(crate) fn write_stdout(text: &str) -> io::Result<()> {
+    crate::resources::runtime::verify_active()?;
     let mut output = BufWriter::new(io::stdout().lock());
     output.write_all(text.as_bytes())?;
     output.flush()

@@ -54,6 +54,7 @@ lint = "cargo clippy -- -D warnings"
 [analysis.dead_code]
 enabled = false
 entry_points = [
+  "scripts/check-resource-boundary.py",
   "src/main.rs",
   "src/lib.rs",
   "scripts/check-consumer-matrix.mjs",

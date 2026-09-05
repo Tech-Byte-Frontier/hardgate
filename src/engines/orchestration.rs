@@ -250,15 +250,20 @@ fn runner_violation(
     message: String,
     output: String,
 ) -> OrchestrationViolation {
+    let recommendation = if message.contains("resource guard:") {
+        "Reduce concurrent workloads or narrow the selected scope, then retry within the resource limits.".to_owned()
+    } else {
+        format!(
+            "Ensure the {} command is installed, executable, and valid for this project.",
+            spec.step
+        )
+    };
     OrchestrationViolation {
         step: spec.step.to_string(),
         command: spec.command.to_string(),
         exit_code: None,
         output: append_output(output, message),
-        recommendation: format!(
-            "Ensure the {} command is installed, executable, and valid for this project.",
-            spec.step
-        ),
+        recommendation,
     }
 }
 

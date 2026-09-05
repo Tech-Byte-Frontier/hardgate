@@ -245,3 +245,14 @@ fn filesystem_error(operation: &str, error: impl std::fmt::Display) -> io::Error
 #[cfg(test)]
 #[path = "lease_tests.rs"]
 mod tests;
+
+#[cfg(target_os = "linux")]
+pub(super) fn acquire_workload() -> io::Result<MutationLease> {
+    let uid = current_uid();
+    let path = PathBuf::from(format!("/tmp/hardgate-workload-{uid}/slot.lock"));
+    acquire_at(&path, uid, Instant::now() + LOCK_WAIT_TIMEOUT, false).map_err(|cause| {
+        crate::resources::runtime::error(format!(
+            "cannot acquire the per-user workload slot: {cause}"
+        ))
+    })
+}

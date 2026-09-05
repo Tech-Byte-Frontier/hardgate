@@ -101,7 +101,7 @@ fn read_level(directory: &Path, root: bool) -> io::Result<Level> {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "mutation resource guard: cgroup directory is unreachable: {}",
+                "workload resource guard: cgroup directory is unreachable: {}",
                 directory.display()
             ),
         ));
@@ -145,7 +145,7 @@ fn read_level(directory: &Path, root: bool) -> io::Result<Level> {
     Ok(Level {
         maximum,
         high,
-        current: Some(current),
+        current: Some(super::reclaim::working_bytes(directory, current)?),
         pressure,
     })
 }

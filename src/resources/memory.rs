@@ -38,7 +38,7 @@ impl MemorySample {
 }
 
 fn guard_error(message: impl Into<String>) -> io::Error {
-    io::Error::other(format!("mutation resource guard: {}", message.into()))
+    io::Error::other(format!("workload resource guard: {}", message.into()))
 }
 
 #[cfg(target_os = "linux")]
@@ -47,6 +47,8 @@ mod cgroup;
 mod paths;
 #[cfg(target_os = "linux")]
 mod procfs;
+#[cfg(target_os = "linux")]
+mod reclaim;
 
 #[cfg(target_os = "linux")]
 use std::path::Path;
@@ -94,7 +96,7 @@ fn sample_from_paths(proc_root: &Path) -> io::Result<MemorySample> {
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("mutation resource guard: {}", message.into()),
+        format!("workload resource guard: {}", message.into()),
     )
 }
 
@@ -116,3 +118,23 @@ mod tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "memory/fixture_tests.rs"]
 pub(super) mod fixture_tests;
+
+#[cfg(target_os = "linux")]
+pub(super) fn host_total_bytes() -> io::Result<u64> {
+    procfs::parse_meminfo(&procfs::read_required(Path::new("/proc/meminfo"))?).map(|value| value.0)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn runtime_directories() -> io::Result<Vec<std::path::PathBuf>> {
+    let membership = procfs::read_required(Path::new("/proc/self/cgroup"))?;
+    let path = paths::parse_cgroup_path(&membership)?
+        .ok_or_else(|| invalid_data("cgroup v2 is required for workload containment"))?;
+    let mounts =
+        paths::find_cgroup2_mounts(&procfs::read_required(Path::new("/proc/self/mountinfo"))?)?;
+    for mount in mounts {
+        if paths::mount_root_matches(&mount, &path) {
+            return paths::cgroup_directories(&mount, &path);
+        }
+    }
+    Err(invalid_data("cannot locate the workload cgroup mount"))
+}

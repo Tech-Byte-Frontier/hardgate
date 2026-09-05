@@ -20,9 +20,16 @@ pub(super) fn available_tools() -> io::Result<Option<(PathBuf, PathBuf)>> {
     // the user manager applies resource limits to that existing process.
     let uid = rustix::process::getuid().as_raw();
     let runtime = PathBuf::from(format!("/run/user/{uid}"));
-    if std::env::var_os("XDG_RUNTIME_DIR").as_deref() != Some(runtime.as_os_str())
-        || !fs::symlink_metadata(&runtime)
-            .is_ok_and(|meta| meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0)
+    available_tools_at(&runtime, uid, None)
+}
+
+fn available_tools_at(
+    runtime: &Path,
+    uid: u32,
+    path: Option<&OsStr>,
+) -> io::Result<Option<(PathBuf, PathBuf)>> {
+    if !fs::symlink_metadata(runtime)
+        .is_ok_and(|meta| meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0)
     {
         return Ok(None);
     }
@@ -32,14 +39,13 @@ pub(super) fn available_tools() -> io::Result<Option<(PathBuf, PathBuf)>> {
     {
         return Ok(None);
     }
-    let Some(launcher) = find_program(OsStr::new("systemd-run"), None, None) else {
+    let Some(launcher) = find_program(OsStr::new("systemd-run"), path, None) else {
         return Ok(None);
     };
-    let Some(controller) = find_program(OsStr::new("systemctl"), None, None) else {
+    let Some(controller) = find_program(OsStr::new("systemctl"), path, None) else {
         return Ok(None);
     };
-    // v254 introduced literal argument handling. Older managers keep the
-    // sampled fallback; silently expanding a test command's '$' is unsafe.
+    // v254 introduced literal argument handling. Older managers are refused; silently expanding a test command's '$' is unsafe.
     let version = control_output(&[launcher.to_string_lossy().into_owned(), "--version".into()])?;
     if systemd_version(&version).is_none_or(|version| version < 254) {
         return Ok(None);
@@ -101,6 +107,12 @@ pub(super) fn wrap_command(
         command.current_dir(directory);
     }
     inherit_environment(original, &mut command);
+    command
+        .env(
+            "XDG_RUNTIME_DIR",
+            format!("/run/user/{}", rustix::process::getuid().as_raw()),
+        )
+        .env_remove("DBUS_SESSION_BUS_ADDRESS");
     let program = resolve_original_program(original)?;
     command
         .args(["--", "/bin/sh"])

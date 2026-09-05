@@ -1,17 +1,19 @@
 #!/usr/bin/env sh
 # Run the complete configured gate plus one real native mutation sample.
-# The temporary mutation enablement is restored even when a mutant fails.
+# Evidence enablement uses a disposable policy; the project policy is never edited.
 set -eu
+
+# Environment hints alone do not cap a compiler or its descendants.
+if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
+  exec scripts/with-resource-limits.sh "$0" "$@"
+fi
+. scripts/resource-worker-env.sh
 
 BINARY="${HARDGATE_BINARY:-target/release/hardgate}"
 scripts/coverage.sh
-CONFIG_BACKUP=$(mktemp)
-cp hardgate.toml "$CONFIG_BACKUP"
+TEMP_POLICY=$(mktemp "$PWD/.hardgate-self-gate.XXXXXX.toml")
 cleanup() {
-  if [ -n "${CONFIG_BACKUP:-}" ] && [ -f "$CONFIG_BACKUP" ]; then
-    cp "$CONFIG_BACKUP" hardgate.toml
-    rm -f "$CONFIG_BACKUP"
-  fi
+  rm -f "$TEMP_POLICY"
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
@@ -28,25 +30,25 @@ awk '
   /^\[/ { section = $0 }
   section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
   { print }
-' "$CONFIG_BACKUP" > hardgate.toml
-"$BINARY" verify --coverage-report coverage/lcov.info --format agent src build.rs
+' hardgate.toml > "$TEMP_POLICY"
+"$BINARY" --config "$TEMP_POLICY" verify --coverage-report coverage/lcov.info --format agent src build.rs
 
 awk '
   /^\[/ { section = $0 }
   section == "[mutation]" && /^enabled = false$/ { $0 = "enabled = true" }
   section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
   { print }
-' "$CONFIG_BACKUP" > hardgate.toml
+' hardgate.toml > "$TEMP_POLICY"
 # These integration targets exercise the production budget engine without
 # recursively starting mutation CLI tests inside an active mutation lease.
 # The complete Rust suite runs separately in CI. The bound includes a cold
 # stable build with the mutation runner's conservative worker limits.
-"$BINARY" mutate \
+"$BINARY" --config "$TEMP_POLICY" mutate \
   --scoped src/engines/budgets.rs \
   --test-cmd "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked" \
   --max-mutants 1 \
   --timeout 300 \
   --format agent
 
-cp "$CONFIG_BACKUP" hardgate.toml
+rm -f "$TEMP_POLICY"
 HARDGATE_BINARY="$BINARY" node scripts/check-consumer-matrix.mjs

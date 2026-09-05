@@ -14,7 +14,7 @@ pub(super) fn read_required(path: &Path) -> io::Result<String> {
         io::Error::new(
             error.kind(),
             format!(
-                "mutation resource guard: failed to read {}: {error}",
+                "workload resource guard: failed to read {}: {error}",
                 path.display()
             ),
         )
@@ -28,7 +28,7 @@ pub(super) fn read_optional(path: &Path) -> io::Result<Option<String>> {
         Err(error) => Err(io::Error::new(
             error.kind(),
             format!(
-                "mutation resource guard: failed to read {}: {error}",
+                "workload resource guard: failed to read {}: {error}",
                 path.display()
             ),
         )),
@@ -42,7 +42,7 @@ pub(super) fn directory_exists(path: &Path) -> io::Result<bool> {
         Err(error) => Err(io::Error::new(
             error.kind(),
             format!(
-                "mutation resource guard: failed to inspect {}: {error}",
+                "workload resource guard: failed to inspect {}: {error}",
                 path.display()
             ),
         )),

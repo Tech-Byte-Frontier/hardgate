@@ -20,6 +20,7 @@ import {
   resolveBinary,
   runProcess,
 } from "./consumer-process.mjs";
+import { initializeFixture } from "./consumer-init.mjs";
 import { invocationIdentityFailures } from "./consumer-invocation.mjs";
 
 export {
@@ -54,11 +55,15 @@ export function runCheck(binary, root, expectation, diff = false) {
     return failureResult(error.code ?? "malformed-report", error.message, result);
   }
   if (processError) return failureResult(processError[0], processError[1], result);
-  const passed = result.status === 0 && report.passed === true;
-  if (passed !== expectation.expectPass || report.passed !== (expectedExit === 0)) return failureResult("report-status-mismatch", `check exit/report status does not match expected pass=${expectation.expectPass}`, result);
+  if (!checkStatusMatches(report, result, expectation, expectedExit)) return failureResult("report-status-mismatch", "check process and report verdict disagree with the expected status", result);
   const failures = checkEvidence(report, expectation);
   if (failures.length) return failureResult("evidence-mismatch", failures.join("; "), result);
   return { status: "pass", reasonCode: "ok", diagnostics: "", exitCode: result.status, signal: null, timedOut: false, report };
+}
+
+function checkStatusMatches(report, result, expectation, expectedExit) {
+  const passed = result.status === 0 && report.passed === true;
+  return report.exit_code === result.status && passed === expectation.expectPass && report.passed === (expectedExit === 0);
 }
 
 function checkCountEvidence(report, expectation) {
@@ -108,7 +113,7 @@ function checkEvidence(report, expectation) {
 function checkLegacySummary(report, expected, failures) {
   const matching = report.advisories.filter((item) => item.startsWith("legacy ratchet: reference=`"));
   if (matching.length !== 1) { failures.push("legacy ratchet must emit exactly one summary advisory"); return; }
-  const value = matching[0].match(/^legacy ratchet: reference=`([^`]+)` merge-base=`([0-9a-f]{40}|[0-9a-f]{64})` grandfathered=(\d+) retained=(\d+)$/);
+  const value = matching[0].match(/^legacy ratchet: reference=`([^`]+)` merge-base=`([0-9a-f]{40}|[0-9a-f]{64})` grandfathered=(\d+) retained=(\d+)(?:; verdict covers new or worsened blocking static findings in the selected current scope, not a debt-free repository\. Enabled current evidence is still required\.)?$/);
   if (!value || value[1] !== expected.reference || Number(value[3]) !== expected.grandfathered || Number(value[4]) !== expected.retained) failures.push("legacy ratchet summary is malformed or inconsistent");
 }
 
@@ -130,15 +135,6 @@ function copyFixture(testCase) {
   return target;
 }
 
-function initializeFixture(binary, root, preset) {
-  const result = runProcess({ binary, args: ["init", "--preset", preset], cwd: root });
-  const error = processFailure(result, 0, "init");
-  if (error) fail(error[0], error[1]);
-  const configPath = path.join(root, "hardgate.toml");
-  if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) fail("fixture-init", "hardgate init did not write hardgate.toml");
-  const config = fs.readFileSync(configPath, "utf8");
-  if (!config.includes('preset = "strict-agent"') || !config.includes("strict = true") || config.includes('"tests/**"')) fail("fixture-init", "strict init wrote an unexpected policy");
-}
 
 function git(cwd, args) { execFileSync("git", args, { cwd, stdio: "ignore" }); }
 
@@ -178,20 +174,20 @@ function installHarness(root, spec, snapshot, testSnapshot) {
   const pathValue = (packageBin === workspaceBin ? [] : [workspaceBin]).concat(inheritedPath).join(path.delimiter);
   const expectedPathBins = packageBin === workspaceBin ? [packageBin] : [packageBin, workspaceBin];
   const harness = path.join(root, ".consumer-harness.mjs");
-  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto"; import path from "node:path"; import { evaluateBehavior } from ${JSON.stringify(path.resolve(ROOT, "scripts/consumer-behavior.mjs"))};\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst source=process.env.CONSUMER_SOURCE; const test=process.env.CONSUMER_TEST; const sourceText=fs.readFileSync(source,"utf8"); const testText=fs.readFileSync(test,"utf8"); const sourceHash=hash(source); const testHash=hash(test); const behavior=evaluateBehavior(sourceText,testText,JSON.parse(process.env.CONSUMER_BEHAVIOR)); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const executable=fs.realpathSync(process.env.CONSUMER_EXECUTABLE); const pathEntries=(process.env.PATH??"").split(path.delimiter).filter(Boolean).map(entry=>path.resolve(entry)); const pathBins=pathEntries.filter(entry=>entry.endsWith(path.join("node_modules",".bin"))); const expectedPathBins=JSON.parse(process.env.CONSUMER_EXPECTED_PATH_BINS); const record={cwd:process.cwd(), manager:path.basename(executable), managerEnv:process.env.CONSUMER_MANAGER, argv, executable, packageRoot:process.env.CONSUMER_PACKAGE_ROOT, workspaceRoot:process.env.CONSUMER_WORKSPACE_ROOT, path:process.env.PATH??"", pathEntries, pathBins, pathBinsExpected:JSON.stringify(pathBins)===JSON.stringify(expectedPathBins), sourceHash, testHash, sourceMarker:sourceText.includes(process.env.CONSUMER_SOURCE_MARKER), behaviorExpected:JSON.parse(process.env.CONSUMER_BEHAVIOR).expected, behaviorActual:behavior.actual, behaviorPassed:behavior.passed, behaviorReason:behavior.reason, testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected && record.pathBinsExpected && record.managerEnv===record.manager && record.behaviorPassed ? 0 : 1;\n`);
+  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto"; import path from "node:path"; import { evaluateBehavior } from ${JSON.stringify(path.resolve(ROOT, "scripts/consumer-behavior.mjs"))};\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst isolatedRoot=path.resolve(process.cwd(),path.relative(process.env.CONSUMER_PACKAGE_ROOT,process.env.CONSUMER_ROOT)); const rebase=value=>path.resolve(isolatedRoot,path.relative(process.env.CONSUMER_ROOT,value)); const source=rebase(process.env.CONSUMER_SOURCE); const test=rebase(process.env.CONSUMER_TEST); const sourceText=fs.readFileSync(source,"utf8"); const testText=fs.readFileSync(test,"utf8"); const sourceHash=hash(source); const testHash=hash(test); const behavior=evaluateBehavior(sourceText,testText,JSON.parse(process.env.CONSUMER_BEHAVIOR)); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const executable=fs.realpathSync(process.env.CONSUMER_EXECUTABLE); const pathEntries=(process.env.PATH??"").split(path.delimiter).filter(Boolean).map(entry=>path.resolve(entry)); const pathBins=pathEntries.filter(entry=>entry.endsWith(path.join("node_modules",".bin"))); const expectedPathBins=JSON.parse(process.env.CONSUMER_EXPECTED_PATH_BINS).map(rebase); if(process.env.CONSUMER_PACKAGE_ROOT!==process.env.CONSUMER_WORKSPACE_ROOT) expectedPathBins.push(path.join(process.env.CONSUMER_WORKSPACE_ROOT,"node_modules",".bin")); const record={cwd:process.cwd(), manager:path.basename(executable), managerEnv:process.env.CONSUMER_MANAGER, argv, executable, isolatedRoot, packageRoot:rebase(process.env.CONSUMER_PACKAGE_ROOT), workspaceRoot:rebase(process.env.CONSUMER_WORKSPACE_ROOT), originalSourceHash:hash(process.env.CONSUMER_SOURCE), originalTestHash:hash(process.env.CONSUMER_TEST), path:process.env.PATH??"", pathEntries, pathBins, pathBinsExpected:JSON.stringify(pathBins)===JSON.stringify(expectedPathBins), sourceHash, testHash, sourceMarker:sourceText.includes(process.env.CONSUMER_SOURCE_MARKER), behaviorExpected:JSON.parse(process.env.CONSUMER_BEHAVIOR).expected, behaviorActual:behavior.actual, behaviorPassed:behavior.passed, behaviorReason:behavior.reason, testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected && record.pathBinsExpected && record.managerEnv===record.manager && record.behaviorPassed ? 0 : 1;\n`);
   const managerPath = path.join(packageBin, spec.manager);
   fs.writeFileSync(managerPath, `#!/bin/sh\nset -eu\nCONSUMER_EXECUTABLE="$0" CONSUMER_MANAGER="${spec.manager}" exec node "$CONSUMER_HARNESS" "$@"\n`, { mode: 0o755 });
   return {
     log: path.join(root, ".consumer-command-log"),
     env: {
-      CONSUMER_HARNESS: harness, CONSUMER_LOG: path.join(root, ".consumer-command-log"),
+      CONSUMER_ROOT: root, CONSUMER_HARNESS: harness, CONSUMER_LOG: path.join(root, ".consumer-command-log"),
       CONSUMER_SOURCE: snapshot.file, CONSUMER_TEST: testSnapshot.file,
       CONSUMER_SOURCE_HASH: snapshot.hash, CONSUMER_TEST_HASH: testSnapshot.hash,
       CONSUMER_SOURCE_MARKER: spec.sourceMarker, CONSUMER_ARGV: JSON.stringify(spec.argv),
       CONSUMER_PACKAGE_ROOT: packageRoot, CONSUMER_WORKSPACE_ROOT: workspaceRoot,
       CONSUMER_EXPECTED_PATH_BINS: JSON.stringify(expectedPathBins), CONSUMER_BEHAVIOR: JSON.stringify(spec.behavior), PATH: pathValue,
     },
-    packageRoot, workspaceRoot, packageBin, workspaceBin, managerPath,
+    root, packageRoot, workspaceRoot, packageBin, workspaceBin, managerPath,
   };
 }
 
@@ -222,7 +218,7 @@ function parseMutationReport(result, commands) {
 }
 
 function mutationSummaryFailure(report, result, commands) {
-  const truthful = report.passed && report.stats.killed === 1 && report.stats.survived === 0 && report.stats.total === 1 && report.score === 100;
+  const truthful = report.exit_code === result.status && report.passed && report.stats.killed === 1 && report.stats.survived === 0 && report.stats.total === 1 && report.score === 100;
   return truthful ? null : failureResult("mutation-report-failed", "mutation report did not record one truthful killed mutant", result, { commands });
 }
 
@@ -237,9 +233,10 @@ function mutationResultFailures(report, spec) {
   return failures;
 }
 
-function invocationAssertionFailures(command, index, testSnapshot) {
+function invocationAssertionFailures(command, index, testSnapshot, snapshot) {
   const failures = [];
   const position = index + 1;
+  if (command.originalSourceHash !== snapshot.hash || command.originalTestHash !== testSnapshot.hash) failures.push(`invocation ${position} modified original workspace files`);
   if (command.testHash !== testSnapshot.hash) failures.push(`invocation ${position} test source changed during mutation`);
   if (command.behaviorPassed !== (index === 0)) failures.push(`invocation ${position} behavior assertion outcome was unexpected`);
   if (!command.testExists || !command.argvExpected) failures.push(`invocation ${position} fixture assertion failed`);
@@ -249,7 +246,7 @@ function invocationAssertionFailures(command, index, testSnapshot) {
 function invocationFailures(command, index, context) {
   return [
     ...invocationIdentityFailures(command, index + 1, context.harness, context.spec),
-    ...invocationAssertionFailures(command, index, context.testSnapshot),
+    ...invocationAssertionFailures(command, index, context.testSnapshot, context.snapshot),
   ];
 }
 

@@ -81,7 +81,7 @@ export const CONSUMER_CASES = [
     fixture: "supabase",
     check: {
       expectPass: false,
-      expectedExit: 1,
+      expectedExit: 2,
       expectedViolationCount: 2,
       expectedOrchestration: [
         orchestration("unsupported-source", "supabase/migrations/001_init.sql", "File is classified as Migration, but no AST engine supports its extension."),
@@ -102,7 +102,7 @@ export const CONSUMER_CASES = [
     initialize: "strict-agent",
     check: {
       expectPass: false,
-      expectedExit: 1,
+      expectedExit: 2,
       expectedViolationCount: 2,
       expectedOrchestration: [
         orchestration("coverage-report", "coverage/lcov.info", "Required coverage report was not found."),

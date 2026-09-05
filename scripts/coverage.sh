@@ -2,6 +2,12 @@
 # Produce the LCOV evidence consumed by Hardgate coverage checks.
 set -eu
 
+# Environment hints alone do not cap a compiler or its descendants.
+if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
+  exec scripts/with-resource-limits.sh "$0" "$@"
+fi
+. scripts/resource-worker-env.sh
+
 COV_VERSION="${CARGO_LLVM_COV_VERSION:-0.9.0}"
 COV_TOOLCHAIN="${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}"
 installed_version=""

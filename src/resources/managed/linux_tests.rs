@@ -172,3 +172,95 @@ fn scope_startup_has_its_own_bound_before_the_command_timeout() {
     managed.started = None;
     assert!(managed.timed_out(Instant::now() - Duration::from_secs(7), timeout));
 }
+
+#[test]
+fn live_manager_preserves_test_status_and_reaps_its_owned_scope() {
+    for code in [0, 7] {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &format!("sleep 0.05; exit {code}")]);
+        let budget = MutationBudget {
+            memory_bytes: 128 * 1024 * 1024,
+            reserve_bytes: 0,
+            jobs: 1,
+        };
+        let Some(mut managed) =
+            ManagedCommand::prepare(&mut command, budget, Duration::from_secs(5)).unwrap()
+        else {
+            assert!(
+                available_tools().unwrap().is_none(),
+                "unavailable manager must be reported truthfully"
+            );
+            return;
+        };
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = command.spawn().unwrap();
+        let result = wait_live_outcome(&mut managed, &mut child);
+        let cleanup = managed.stop();
+        let _ = child.kill();
+        let _ = child.wait();
+        cleanup.unwrap();
+        assert_eq!(result.unwrap().code(), Some(code));
+        assert!(
+            managed.started.is_some(),
+            "test ran without the resource handshake"
+        );
+        managed.stop().unwrap();
+    }
+}
+
+#[test]
+fn live_manager_cancels_only_its_pinned_running_scope() {
+    let mut command = Command::new("/bin/sleep");
+    command.arg("30");
+    let budget = MutationBudget {
+        memory_bytes: 128 * 1024 * 1024,
+        reserve_bytes: 0,
+        jobs: 1,
+    };
+    let Some(mut managed) =
+        ManagedCommand::prepare(&mut command, budget, Duration::from_secs(5)).unwrap()
+    else {
+        assert!(available_tools().unwrap().is_none());
+        return;
+    };
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut failure = None;
+    while managed.started.is_none() && Instant::now() < deadline {
+        if let Err(error) = managed.poll(child.try_wait().unwrap()) {
+            failure = Some(error);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let acknowledged = managed.started.is_some();
+    let cleanup = managed.stop();
+    let _ = child.kill();
+    let status = child.wait().unwrap();
+    cleanup.unwrap();
+    assert!(failure.is_none(), "{failure:?}");
+    assert!(acknowledged);
+    assert!(!status.success());
+    assert!(!inspect(&managed.controller).unwrap().present());
+}
+
+fn wait_live_outcome(
+    managed: &mut ManagedCommand,
+    child: &mut std::process::Child,
+) -> io::Result<std::process::ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(10) {
+            return Err(io::Error::other("managed probe did not finish"));
+        }
+        if let Some(status) = managed.poll(child.try_wait()?)? {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

@@ -19,7 +19,7 @@ struct Cli {
     /// Explicit policy file; its directory is the configuration root
     #[arg(long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
-    /// Limit analysis worker threads (positive integer; defaults to Rayon settings)
+    /// Limit analysis workers (defaults to at most two; OS limits also cover child tools)
     #[arg(long, global = true, value_name = "N")]
     threads: Option<std::num::NonZeroUsize>,
     /// Terminal colors; auto respects TTY, NO_COLOR and CLICOLOR conventions
@@ -254,14 +254,11 @@ fn run_cli(cli: Cli) -> commands::CommandResult {
     if matches!(cli.command, Commands::Mutate { .. }) {
         hardgate::cancellation::install()?;
     }
-    if let Some(threads) = cli.threads {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads.get())
-            .build()?
-            .install(|| execute_command(cli.command, cli.config.as_deref()))
-    } else {
-        execute_command(cli.command, cli.config.as_deref())
-    }
+    let threads = hardgate::runtime_resources::worker_limit(cli.threads.map(usize::from))?;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()?
+        .install(|| execute_command(cli.command, cli.config.as_deref()))
 }
 
 fn execute_command(cmd: Commands, config: Option<&std::path::Path>) -> commands::CommandResult {

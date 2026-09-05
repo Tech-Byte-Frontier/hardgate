@@ -101,7 +101,7 @@ fn worker_limits_preserve_findings_and_timing_is_opt_in_stderr() {
         );
     }
     let mut single = json(&run(&fixture, &["check", "--json", "--threads", "1"]));
-    let output = run(&fixture, &["check", "--json", "--threads", "4", "--timing"]);
+    let output = run(&fixture, &["check", "--json", "--threads", "2", "--timing"]);
     let mut parallel = json(&output);
     single.as_object_mut().unwrap().remove("duration_ms");
     parallel.as_object_mut().unwrap().remove("duration_ms");

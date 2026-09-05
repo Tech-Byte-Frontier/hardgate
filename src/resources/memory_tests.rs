@@ -329,7 +329,7 @@ mod linux {
                 .check(51)
                 .unwrap_err()
                 .to_string()
-                .contains("mutation resource guard:")
+                .contains("workload resource guard:")
         );
 
         let full = MemorySample {

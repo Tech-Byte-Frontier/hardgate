@@ -27,7 +27,18 @@ fn execute(
     let guard = MutationGuard::acquire()?;
     let mut command = command_for_tokens(tokens, roots, "mutation");
     guard.budget.constrain_environment(&mut command);
-    let mut managed = ManagedCommand::prepare(&mut command, guard.budget, timeout)?;
+    let inherited = crate::resources::runtime::inherited()?;
+    let mut managed = if inherited {
+        None
+    } else {
+        let managed = ManagedCommand::prepare(&mut command, guard.budget, timeout)?;
+        if managed.is_none() {
+            return Err(crate::resources::runtime::error(
+                "mutation requires enforced CPU and memory limits; test command was not started",
+            ));
+        }
+        managed
+    };
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -46,7 +57,11 @@ fn execute(
     let outcome = finish_process_wait(wait, &mut child, &mut captured);
     Ok(describe(
         outcome,
-        guard.budget.description(managed.is_some()),
+        if inherited {
+            "workload resource guard: inherited verified CPU, memory, swap and task limits".into()
+        } else {
+            guard.budget.description(managed.is_some())
+        },
     ))
 }
 

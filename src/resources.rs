@@ -6,6 +6,7 @@ mod lease;
 #[path = "resources/managed/linux.rs"]
 pub(crate) mod managed;
 mod memory;
+pub mod runtime;
 
 use std::cell::RefCell;
 use std::io;

@@ -10,12 +10,24 @@ pub(super) fn main_exit() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return parse_failure(error, wants_json(&args)),
     };
+    run_parsed(cli)
+}
+
+fn run_parsed(cli: super::Cli) -> ExitCode {
     configure_color(cli.color);
     let stage = command_stage(&cli.command);
     let json = command_json(&cli.command);
     let timing = cli.timing;
     let start = Instant::now();
-    let result = run_cli(cli);
+    let guard = match admission(&cli) {
+        Ok(Some(hardgate::runtime_resources::Admission::Finished(code))) => {
+            return ExitCode::from(code);
+        }
+        Ok(Some(hardgate::runtime_resources::Admission::Current(guard))) => Some(guard),
+        Ok(None) => None,
+        Err(error) => return finish(Err(error.into()), stage, json),
+    };
+    let result = execute_guarded(cli, guard);
     if timing {
         let _ = writeln!(
             io::stderr().lock(),
@@ -23,13 +35,29 @@ pub(super) fn main_exit() -> ExitCode {
             start.elapsed().as_millis()
         );
     }
-    if let Some(signal) = hardgate::cancellation::signal() {
-        return ExitCode::from((128 + signal) as u8);
-    }
     finish(result, stage, json)
 }
 
+fn execute_guarded(
+    cli: super::Cli,
+    guard: Option<hardgate::runtime_resources::WorkloadGuard>,
+) -> CommandResult {
+    let result = run_cli(cli);
+    guard.map(|guard| guard.verify()).transpose()?;
+    result
+}
+
+fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources::Admission>> {
+    if matches!(cli.command, Commands::Completions { .. }) {
+        return Ok(None);
+    }
+    hardgate::runtime_resources::enter().map(Some)
+}
+
 fn finish(result: CommandResult, stage: &str, json: bool) -> ExitCode {
+    if let Some(signal) = hardgate::cancellation::signal() {
+        return ExitCode::from((128 + signal) as u8);
+    }
     match result {
         Ok(outcome) => ExitCode::from(outcome.exit_code()),
         Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,
