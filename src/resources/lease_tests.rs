@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
-    use super::super::{acquire_at, current_uid};
+    use super::super::{acquire_at, current_uid, ensure_lock_directory, open_lock_file};
     use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
     use std::io;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -125,6 +125,37 @@ mod platform {
 
         let error = error_from(fixture.acquire(false), "symlink lock path must be rejected");
         assert!(error.to_string().contains("symlink"), "{error}");
+    }
+
+    #[test]
+    fn private_lock_path_operations_report_filesystem_errors() {
+        let fixture = LockFixture::new();
+        fixture.create_directory();
+
+        let blocker = fixture.directory.join("blocker");
+        drop(fixture.create_file(&blocker));
+        let blocked_path = blocker.join("child").join("slot.lock");
+        let error = error_from(
+            ensure_lock_directory(&blocked_path, current_uid()),
+            "a non-directory path component must reject lock-directory creation",
+        );
+        assert!(
+            error.to_string().contains("while create lock directory"),
+            "{error}"
+        );
+
+        let target = fixture.directory.join("target");
+        drop(fixture.create_file(&target));
+        let link = fixture.directory.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink should be created");
+        let error = error_from(
+            open_lock_file(&link),
+            "NOFOLLOW should reject a symlink when opening the lock file",
+        );
+        assert!(
+            error.to_string().contains("while open lock file"),
+            "{error}"
+        );
     }
 
     #[test]

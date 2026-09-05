@@ -46,6 +46,18 @@ fn cgroup_paths_reject_empty_malformed_and_unsafe_entries() {
 }
 
 #[test]
+fn cgroup_paths_report_missing_path_fields() {
+    let error = invalid(parse_cgroup_path("0:"));
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error
+            .to_string()
+            .contains("malformed /proc/self/cgroup line"),
+        "{error}"
+    );
+}
+
+#[test]
 fn cgroup_paths_reject_duplicate_unified_membership_and_controllers() {
     for input in ["0:memory:/job", "0::/one\n0::/two"] {
         let error = invalid(parse_cgroup_path(input));

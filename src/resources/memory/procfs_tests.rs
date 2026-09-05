@@ -91,6 +91,16 @@ fn pressure_parser_handles_blank_fields_and_rejects_duplicates() {
 }
 
 #[test]
+fn pressure_parser_reports_non_numeric_avg10() {
+    let error = invalid(parse_pressure("some avg10=not-a-number\nfull avg10=0\n"));
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.to_string().contains("invalid some PSI avg10"),
+        "{error}"
+    );
+}
+
+#[test]
 fn read_pressure_returns_default_for_absence_and_parses_private_files() {
     let fixture = Fixture::new("procfs");
     let missing = fixture.root.join("missing-pressure");
