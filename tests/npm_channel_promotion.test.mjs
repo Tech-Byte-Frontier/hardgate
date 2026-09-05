@@ -1,0 +1,219 @@
+// Contract tests for bounded npm latest-channel promotion.
+"use strict";
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { CHANNELS, REQUIRED_CHANNELS, createReceipt, readReceipt, recordTransition, writeReceiptAtomicSync } from "../scripts/release-receipt.mjs";
+import { NPM_CHANNELS, credentialFreeEnvironment, latestUrl, probeNpmLatest, promotionEnvironment } from "../scripts/npm-channel-promotion.mjs";
+import { promoteNpmChannels } from "../scripts/promote-npm-channels.mjs";
+
+const version = "1.2.3";
+const sourceCwd = path.resolve(".");
+const h40 = (letter) => letter.repeat(40);
+const h64 = (letter) => letter.repeat(64);
+const policy = (overrides = {}) => ({ attempts: 2, delayMs: 0, childMs: 1000, deadline: performance.now() + 20_000, ...overrides });
+
+function evidence(identity, consumer = true) {
+  const value = { version: identity.version, source_sha: identity.source_sha, archives: identity.archives.map((item) => ({ ...item })) };
+  if (consumer) value.consumer = { executable: "/tmp/hardgate-test-consumer", sha256: h64("e") };
+  return value;
+}
+function fixture() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-npm-promotion-test-"));
+  const dist = path.join(directory, "dist");
+  fs.mkdirSync(dist);
+  const names = ["hardgate-linux-x64.tar.gz", "hardgate-linux-x64-musl.tar.gz", "hardgate-linux-arm64.tar.gz", "hardgate-linux-arm64-musl.tar.gz", "hardgate-darwin-x64.tar.gz", "hardgate-darwin-arm64.tar.gz", "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
+  const archives = names.map((name, index) => {
+    const bytes = Buffer.from(`release archive ${index} ${name}\n`);
+    fs.writeFileSync(path.join(dist, name), bytes);
+    return { name, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+  });
+  const identity = { version, source_sha: h40("1"), tooling_sha: h40("2"), signed_tag_object: h40("3"), build_run_id: "10", artifact_id: "20", archives };
+  const receiptPath = path.join(directory, "release-receipt.json");
+  const receipt = createReceipt(identity);
+  for (const channel of REQUIRED_CHANNELS) {
+    recordTransition(receipt, { channel, from: "pending", to: "staged", evidence: evidence(identity, false) });
+    recordTransition(receipt, { channel, from: "staged", to: "immutable_verified", evidence: evidence(identity, false) });
+    recordTransition(receipt, { channel, from: "immutable_verified", to: "exact_consumer_verified", evidence: evidence(identity) });
+  }
+  writeReceiptAtomicSync(receiptPath, receipt, identity);
+  return { directory, dist, identity, receiptPath };
+}
+async function withFixture(action) {
+  const value = fixture();
+  try { return await action(value); } finally { fs.rmSync(value.directory, { recursive: true, force: true }); }
+}
+function runner(states, events, { failMutation = false, mutationMakesTarget = true } = {}) {
+  return async (command, args, options) => {
+    events.push({ type: "run", command, args: [...args], options });
+    assert.ok(options.timeoutMs > 0);
+    if (command === "npm") {
+      const spec = args[2];
+      const name = spec.slice(0, spec.lastIndexOf("@"));
+      if (mutationMakesTarget) states[name] = version;
+      if (failMutation) throw Object.assign(new Error("registry token leaked: SHOULD_NOT_PRINT"), { code: "EPIPE" });
+    }
+    return "";
+  };
+}
+function probe(states, events, scripted = new Map()) {
+  return async ({ name, version: requested, env }) => {
+    events.push({ type: "probe", name, env });
+    for (const key of ["NODE_AUTH_TOKEN", "NPM_TOKEN", "NPM_PROMOTION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL"]) assert.equal(env[key], undefined, key);
+    const queue = scripted.get(name);
+    const observed = queue?.length ? queue.shift() : states[name];
+    if (observed instanceof Error) throw observed;
+    if (observed === "missing") return { state: "missing" };
+    return { state: "present", metadata: { name, version: observed ?? requested } };
+  };
+}
+
+function testEnvironment() {
+  const source = { PATH: "/safe/bin", NODE_AUTH_TOKEN: "publish-secret", NPM_TOKEN: "other-secret", NPM_PROMOTION_TOKEN: "promotion-secret", GITHUB_TOKEN: "github-secret", GH_TOKEN: "gh-secret", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example.invalid/token", npm_config__auth: "config-secret" };
+  assert.deepEqual(credentialFreeEnvironment(source), { PATH: "/safe/bin" });
+  const mutation = promotionEnvironment(source);
+  assert.equal(mutation.NODE_AUTH_TOKEN, "publish-secret");
+  for (const key of ["NPM_TOKEN", "NPM_PROMOTION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "npm_config__auth"]) assert.equal(mutation[key], undefined, key);
+  assert.equal(source.NODE_AUTH_TOKEN, "publish-secret");
+  assert.equal(latestUrl("@tech-byte-frontier/hardgate"), "https://registry.npmjs.org/%40tech-byte-frontier%2Fhardgate/latest");
+  assert.throws(() => promotionEnvironment({}), /NODE_AUTH_TOKEN/);
+}
+
+async function testHappyPath() {
+  await withFixture(async ({ dist, receiptPath }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
+    const events = [];
+    const env = { PATH: "/safe/bin", NODE_AUTH_TOKEN: "promotion-secret", NPM_TOKEN: "unrelated-secret", GITHUB_TOKEN: "github-secret", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example.invalid/token" };
+    const result = await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env, policy: policy(), runProcess: runner(states, events), probeLatest: probe(states, events) });
+    assert.deepEqual(result.results.map((item) => item.channel), NPM_CHANNELS);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, 7);
+    const mutation = events.find((item) => item.type === "run" && item.command === "npm");
+    assert.deepEqual(mutation.args.slice(0, 4), ["dist-tag", "add", "hardgate-linux-x64@1.2.3", "latest"]);
+    assert.equal(mutation.options.env.NODE_AUTH_TOKEN, "promotion-secret");
+    assert.equal(mutation.options.env.GITHUB_TOKEN, undefined);
+    const platform = events.find((item) => item.type === "run" && item.command === process.execPath && item.args.includes("hardgate-linux-x64"));
+    assert.deepEqual(platform.args.slice(0, 5), ["scripts/verify-npm-publication.mjs", "--version", version, "--dist", path.resolve(dist)]);
+    assert.deepEqual(platform.args.slice(-3), ["--platform-only", "--package", "hardgate-linux-x64"]);
+    const wrapper = events.find((item) => item.type === "run" && item.command === process.execPath && !item.args.includes("--platform-only"));
+    assert.equal(wrapper.args.includes("--package"), false);
+    assert.equal(platform.options.env.NODE_AUTH_TOKEN, undefined);
+    assert.equal(wrapper.options.env.GITHUB_TOKEN, undefined);
+    const saved = readReceipt(receiptPath);
+    for (const channel of NPM_CHANNELS) {
+      assert.equal(saved.channels[channel].state, "promoted", channel);
+      assert.equal(saved.channels[channel].events.filter((item) => item.type === "transition" && item.to === "promoted").length, 1);
+      assert.equal(saved.channels[channel].events.some((item) => item.to === "default_consumer_verified"), false);
+    }
+    assert.equal(saved.channels[CHANNELS.crate].state, "exact_consumer_verified");
+    assert.equal(saved.channels[CHANNELS.githubAssets].state, "exact_consumer_verified");
+  });
+}
+
+async function testGates() {
+  await withFixture(async ({ dist, receiptPath, identity }) => {
+    const incomplete = fixture();
+    try {
+      const pending = readReceipt(incomplete.receiptPath);
+      pending.channels[CHANNELS.crate] = { state: "pending", events: [] };
+      writeReceiptAtomicSync(incomplete.receiptPath, pending, incomplete.identity);
+      let calls = 0;
+      await assert.rejects(promoteNpmChannels({ receiptPath: incomplete.receiptPath, distDir: incomplete.dist, sourceCwd, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /exact consumer verification/);
+      assert.equal(calls, 0);
+    } finally { fs.rmSync(incomplete.directory, { recursive: true, force: true }); }
+    const altered = path.join(dist, identity.archives[0].name);
+    fs.appendFileSync(altered, "tampered\n");
+    let calls = 0;
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), probeLatest: async () => { calls += 1; return { state: "missing" }; }, runProcess: async () => { calls += 1; return ""; } }), /digest/);
+    assert.equal(calls, 0);
+  });
+}
+
+async function testMetadataAndNoMutation() {
+  for (const mode of ["newer", "wrong-name"]) await withFixture(async ({ dist, receiptPath }) => {
+    const events = [];
+    const probeLatest = async ({ name }) => {
+      events.push("probe");
+      return { state: "present", metadata: { name: mode === "wrong-name" ? "other-package" : name, version: mode === "newer" ? "9.0.0" : version } };
+    };
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: {}, policy: policy(), probeLatest, runProcess: async (command) => { if (command === "npm") throw new Error("mutation"); return ""; } }), mode === "newer" ? /newer/ : /wrong package name/);
+    assert.deepEqual(events, ["probe"]);
+    const saved = readReceipt(receiptPath);
+    assert.equal(saved.channels[NPM_CHANNELS[0]].state, "exact_consumer_verified");
+    assert.equal(saved.channels[NPM_CHANNELS[0]].events.at(-1).type, "failure");
+  });
+}
+
+async function testStrictProbeAndAuth() {
+  const name = NPM_CHANNELS[0];
+  const call = (output) => probeNpmLatest({ name, sourceCwd, policy: policy(), env: { NODE_AUTH_TOKEN: "secret", GITHUB_TOKEN: "secret" }, runProcess: async (command, args, options) => { assert.equal(command, "curl"); assert.equal(args.at(-1), latestUrl(name)); assert.equal(options.env.NODE_AUTH_TOKEN, undefined); assert.equal(options.env.GITHUB_TOKEN, undefined); return output; } });
+  assert.deepEqual(await call(`{"name":"${name}","version":"1.2.2"}\n200\n`), { state: "present", metadata: { name, version: "1.2.2" }, version: "1.2.2" });
+  assert.deepEqual(await call("\n404\n"), { state: "missing" });
+  await assert.rejects(call("{}\n401\n"), /fatal HTTP/);
+  await assert.rejects(call("{}\n503\n"), /fatal HTTP/);
+  await assert.rejects(call("not-json\n200\n"), /valid JSON/);
+  await withFixture(async ({ dist, receiptPath }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((channel) => [channel, "1.2.2"]));
+    const events = [];
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NPM_TOKEN: "wrong-secret" }, policy: policy(), runProcess: runner(states, events), probeLatest: probe(states, events) }), /NODE_AUTH_TOKEN/);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 0);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, 1);
+    assert.equal(readReceipt(receiptPath).channels[name].events.at(-1).code, "npm_auth_missing");
+  });
+}
+
+async function testTransientAndAmbiguous() {
+  await withFixture(async ({ dist, receiptPath }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "1.2.2"]));
+    const events = [];
+    const scripted = new Map([[NPM_CHANNELS[0], [Object.assign(new Error("transient secret"), { retryable: true }), "1.2.2"]]]);
+    await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: runner(states, events), probeLatest: probe(states, events, scripted) });
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
+    assert.equal(JSON.stringify(readReceipt(receiptPath)).includes("transient secret"), false);
+  });
+  await withFixture(async ({ dist, receiptPath }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "missing"]));
+    const events = [];
+    await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: runner(states, events, { failMutation: true }), probeLatest: probe(states, events) });
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
+    assert.equal(JSON.stringify(readReceipt(receiptPath)).includes("SHOULD_NOT_PRINT"), false);
+  });
+}
+
+async function testReadbackAndPartialResume() {
+  await withFixture(async ({ dist, receiptPath }) => {
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "missing"]));
+    const events = [];
+    await assert.rejects(promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: runner(states, events, { mutationMakesTarget: false }), probeLatest: probe(states, events) }), /readback/);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 1);
+    const failure = readReceipt(receiptPath).channels[NPM_CHANNELS[0]].events.at(-1);
+    assert.deepEqual({ code: failure.code, message: failure.message }, { code: "npm_readback_failed", message: "npm latest tag readback did not identify the requested release" });
+  });
+  await withFixture(async ({ dist, receiptPath, identity }) => {
+    const receipt = readReceipt(receiptPath);
+    for (const channel of NPM_CHANNELS.slice(0, 2)) recordTransition(receipt, { channel, from: "exact_consumer_verified", to: "promoted", evidence: evidence(identity, false) });
+    writeReceiptAtomicSync(receiptPath, receipt, identity);
+    const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, version]));
+    const events = [];
+    await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: {}, policy: policy(), runProcess: runner(states, events, { mutationMakesTarget: false }), probeLatest: probe(states, events) });
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 0);
+    const saved = readReceipt(receiptPath);
+    for (const channel of NPM_CHANNELS) {
+      assert.equal(saved.channels[channel].state, "promoted");
+      assert.equal(saved.channels[channel].events.filter((item) => item.type === "transition" && item.to === "promoted").length, 1);
+      assert.equal(saved.channels[channel].events.some((item) => item.to === "default_consumer_verified"), false);
+    }
+  });
+}
+
+testEnvironment();
+await testHappyPath();
+await testGates();
+await testMetadataAndNoMutation();
+await testStrictProbeAndAuth();
+await testTransientAndAmbiguous();
+await testReadbackAndPartialResume();
+console.log("npm_channel_promotion.test: OK (receipt/digest gates, scoped credentials, strict probes, immutable verification, one-shot mutation, retry, readback, resume, and fixed failures)");
