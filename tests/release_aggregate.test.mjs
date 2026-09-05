@@ -17,7 +17,7 @@ function rejected(results) {
   });
 }
 
-assert.equal(dependencies.length, 8, "all eight release checkpoints must be required");
+assert.deepEqual(new Set(dependencies), new Set(["version-check", "package", "attest", "publication-preflight", "receipt-init", "github-release", "publish-crates", "publish-npm", "verify-native-exact", "promote-channels", "verify-native-default", "verify-channels"]), "every staging, promotion, and consumer checkpoint must be required");
 assert.equal(rejected(dependencies.map(() => "success")), false);
 for (const prerequisite of dependencies) {
   for (const status of statuses.slice(1)) {

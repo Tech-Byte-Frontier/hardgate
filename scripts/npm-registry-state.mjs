@@ -23,7 +23,7 @@ function parseResponse(text, name, version) {
 export async function probeNpmVersion(request) {
   const { name, version, policy } = request;
   const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${version}`;
-  const text = await runReleaseProcess("curl", ["--silent", "--show-error", "--include", "--connect-timeout", "10", "--write-out", "\n%{http_code}", url], { timeoutMs: childTimeoutMs(policy) });
+  const text = await runReleaseProcess("curl", ["--silent", "--show-error", "--include", "--connect-timeout", "10", "--write-out", "\n%{http_code}", url], { timeoutMs: childTimeoutMs(policy), env: request.env ?? process.env });
   return parseResponse(text, name, version);
 }
 

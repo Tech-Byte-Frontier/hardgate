@@ -63,3 +63,12 @@ export const wrapperManifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "ha
 export function includesAll(text, snippets, label) {
   for (const snippet of snippets) assert.ok(text.includes(snippet), `${label} must contain ${snippet}`);
 }
+
+export function releaseJob(name) {
+  assert.match(name, /^[a-z][a-z0-9-]*$/);
+  const start = release.indexOf(`  ${name}:\n`);
+  assert.ok(start >= 0, `release job ${name} must exist`);
+  const rest = release.slice(start);
+  const next = rest.search(/\n  [a-z][a-z0-9-]*:\n/);
+  return next < 0 ? rest : rest.slice(0, next);
+}

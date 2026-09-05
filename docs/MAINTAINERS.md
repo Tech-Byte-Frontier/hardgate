@@ -42,46 +42,42 @@ artifacts and registry versions already exist.
 
 ## Publication stages
 
-The workflow serializes release tags with the hardgate-release concurrency
-group and promotes one verified bundle through these checkpoints:
+The workflow serializes release tags with the `hardgate-release` concurrency
+group. CI supplies the native Linux x64 binary; the release matrix builds the
+other five targets. Packaging verifies the six deterministic archives,
+checksums, metadata and SBOM, and installs the actual seven packed npm
+artifacts with their optional dependencies before retaining the bundle.
 
-1. version-check validates the signed source/tag, version identity, main
-   ancestry, successful CI evidence, and recovery inputs.
-2. build creates five cross-platform binaries; the native Linux x64 binary
-   comes from the successful main CI artifact. package creates the six
-   deterministic archives, checksums, build metadata, and SBOM, then runs
-   archive and identity verification. The verified release-bundle is retained
-   for 30 days.
-3. attest verifies the signed tag and bundle again, then attests the
-   checksums and archives/SBOM.
-4. publication-preflight checks that GitHub and npm latest channels will not
-   move backward and that the publication credentials authenticate.
-5. github-release rechecks the tag and checksums. Existing expected assets
-   must byte-match the bundle; missing expected assets may be uploaded, while
-   unexpected assets, drafts, prereleases, or unknown release state stop the
-   job.
-6. publish-crates probes the exact crates.io version. An existing version
-   must already match and is verified without republishing; a missing version
-   is published once and then installed and checked for the exact version and
-   source-commit identity.
-7. publish-npm publishes the six platform packages in order and verifies
-   each package against the bundle before publishing the
-   @tech-byte-frontier/hardgate wrapper. The wrapper is deliberately last.
-8. verify-channels checks the GitHub release assets, checksums, SBOM,
-   archive identity, exact and latest registry versions, and clean Cargo,
-   npm, pnpm, Yarn, Bun, and shell-installer consumers.
-9. Release publication aggregate requires version-check, package, attest,
-   publication-preflight, github-release, publish-crates, publish-npm, and
-   verify-channels all to succeed. Any failure, cancellation, or skip fails
-   the aggregate.
+A seeded receipt binds the signed source, CI-validated tooling, tag object,
+run/artifact identifiers and archive digests. GitHub stages public prerelease
+assets without changing Latest. The crate is published or independently
+verified against the local clean Cargo archive, then installed by exact
+version. npm establishes all six platform versions before publishing the
+wrapper, using the `hardgate-candidate` tag.
 
-These checks establish artifact and channel identity; they do not make a
-partially published npm release disappear. npm package versions are
-immutable. A platform publication can therefore leave a partial state, with
-the wrapper withheld until all six platform packages verify. The publication
-helper probes an exact version before publishing, reconciles an ambiguous
-publish response, and performs an independent byte/metadata verification.
-Never blind-republish or treat an exit code alone as proof of publication.
+Six native exact-version jobs verify package bytes and runnable identity;
+the canonical GNU x64 job also verifies the signed wrapper and shell installer.
+Promotion requires matching receipts proving all nine exact consumers. npm
+Latest changes use separate token authentication and independent readback.
+The crate default is verified without a registry mutation. GitHub then promotes
+the byte-verified release to stable and Latest.
+
+Six native default jobs and independent Cargo, npm, pnpm, Yarn, Bun, installer
+and global-command consumers verify the default selectors. The aggregate
+rejects every failed, cancelled or skipped prerequisite and requires a merged
+receipt with all nine channels at `default_consumer_verified`. Partial receipts
+and failure events are retained for recovery.
+
+These checkpoints do not make publication atomic across registries. npm exact
+versions and public GitHub prereleases remain accessible before promotion;
+crates.io cannot hide a published stable version behind the same staging
+mechanism. Existing immutable bytes must match before reuse. Ambiguous writes
+require independent reconciliation before any retry.
+
+See [release recovery](RELEASE_RECOVERY.md) for receipt states, reruns and
+retention, and [publisher setup](PUBLISHER_SETUP.md) for authentication and
+signer rotation. Checked-in workflow contracts are not evidence of an actual
+remote release or publisher activation.
 
 ## Recovery
 
@@ -98,16 +94,19 @@ resuming after an npm failure, inspect exact package endpoints and run the
 publication verifier for the packages already visible. Existing versions may
 be accepted only when their manifests, platform constraints, executable mode,
 and binary bytes match the bundle. Stop for maintainer review when a version is
-present with different bytes, a registry response is ambiguous, the release
+present with different bytes, a registry response remains ambiguous after reconciliation, the release
 state cannot be determined, or the 30-day bundle has expired. A new release
 must go through the normal signed-source and CI path.
 
-## Pending operational work
+## External activation and retention limits
 
-The current workflow has run and artifact identifiers plus a 30-day bundle, but
-it does not yet persist a durable release receipt. A durable receipt containing
-source and tooling commits, CI/run and artifact identifiers, digests, and
-per-channel states; explicit staged-promotion controls; recovery after bundle
-retention expiry; and reviewed repository-rule, credential, and signer-rotation
-procedures remain pending Phase 6 work. This guide describes the current
-workflow and must not be read as claiming those controls are implemented.
+The checked-in repository-rule files are review-only proposals. Apply repository
+protections, configure trusted publishers, rotate credentials/signers, or publish
+only within the authorized scope and after exact-commit CI evidence. No local
+helper test proves that external settings have been enabled.
+
+Bundles expire after 30 days; receipts and native proofs expire after 90 days.
+The automated `resume_run_id` path requires an unexpired bundle. Recovery after
+expiry needs retained same-tag assets and independent identity, digest and
+provenance evidence under the [recovery runbook](RELEASE_RECOVERY.md); it is not
+an automatic rebuild path.

@@ -53,7 +53,7 @@ function fakeRunner(fixtureData, options = {}) {
   let apiCalls = 0;
   let downloadCalls = 0;
   const run = async (command, args, childOptions) => {
-    calls.push({ command, args: [...args], env: { ...childOptions.env }, timeoutMs: childOptions.timeoutMs });
+    calls.push({ command, args: [...args], env: { ...childOptions.env }, timeoutMs: childOptions.timeoutMs, time: performance.now() });
     if (command === "/usr/bin/tar") return runReleaseProcess(command, args, childOptions);
     assert.equal(command, "/fake/curl");
     if (args.includes("--output")) {
@@ -142,9 +142,24 @@ async function defaultProof() {
       const apiCalls = fake.calls.filter((call) => call.command === "/fake/curl");
       assert.equal(apiCalls[0].args.at(-1), "https://crates.io/api/v1/crates/hardgate/0.5.0");
       assert.equal(apiCalls[1].args.at(-1), "https://crates.io/api/v1/crates/hardgate");
+      assert.ok(apiCalls[1].time - apiCalls[0].time >= 995, "separate public API requests must respect crates.io pacing");
     } finally {
       fs.rmSync(data.directory, { recursive: true, force: true });
     }
+  }
+}
+
+async function defaultDeadline() {
+  const data = fixture();
+  try {
+    const fake = fakeRunner(data);
+    await assert.rejects(verify(data, fake, {
+      request: { requireDefault: true },
+      operations: { policy: { ...policy(), deadline: performance.now() + 500 } },
+    }), /deadline/);
+    assert.equal(fake.apiCalls, 1, "a default probe cannot outlive the remaining operation budget");
+  } finally {
+    fs.rmSync(data.directory, { recursive: true, force: true });
   }
 }
 
@@ -248,6 +263,7 @@ async function boundedChildAndCleanup() {
 
 await successfulProof();
 await defaultProof();
+await defaultDeadline();
 await dirtyIdentityCases();
 await retryAndFailureCases();
 await archiveAndInputFailures();

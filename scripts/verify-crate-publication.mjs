@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { childTimeoutMs, verificationPolicy } from "./npm-verification-policy.mjs";
+import { childTimeoutMs, remainingMs, verificationPolicy } from "./npm-verification-policy.mjs";
 import {
   CURL_COMMAND,
   MAX_API_OUTPUT_BYTES,
@@ -64,6 +64,10 @@ async function probeCratesIo({ version, expectedSha256, requireDefault = false, 
     unavailableMessage: "crates.io did not provide a stable public version",
   });
   if (requireDefault) {
+    // crates.io API requests must be separated by at least one second.
+    if (remainingMs(policy) <= 1000) fail("crate default probe exceeds the operation deadline");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    remainingMs(policy);
     await probeEndpoint({
       policy,
       run,

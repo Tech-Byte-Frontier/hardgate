@@ -107,9 +107,9 @@ assert.match(release, /native-linux-x64-attempt-/, "release must promote the nat
 assert.match(release, /build:[\s\S]*needs:\s*\[version-check\]/, "cross-platform builds must wait for the exact CI receipt");
 assert.match(release, /package:[\s\S]*needs:\s*\[version-check, build\]/, "packaging must wait for all non-native builds");
 assert.match(release, /attest:[\s\S]*needs:\s*\[version-check, package\]/, "attestation must consume the completed package checkpoint");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
+assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight, receipt-init\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
 assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
-assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, github-release, publish-crates, publish-npm\]/, "final channel verification must wait for every publication");
+assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, package, promote-channels, verify-native-default\]/, "final channel verification must wait for every publication");
 const platformPublish = release.indexOf("Publish and verify each platform package in order");
 const wrapperPublish = release.indexOf("Publish wrapper only after all platforms are verified");
 assert.ok(platformPublish >= 0 && wrapperPublish > platformPublish, "wrapper publication must follow platform publication");

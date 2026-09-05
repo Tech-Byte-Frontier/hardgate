@@ -34,7 +34,7 @@ for (const packageName of [
   assert.ok(publicationPreflight.includes(packageName), `rollback guard must inspect npm latest for ${packageName}`);
 }
 assert.ok(
-  publicationPreflight.indexOf("Prevent latest-channel rollback") < publicationPreflight.indexOf("Authenticate the npm publication credential"),
+  publicationPreflight.indexOf("Prevent latest-channel rollback") < publicationPreflight.indexOf("Validate the selected npm publisher authentication mode"),
   "release ordering must be proven before publication credentials are used",
 );
 

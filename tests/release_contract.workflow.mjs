@@ -6,8 +6,8 @@ import {
   ci,
   includesAll,
   launcher,
-  platformPackages,
   release,
+  releaseJob,
 } from "./release_contract.sources.mjs";
 
 function assertWorkflowIncludes(text, label, snippets) {
@@ -106,8 +106,8 @@ scripts/release-sbom-verify.mjs
 scripts/sync-npm-version.mjs --check --tag
 cargo publish --locked
 publication-preflight:
-npm whoami --registry=https://registry.npmjs.org
-needs: [version-check, package, attest, publication-preflight]
+node scripts/npm-publisher-preflight.mjs
+needs: [version-check, package, attest, publication-preflight, receipt-init]
 https://crates.io/api/v1/crates/hardgate/
 version"]["num
 actions/attest
@@ -120,9 +120,6 @@ hardgate-\${RELEASE_VERSION}.sbom.cdx.json
 already_published=0
 crate_probe()
 crate_version()
-npm_registry_probe()
-wait_for_registry_version()
-wait_for_crate_version()
 unset NODE_AUTH_TOKEN
 node release-tooling/scripts/publish-npm-package.mjs
 return 2
@@ -130,16 +127,14 @@ return 2
 crates.io version probe failed; refusing to publish
 gh release download
 cmp --
-wait_for_registry_version 1
-wait_for_crate_version 1
 cargo install hardgate --version "=$RELEASE_VERSION"
-npm install --ignore-scripts
+"$npm_tool" install --ignore-scripts
 --package-dir "./npm/$pkg"
 node release-tooling/scripts/verify-npm-publication.mjs
-Verify clean npm, pnpm, Yarn, and Bun consumers
-pnpm add --ignore-scripts
-yarn add
-bun add
+Verify default npm, pnpm, Yarn, Bun, and shell consumers
+"$pnpm_tool" add
+"$yarn_tool" add
+"$bun_tool" add
 HARDGATE_INSTALL_DIR="$install_root" sh scripts/install.sh
 HARDGATE_CURL_CONNECT_TIMEOUT: 10
 HARDGATE_CURL_MAX_TIME: 20
@@ -157,17 +152,12 @@ ci_native_artifact_id
 ci_run_id
 native-linux-x64-attempt-
 retention-days: 30
-release_error=$(mktemp)
-release_exists=0
-unable to determine whether GitHub release
+node release-tooling/scripts/stage-github-release.mjs --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --dist dist
 tagName,isDraft,isPrerelease
 test "$release_is_draft" = false
 test "$release_is_prerelease" = false
 latest_release_tag=$(gh release view --json tagName --jq .tagName)
 test "$latest_release_tag" = "$RELEASE_TAG"
-npm_latest_probe()
-wait_for_latest_tag()
-["dist-tags"]["latest"]
 `,
 );
 
@@ -221,7 +211,7 @@ assert.match(release, /workflow definition itself needs[\s\S]*?resume_run_id/, "
 const cratesApiCurlLines = release
   .split("\n")
   .filter((line) => line.includes("status=$(curl") && line.includes('"$api"'));
-assert.equal(cratesApiCurlLines.length, 3, "release must have exactly three crates.io API probes");
+assert.ok(cratesApiCurlLines.length > 0, "the crate publication existence probe remains status-aware");
 for (const line of cratesApiCurlLines) {
   assert.ok(
     line.includes('--user-agent "$HARDGATE_CRATES_IO_USER_AGENT"'),
@@ -237,7 +227,11 @@ assert.doesNotMatch(release, /npm view/, "final registry verification must use s
 assert.doesNotMatch(release, /https:\/\/crates\.io\/api\/v1\/me/, "crates.io /api/v1/me is cookie-only and cannot validate a publish token");
 assert.doesNotMatch(release, /if gh release view \"\$RELEASE_TAG\"(?: --json tagName)? >\/dev\/null 2>&1/, "release creation must distinguish not-found from API failures");
 assert.doesNotMatch(release, /^[ \t]*registry_version\(\)/m, "registry waits must not multiply nested retry loops");
-includesAll(release, ["retry_absent", "return 3", "release_error=$(mktemp)", "release_exists=0", "refusing to create or mutate it"], "status-aware release waits");
+includesAll(release, ["retry_absent", "return 3"], "status-aware registry waits");
+const githubStagingJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
+assert.match(githubStagingJob, /node-version: \$\{\{ env\.NODE_VERSION \}\}/, "GitHub staging helper must use the pinned Node runtime");
+assert.match(githubStagingJob, /test "\$\(git -C release-tooling rev-parse HEAD\)" = "\$GITHUB_SHA"[\s\S]*?node release-tooling\/scripts\/stage-github-release\.mjs/, "GitHub staging must use the exact CI-validated tooling commit");
+assert.doesNotMatch(githubStagingJob, /gh release (?:create|upload)/, "GitHub writes must run through the tested staging state machine");
 const registryAttempts = Number(release.match(/HARDGATE_REGISTRY_ATTEMPTS:\s*(\d+)/)?.[1]);
 const registryDelay = Number(release.match(/HARDGATE_REGISTRY_DELAY:\s*(\d+)/)?.[1]);
 const curlMaxTime = Number(release.match(/HARDGATE_CURL_MAX_TIME:\s*(\d+)/)?.[1]);
@@ -246,11 +240,7 @@ assert.ok(registryAttempts * curlMaxTime + (registryAttempts - 1) * registryDela
 const npmVisibilityTimeout = Number(release.match(/HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS:\s*(\d+)/)?.[1]);
 assert.equal(npmVisibilityTimeout, 580, "npm visibility deadline must reserve one final HTTP probe inside ten minutes");
 assert.ok(npmVisibilityTimeout + curlMaxTime <= 600, "npm post-publish visibility must remain bounded by ten minutes");
-assert.equal((release.match(/deadline=\$\(\(SECONDS \+ HARDGATE_NPM_VISIBILITY_TIMEOUT_SECONDS\)\)/g) ?? []).length, 2, "remaining shell npm version/latest waits must use the elapsed-time deadline");
-assert.equal((release.match(/remaining=\$\(\(deadline - SECONDS\)\)/g) ?? []).length, 2, "remaining shell npm retry sleeps must stay within the elapsed-time deadline");
-assert.equal((release.match(/npm registry version \$name@\$wanted remained unavailable/g) ?? []).length, 1, "remaining shell npm visibility timeout must explain the unavailable package");
-assert.equal((release.match(/npm dist-tags\.latest for \$name did not settle on \$wanted/g) ?? []).length, 1, "latest-tag timeout must explain the unsettled npm channel");
-assert.match(release, /explicit gap before the identity probe[\s\S]*?sleep 1[\s\S]*?api="https:\/\/crates\.io/, "adjacent crates.io probes must respect the one-request-per-second policy");
+assert.match(release, /explicit gap before the identity probe[\s\S]*?sleep 1[\s\S]*?verify-crate-publication\.mjs/, "adjacent crates.io probes must respect the one-request-per-second policy");
 assert.doesNotMatch(release, /macos-14/, "deprecated macos-14 runners must not be launched");
 assert.doesNotMatch(
   launcher,
@@ -286,34 +276,8 @@ includesAll(
   ],
   "current GitHub latest release guard",
 );
-const finalNpmVerificationStep = release.slice(
-  release.indexOf("- name: Verify published registry versions and runnable installs"),
-  release.indexOf("- name: Verify clean npm, pnpm, Yarn, and Bun consumers"),
-);
-includesAll(
-  finalNpmVerificationStep,
-  [
-    "npm_latest_probe()",
-    '"dist-tags"]["latest"]',
-    "wait_for_latest_tag()",
-    'wait_for_latest_tag "$pkg" "$RELEASE_VERSION"',
-    'wait_for_latest_tag "@tech-byte-frontier/hardgate" "$RELEASE_VERSION"',
-    "npm install --global --ignore-scripts",
-    "pnpm add --global --ignore-scripts",
-    'export PNPM_HOME="$pnpm_root"',
-    'env -i PATH="$npm_global/bin:$node_bin:/usr/bin:/bin"',
-    'env -i PATH="$pnpm_bin:$node_bin:/usr/bin:/bin"',
-    'test "$(command -v hardgate)" = "$1"',
-  ],
-  "final npm latest dist-tag and global-install verification",
-);
-const finalNpmPlatformLoop = finalNpmVerificationStep.slice(
-  finalNpmVerificationStep.indexOf("for pkg in hardgate-linux-x64"),
-  finalNpmVerificationStep.indexOf("crate_root=$(mktemp -d)"),
-);
-for (const packageName of platformPackages) {
-  assert.ok(finalNpmPlatformLoop.includes(packageName), `final npm verification must probe ${packageName}`);
-}
+const finalConsumerJob = releaseJob("verify-channels");
+includesAll(finalConsumerJob, ['"$npm_tool" install --ignore-scripts --global', '"$pnpm_tool" add --ignore-scripts --global', '"$pnpm_tool" bin --global', "command -v hardgate"], "default global command verification");
 const npmPreparationStep = release.slice(
   release.indexOf("- name: Verify release bundle and prepare npm packages"),
   release.indexOf("- name: Publish and verify each platform package in order"),
@@ -341,8 +305,11 @@ for (const job of ["version-check", "package", "attest", "publication-preflight"
 }
 assert.equal((ci.match(/actions\/checkout@/g) ?? []).length, (ci.match(/persist-credentials: false/g) ?? []).length, "CI checkouts must not persist GitHub credentials");
 assert.equal((release.match(/actions\/checkout@/g) ?? []).length, (release.match(/persist-credentials: false/g) ?? []).length, "release checkouts must not persist GitHub credentials");
-assert.equal((release.match(/name: Check out CI-validated release tooling/g) ?? []).length, 2, "npm publication and final verification must use CI-validated recovery tooling");
-assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}[\s\S]{0,120}path: release-tooling/g) ?? []).length, 2, "recovery tooling must come from the exact workflow commit");
-assert.equal((release.match(/cmp -- npm\/hardgate\/bin\/hardgate\.js release-tooling\/npm\/hardgate\/bin\/hardgate\.js/g) ?? []).length, 2, "recovery tooling launcher must match the signed release payload");
-assert.equal((release.match(/node release-tooling\/scripts\/verify-npm-publication\.mjs/g) ?? []).length, 3, "every live npm publication verifier call must use CI-validated recovery tooling");
+for (const name of ["package", "receipt-init", "github-release", "publish-crates", "publish-npm", "verify-native-exact", "promote-channels", "verify-native-default", "verify-channels", "release-complete"]) {
+  const job = releaseJob(name);
+  assert.match(job, /ref: \$\{\{ github\.sha \}\}[\s\S]{0,120}path: release-tooling/, `${name} must use the exact CI-validated tooling commit`);
+}
+for (const name of ["publish-npm", "verify-channels"]) {
+  assert.ok(releaseJob(name).includes("cmp -- npm/hardgate/bin/hardgate.js release-tooling/npm/hardgate/bin/hardgate.js"), `${name} must preserve signed launcher compatibility`);
+}
 assert.doesNotMatch(release, /node scripts\/verify-npm-publication\.mjs/, "signed release payload must not shadow a reviewed npm verifier recovery fix");

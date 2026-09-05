@@ -106,6 +106,7 @@ jobs:
       - run: node tests/consumer_matrix.mjs
         env:
           HARDGATE_BINARY: target/release/hardgate
+      - run: node tests/packed_consumers.test.mjs
       # The real SBOM generator needs both pinned Node and Cargo, which this
       # job already provisions without another runner/toolchain setup.
       - run: node tests/release_contract.sbom.test.mjs

@@ -60,6 +60,7 @@ entry_points = [
   "scripts/check-npm-quality.mjs",
   "scripts/consumer-process-launcher.mjs",
   "scripts/publish-npm-package.mjs",
+  "scripts/npm-publisher-preflight.mjs",
   "scripts/release-checksums.mjs",
   "scripts/release-package.mjs",
   "scripts/release-order.mjs",

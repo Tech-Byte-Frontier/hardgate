@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   includesAll,
   release,
+  releaseJob,
   releaseAllowedSigners,
 } from "./release_contract.sources.mjs";
 
@@ -22,16 +23,16 @@ assert.match(
   "an in-flight publication must never be cancelled by another tag",
 );
 assert.match(release, /attest:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only the resumable attestation job may attest artifacts");
-assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "only GitHub publication may write contents");
+assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "GitHub staging needs scoped contents write permission");
 assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
 
-const githubReleaseJob = release.slice(release.indexOf("  github-release:"), release.indexOf("  publish-crates:"));
-const publishCratesJob = release.slice(release.indexOf("  publish-crates:"), release.indexOf("  publish-npm:"));
-const publishNpmJob = release.slice(release.indexOf("  publish-npm:"), release.indexOf("  verify-channels:"));
-const attestJob = release.slice(release.indexOf("  attest:"), release.indexOf("  publication-preflight:"));
-const verifyChannelsJob = release.slice(release.indexOf("  verify-channels:"), release.indexOf("  release-complete:"));
-const releaseCompleteJob = release.slice(release.indexOf("  release-complete:"));
-const versionCheckJob = release.slice(release.indexOf("  version-check:"), release.indexOf("  build:"));
+const githubReleaseJob = releaseJob("github-release");
+const publishCratesJob = releaseJob("publish-crates");
+const publishNpmJob = releaseJob("publish-npm");
+const attestJob = releaseJob("attest");
+const verifyChannelsJob = releaseJob("verify-channels");
+const releaseCompleteJob = releaseJob("release-complete");
+const versionCheckJob = releaseJob("version-check");
 includesAll(
   versionCheckJob,
   [
@@ -100,10 +101,7 @@ assert.match(
   "release signer allowlist must contain a principal and a valid SSH public-key record",
 );
 
-const publicationPreflightJob = release.slice(
-  release.indexOf("  publication-preflight:"),
-  release.indexOf("  github-release:"),
-);
+const publicationPreflightJob = releaseJob("publication-preflight");
 includesAll(
   publicationPreflightJob,
   [
@@ -111,21 +109,22 @@ includesAll(
     "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}",
     "CARGO_REGISTRY_TOKEN is required for crates.io publication",
     "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}",
-    "npm whoami --registry=https://registry.npmjs.org",
+    "node scripts/npm-publisher-preflight.mjs",
+    "id-token: write",
   ],
   "publication preflight",
 );
 assert.match(
   githubReleaseJob,
-  /needs: \[version-check, package, attest, publication-preflight\]/,
+  /needs: \[version-check, package, attest, publication-preflight, receipt-init\]/,
   "GitHub publication must wait for attestation and registry preflight",
 );
 for (const [label, job, requiredNeeds] of [
   ["attestation", attestJob, ["version-check", "package"]],
-  ["GitHub Release", githubReleaseJob, ["version-check", "package", "attest", "publication-preflight"]],
+  ["GitHub Release", githubReleaseJob, ["version-check", "package", "attest", "publication-preflight", "receipt-init"]],
   ["crates.io", publishCratesJob, ["version-check", "package", "github-release"]],
   ["npm", publishNpmJob, ["version-check", "package", "github-release", "publish-crates"]],
-  ["channel verification", verifyChannelsJob, ["version-check", "github-release", "publish-crates", "publish-npm"]],
+  ["channel verification", verifyChannelsJob, ["version-check", "package", "promote-channels", "verify-native-default"]],
 ]) {
   assert.match(job, /if: >-\s+\$\{\{\s+always\(\)/, `${label} must override intentional resume skip propagation`);
   for (const dependency of requiredNeeds) {
@@ -137,7 +136,7 @@ includesAll(
   [
     "name: Release publication aggregate",
     "if: ${{ always() }}",
-    "needs: [version-check, package, attest, publication-preflight, github-release, publish-crates, publish-npm, verify-channels]",
+    "needs: [version-check, package, attest, publication-preflight, receipt-init, github-release, publish-crates, publish-npm, verify-native-exact, promote-channels, verify-native-default, verify-channels]",
     "contains(needs.*.result, 'failure')",
     "contains(needs.*.result, 'cancelled')",
     "contains(needs.*.result, 'skipped')",
@@ -165,11 +164,8 @@ for (const [label, job] of [
 includesAll(
   githubReleaseJob,
   [
-    "--json tagName,isDraft,isPrerelease",
-    'test "$release_tag" = "$RELEASE_TAG"',
-    'test "$release_is_draft" = false',
-    'test "$release_is_prerelease" = false',
-    "refusing to mutate it",
+    'test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"',
+    'node release-tooling/scripts/stage-github-release.mjs --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --dist dist',
   ],
-  "existing GitHub release state guard",
+  "tested GitHub staging and existing-release recovery guard",
 );
