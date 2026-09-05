@@ -26,6 +26,7 @@ const HASH_CHUNK_BYTES = 64 * 1024;
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
 const EXPECTED_FAILURE_CODE = "github-promotion-failed";
 const EXPECTED_FAILURE_MESSAGE = "GitHub channel promotion failed";
+const RETRYABLE_PROBE_CODES = new Set(["EAI_AGAIN", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT"]);
 
 function fail(message) {
   throw new Error(`promote-github-channel: ${message}`);
@@ -148,6 +149,24 @@ function isNotFound(error) {
   return /(?:HTTP\s*404\b|status(?:\s+code)?\s*[:=]?\s*404\b|404\s+Not\s+Found)/i.test(text);
 }
 
+function retryableProbeCode(error) {
+  if (RETRYABLE_PROBE_CODES.has(error?.code)) return error.code;
+  for (const value of [error?.statusCode, error?.status]) {
+    const status = Number(value);
+    if (status === 429 || (status >= 500 && status <= 599)) return `HTTP_${status}`;
+  }
+  const text = [error?.code, error?.stderr, error?.stdout, error?.message].filter(Boolean).join("\n");
+  const match = text.match(/\bHTTP(?:\/\d+(?:\.\d+)?)?[\s_:=]*(429|5\d\d)\b/i);
+  return match ? `HTTP_${match[1]}` : null;
+}
+
+function safeProbeFailure(error) {
+  const code = retryableProbeCode(error);
+  if (!code) return new Error("latest release probe failed");
+  const message = code === "ETIMEDOUT" ? "latest release probe timed out" : "latest release probe temporarily unavailable";
+  return Object.assign(new Error(message), { code, retryable: true, temporary: true });
+}
+
 function parseJson(output, label) {
   try {
     return JSON.parse(output);
@@ -246,7 +265,7 @@ function buildOperations(context) {
       return parseLatestMetadata(await runGh(["api", "-X", "GET", `repos/${options.repo}/releases/latest`]));
     } catch (error) {
       if (isNotFound(error)) return { state: "missing" };
-      throw new Error("latest release probe failed");
+      throw safeProbeFailure(error);
     }
   };
   const inspect = async (stable) => {
