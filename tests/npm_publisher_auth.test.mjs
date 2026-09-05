@@ -61,11 +61,15 @@ assert.equal(tokenAuth.publishEnv.NODE_AUTH_TOKEN, secrets.npm);
 assert.equal(Object.hasOwn(tokenAuth.publishEnv, "NPM_TOKEN"), false);
 assert.equal(Object.hasOwn(tokenAuth.publishEnv, "GITHUB_TOKEN"), false);
 assert.equal(Object.hasOwn(tokenAuth.publishEnv, "GH_TOKEN"), false);
-assert.equal(Object.hasOwn(tokenAuth.publishEnv, "ACTIONS_ID_TOKEN_REQUEST_TOKEN"), false);
-assert.equal(Object.hasOwn(tokenAuth.publishEnv, "ACTIONS_ID_TOKEN_REQUEST_URL"), false);
+assert.equal(tokenAuth.publishEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN, secrets.oidc, "token publication preserves provenance OIDC");
+assert.equal(tokenAuth.publishEnv.ACTIONS_ID_TOKEN_REQUEST_URL, oidcUrl, "token publication preserves provenance URL");
 assert.equal(tokenAuth.publishEnv.PATH, "/usr/bin");
 assertProbeIsCredentialFree(tokenAuth.probeEnv);
 assert.deepEqual(tokenInput, tokenSnapshot, "token selection must not mutate the caller environment");
+
+const tokenWithoutAttestation = npmPublisherAuth("token", { NODE_AUTH_TOKEN: secrets.npm, GITHUB_ACTIONS: "false" });
+assert.equal(Object.hasOwn(tokenWithoutAttestation.publishEnv, "ACTIONS_ID_TOKEN_REQUEST_TOKEN"), false);
+assert.equal(Object.hasOwn(tokenWithoutAttestation.publishEnv, "ACTIONS_ID_TOKEN_REQUEST_URL"), false);
 
 const trustedInput = baseEnvironment();
 const trustedSnapshot = { ...trustedInput };
@@ -93,6 +97,9 @@ for (const environment of [
   { ACTIONS_ID_TOKEN_REQUEST_URL: "http://token.actions.githubusercontent.com", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
   { ACTIONS_ID_TOKEN_REQUEST_URL: "not-a-url", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
   { ACTIONS_ID_TOKEN_REQUEST_URL: "https://", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
+  { ACTIONS_ID_TOKEN_REQUEST_URL: "https://user:pass@token.actions.githubusercontent.com", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
+  { ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/oidc#fragment", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
+  { ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/oidc#", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "true" },
   { ACTIONS_ID_TOKEN_REQUEST_URL: oidcUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc, GITHUB_ACTIONS: "false" },
   { ACTIONS_ID_TOKEN_REQUEST_URL: oidcUrl, GITHUB_ACTIONS: "true" },
 ]) {
@@ -105,6 +112,18 @@ assert.throws(
 );
 assert.throws(
   () => npmPublisherAuth("trusted", { GITHUB_ACTIONS: "true", NODE_AUTH_TOKEN: secrets.npm, NPM_TOKEN: secrets.legacy }),
+  /requires a valid HTTPS OIDC request URL/,
+);
+assert.throws(
+  () => npmPublisherAuth("token", { GITHUB_ACTIONS: "true", NODE_AUTH_TOKEN: secrets.npm, ACTIONS_ID_TOKEN_REQUEST_URL: oidcUrl }),
+  /complete OIDC credential pair/,
+);
+assert.throws(
+  () => npmPublisherAuth("token", { GITHUB_ACTIONS: "false", NODE_AUTH_TOKEN: secrets.npm, ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc }),
+  /requires GitHub Actions/,
+);
+assert.throws(
+  () => npmPublisherAuth("token", { GITHUB_ACTIONS: "true", NODE_AUTH_TOKEN: secrets.npm, ACTIONS_ID_TOKEN_REQUEST_URL: "https://user:pass@token.actions.githubusercontent.com", ACTIONS_ID_TOKEN_REQUEST_TOKEN: secrets.oidc }),
   /requires a valid HTTPS OIDC request URL/,
 );
 
@@ -124,6 +143,7 @@ assert.doesNotThrow(() => validateNpmPublisherToolchain("token", { nodeVersion: 
 assert.throws(() => validateNpmPublisherToolchain("token", { nodeVersion: "17.9.9", npmVersion: "12.0.2" }), /Node version is below/);
 assert.doesNotThrow(() => validateNpmPublisherToolchain("trusted", { nodeVersion: "22.14.0", npmVersion: "11.5.1" }));
 assert.doesNotThrow(() => validateNpmPublisherToolchain("trusted", { nodeVersion: "22.14.1", npmVersion: "11.5.2" }));
+assert.doesNotThrow(() => validateNpmPublisherToolchain("trusted", { nodeVersion: "999999999999999999999.0.0", npmVersion: "999999999999999999999.0.0" }));
 assert.throws(() => validateNpmPublisherToolchain("trusted", { nodeVersion: "22.13.9", npmVersion: "11.5.1" }), /Node version is below/);
 assert.throws(() => validateNpmPublisherToolchain("trusted", { nodeVersion: "22.14.0", npmVersion: "11.5.0" }), /npm version is below/);
 

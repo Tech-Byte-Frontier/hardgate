@@ -1,5 +1,9 @@
 // Select one explicit npm publication credential mode and bound its environment.
+// Registry authentication and npm provenance attestation use independent credentials:
+// token mode may carry a valid GitHub OIDC pair for provenance, while probes never do.
 "use strict";
+
+import { compareReleaseTags } from "./release-order.mjs";
 
 const AUTH_ENV_KEYS = [
   "NODE_AUTH_TOKEN",
@@ -19,7 +23,6 @@ const TRUSTED_PUBLISHER_KEYS = new Set([
 const TOKEN_NODE_MINIMUM = "18.0.0";
 const TRUSTED_NODE_MINIMUM = "22.14.0";
 const TRUSTED_NPM_MINIMUM = "11.5.1";
-const SEMVER_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function normalizedMode(mode) {
   if (mode === undefined) return "token";
@@ -70,65 +73,39 @@ function requireHttpsUrl(value) {
   } catch {
     throw new Error("trusted npm publisher requires a valid HTTPS OIDC request URL");
   }
-  if (parsed.protocol !== "https:" || !parsed.hostname) throw new Error("trusted npm publisher requires a valid HTTPS OIDC request URL");
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password || parsed.hash || value.includes("#")) {
+    throw new Error("trusted npm publisher requires a valid HTTPS OIDC request URL");
+  }
   return value;
 }
 
-function parseVersion(value, label) {
-  if (typeof value !== "string") throw new Error(`${label} version must be a strict semantic version`);
-  const match = SEMVER_PATTERN.exec(value);
-  if (!match || match.slice(1, 4).some((part) => part.length > 1 && part.startsWith("0"))) {
+function normalizeVersion(value, label) {
+  if (typeof value !== "string" || !hasText(value) || value !== value.trim()) {
     throw new Error(`${label} version must be a strict semantic version`);
   }
-  const prerelease = match[4]?.split(".") ?? [];
-  if (prerelease.some((part) => part.length === 0 || (/^\d+$/.test(part) && part.length > 1 && part.startsWith("0")))) {
+  const tag = value.startsWith("v") ? value : `v${value}`;
+  try {
+    compareReleaseTags(tag, tag);
+  } catch {
     throw new Error(`${label} version must be a strict semantic version`);
   }
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease,
-    value,
-  };
-}
-
-function compareCoreVersions(left, right) {
-  for (const key of ["major", "minor", "patch"]) {
-    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
-  }
-  return 0;
-}
-
-function comparePrereleaseIdentifiers(left, right) {
-  if (left === right) return 0;
-  const leftNumeric = /^\d+$/.test(left);
-  const rightNumeric = /^\d+$/.test(right);
-  if (leftNumeric && rightNumeric) return Number(left) > Number(right) ? 1 : -1;
-  if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
-  return left > right ? 1 : -1;
-}
-
-function comparePrereleaseVersions(left, right) {
-  if (left.length === 0 && right.length === 0) return 0;
-  if (left.length === 0) return 1;
-  if (right.length === 0) return -1;
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if (index >= left.length) return -1;
-    if (index >= right.length) return 1;
-    const comparison = comparePrereleaseIdentifiers(left[index], right[index]);
-    if (comparison !== 0) return comparison;
-  }
-  return 0;
-}
-
-function compareVersions(left, right) {
-  const coreComparison = compareCoreVersions(left, right);
-  return coreComparison === 0 ? comparePrereleaseVersions(left.prerelease, right.prerelease) : coreComparison;
+  return { tag, value };
 }
 
 function requireMinimum(actual, minimum, label) {
-  if (compareVersions(actual, parseVersion(minimum, label)) < 0) throw new Error(`${label} version is below the supported publisher floor`);
+  if (compareReleaseTags(actual.tag, normalizeVersion(minimum, label).tag) < 0) {
+    throw new Error(`${label} version is below the supported publisher floor`);
+  }
+}
+
+function optionalAttestationOidc(env) {
+  const hasUrl = Object.hasOwn(env, "ACTIONS_ID_TOKEN_REQUEST_URL");
+  const hasToken = Object.hasOwn(env, "ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+  if (!hasUrl && !hasToken) return undefined;
+  if (env.GITHUB_ACTIONS !== "true") throw new Error("token npm publisher OIDC attestation requires GitHub Actions");
+  const url = requireHttpsUrl(env.ACTIONS_ID_TOKEN_REQUEST_URL);
+  if (!hasText(env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)) throw new Error("token npm publisher OIDC attestation requires a complete OIDC credential pair");
+  return { url, token: env.ACTIONS_ID_TOKEN_REQUEST_TOKEN };
 }
 
 export function npmPublisherAuth(mode, env = process.env) {
@@ -144,6 +121,11 @@ export function npmPublisherAuth(mode, env = process.env) {
   if (selectedMode === "token") {
     if (!hasText(source.NODE_AUTH_TOKEN)) throw new Error("token npm publisher requires NODE_AUTH_TOKEN");
     publishEnv.NODE_AUTH_TOKEN = source.NODE_AUTH_TOKEN;
+    const attestation = optionalAttestationOidc(source);
+    if (attestation) {
+      publishEnv.ACTIONS_ID_TOKEN_REQUEST_URL = attestation.url;
+      publishEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN = attestation.token;
+    }
   } else {
     if (source.GITHUB_ACTIONS !== "true") throw new Error("trusted npm publisher requires GitHub Actions");
     requireHttpsUrl(source.ACTIONS_ID_TOKEN_REQUEST_URL);
@@ -158,8 +140,8 @@ export function npmPublisherAuth(mode, env = process.env) {
 export function validateNpmPublisherToolchain(mode, versions = {}) {
   const selectedMode = normalizedMode(mode);
   if (versions === null || typeof versions !== "object") throw new TypeError("npm publisher toolchain versions must be an object");
-  const node = parseVersion(versions.nodeVersion, "Node");
-  const npm = parseVersion(versions.npmVersion, "npm");
+  const node = normalizeVersion(versions.nodeVersion, "Node");
+  const npm = normalizeVersion(versions.npmVersion, "npm");
   if (selectedMode === "trusted") {
     requireMinimum(node, TRUSTED_NODE_MINIMUM, "Node");
     requireMinimum(npm, TRUSTED_NPM_MINIMUM, "npm");
