@@ -4,137 +4,41 @@
 "use strict";
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runReleaseProcess } from "../scripts/release-process.mjs";
+import {
+  fixture,
+  goodBinary,
+  sourceSha,
+  successful,
+  verificationOptions,
+  version,
+} from "../scripts/native-channel-test-fixtures.mjs";
 import {
   digestBytes,
-  validateProof,
+  digestFile,
+  detectHost,
+  parseArgs,
+  restrictedPath,
+  sanitizedEnvironment,
 } from "../scripts/native-channel-support.mjs";
+import { validateProof } from "../scripts/native-channel-proof.mjs";
 import {
+  verifyNativeArchive,
   verifyNativeChannel,
 } from "../scripts/verify-native-channel.mjs";
-
-const version = "0.5.0";
-const sourceSha = "0123456789abcdef0123456789abcdef01234567";
-const expectedLine = `hardgate ${version} (${sourceSha})`;
-const goodBinary = Buffer.from(`#!/bin/sh\nprintf '%s\\n' '${expectedLine}'\n`, "utf8");
-
-const fakeNpm = String.raw`#!/usr/bin/env node
-const fs = require('node:fs');
-const path = require('node:path');
-const args = process.argv.slice(2);
-if (args[0] !== 'install') throw new Error('fake npm only supports install');
-const prefix = args[args.indexOf('--prefix') + 1];
-const spec = args[args.length - 1];
-const marker = spec.lastIndexOf('@');
-const name = spec.slice(0, marker);
-const selectedVersion = process.env.FAKE_INSTALLED_VERSION || process.env.FAKE_VERSION;
-const source = process.env.FAKE_SOURCE_SHA;
-const binary = Buffer.from(process.env.FAKE_BINARY_B64, 'base64');
-const log = process.env.FAKE_LOG;
-if (log) fs.appendFileSync(log, JSON.stringify({spec, force: args.includes('--force'), hardgate: process.env.HARDGATE_BINARY || null}) + '\n');
-function writeExecutable(file, bytes) {
-  fs.mkdirSync(path.dirname(file), {recursive: true});
-  fs.writeFileSync(file, bytes, {mode: 0o755});
-  fs.chmodSync(file, 0o755);
-}
-function manifest(root, value) {
-  fs.mkdirSync(root, {recursive: true});
-  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(value) + '\n');
-}
-if (name === '@tech-byte-frontier/hardgate') {
-  const nodeModules = path.join(prefix, 'node_modules');
-  const wrapperRoot = path.join(nodeModules, '@tech-byte-frontier', 'hardgate');
-  const optional = {
-    'hardgate-linux-x64': selectedVersion,
-    'hardgate-linux-x64-musl': selectedVersion,
-    'hardgate-linux-arm64': selectedVersion,
-    'hardgate-linux-arm64-musl': selectedVersion,
-    'hardgate-darwin-x64': selectedVersion,
-    'hardgate-darwin-arm64': selectedVersion,
-  };
-  manifest(wrapperRoot, {name, version: selectedVersion, optionalDependencies: optional, bin: {hardgate: 'bin/hardgate.js'}});
-  const launcher = path.join(wrapperRoot, 'bin', 'hardgate.js');
-  writeExecutable(launcher, Buffer.from('#!/bin/sh\nexec "$(dirname "$0")/../../../hardgate-linux-x64/bin/hardgate" "$@"\n'));
-  const nativeRoot = path.join(nodeModules, 'hardgate-linux-x64');
-  manifest(nativeRoot, {name: 'hardgate-linux-x64', version: selectedVersion});
-  writeExecutable(path.join(nativeRoot, 'bin', 'hardgate'), binary);
-  fs.mkdirSync(path.join(nodeModules, '.bin'), {recursive: true});
-  fs.symlinkSync('../@tech-byte-frontier/hardgate/bin/hardgate.js', path.join(nodeModules, '.bin', 'hardgate'));
-} else {
-  const root = path.join(prefix, 'node_modules', name);
-  manifest(root, {name, version: selectedVersion});
-  writeExecutable(path.join(root, 'bin', 'hardgate'), binary);
-}
-`;
-
-function fixture() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-native-channel-test-"));
-  const npm = path.join(directory, "fake-npm.cjs");
-  fs.writeFileSync(npm, fakeNpm, {mode: 0o755});
-  fs.chmodSync(npm, 0o755);
-  const archive = path.join(directory, "hardgate-linux-x64.tar.gz");
-  fs.writeFileSync(archive, "archive placeholder\n");
-  return {
-    directory,
-    npm,
-    archive,
-    log: path.join(directory, "npm.log"),
-    output: path.join(directory, "proof.json"),
-  };
-}
-
-function baseEnvironment(fixtureDirectory, binary = goodBinary, overrides = {}) {
-  return {
-    ...process.env,
-    FAKE_VERSION: version,
-    FAKE_SOURCE_SHA: sourceSha,
-    FAKE_BINARY_B64: binary.toString("base64"),
-    FAKE_LOG: path.join(fixtureDirectory, "npm.log"),
-    ...overrides,
-  };
-}
-
-function verificationOptions(fixture, overrides = {}) {
-  return {
-    host: {platform: "linux", arch: "x64", libc: "glibc"},
-    npmCommand: fixture.npm,
-    runProcess: (command, args, options) => runReleaseProcess(command, args, {
-      ...options,
-      env: baseEnvironment(fixture.directory, overrides.binary ?? goodBinary, overrides.environment),
-    }),
-    verifyArchive: () => ({sha256: digestBytes(goodBinary)}),
-    ...overrides,
-  };
-}
-
-async function successful(mode = "exact", overrides = {}) {
-  const caseFixture = fixture();
-  try {
-    const proof = await verifyNativeChannel({
-      packageName: overrides.packageName ?? "hardgate-linux-x64",
-      version,
-      sourceSha,
-      archive: caseFixture.archive,
-      mode,
-      output: caseFixture.output,
-    }, verificationOptions(caseFixture, overrides));
-    return {fixture: caseFixture, proof};
-  } catch (error) {
-    fs.rmSync(caseFixture.directory, {recursive: true, force: true});
-    throw error;
-  }
-}
 
 const exact = await successful();
 try {
   assert.deepEqual(exact.proof, {
+    schema_version: 1,
     version,
     source_sha: sourceSha,
     mode: "exact",
     package: "hardgate-linux-x64",
+    archive: {name: "hardgate-linux-x64.tar.gz", sha256: digestFile(exact.fixture.archive)},
     consumer: {executable: "node_modules/hardgate-linux-x64/bin/hardgate", sha256: digestBytes(goodBinary)},
     wrapper: {executable: "node_modules/hardgate-linux-x64/bin/hardgate", sha256: digestBytes(goodBinary)},
   });
@@ -145,10 +49,28 @@ try {
     `hardgate-linux-x64@${version}`,
     `@tech-byte-frontier/hardgate@${version}`,
   ]);
-  assert.ok(calls.every(({hardgate}) => hardgate === null), "ambient HARDGATE_BINARY must not reach npm");
+  assert.ok(calls.every(({hardgate, nodeOptions, nodePath, tls, proxy}) => hardgate === null && nodeOptions === null && nodePath === null && tls === null && proxy === null), "ambient runtime overrides must not reach npm");
 } finally {
   fs.rmSync(exact.fixture.directory, {recursive: true, force: true});
 }
+
+const parsedWithoutWrapper = parseArgs([
+  "--package", "hardgate-linux-x64-musl",
+  "--version", version,
+  "--source-sha", sourceSha,
+  "--archive", "/tmp/hardgate-linux-x64-musl.tar.gz",
+  "--mode", "exact",
+  "--output", "/tmp/native-proof.json",
+]);
+assert.equal(parsedWithoutWrapper.wrapperSource, undefined, "wrapper source is optional outside the canonical wrapper case");
+assert.throws(() => parseArgs([
+  "--package", "__proto__",
+  "--version", version,
+  "--source-sha", sourceSha,
+  "--archive", "/tmp/__proto__.tar.gz",
+  "--mode", "exact",
+  "--output", "/tmp/native-proof.json",
+]), /six native packages/);
 
 const defaultRun = await successful("default");
 try {
@@ -167,8 +89,78 @@ const muslRun = await successful("exact", {
 try {
   const calls = fs.readFileSync(muslRun.fixture.log, "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(calls[0].force, true, "intentional musl install on glibc must use --force");
+  assert.equal(Object.hasOwn(muslRun.proof, "wrapper"), false, "musl consumer proof must not claim wrapper verification");
 } finally {
   fs.rmSync(muslRun.fixture.directory, {recursive: true, force: true});
+}
+
+const muslWrapperSource = fixture("hardgate-linux-x64-musl");
+try {
+  await assert.rejects(
+    verifyNativeChannel({
+      packageName: "hardgate-linux-x64-musl",
+      version,
+      sourceSha,
+      archive: muslWrapperSource.archive,
+      mode: "exact",
+      wrapperSource: muslWrapperSource.wrapperSource,
+    }, verificationOptions(muslWrapperSource)),
+    /only valid for the canonical/,
+  );
+  assert.equal(fs.existsSync(muslWrapperSource.log), false, "musl wrapper boundary must fail before npm");
+} finally {
+  fs.rmSync(muslWrapperSource.directory, {recursive: true, force: true});
+}
+
+const retryRun = await successful("exact", {
+  npmCommand: "retry",
+  policy: {attempts: 3, delayMs: 0, childMs: 2_000, deadline: performance.now() + 10_000},
+});
+try {
+  const calls = fs.readFileSync(retryRun.fixture.log, "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(calls.length, 2, "one transient npm error should be retried before wrapper verification");
+  assert.equal(fs.existsSync(`${retryRun.fixture.state}.retry`), true, "the transient npm failure must precede a successful retry");
+} finally {
+  fs.rmSync(retryRun.fixture.directory, {recursive: true, force: true});
+}
+
+const deadlineFixture = fixture();
+try {
+  await assert.rejects(
+    verifyNativeChannel({
+      packageName: "hardgate-linux-x64",
+      version,
+      sourceSha,
+      archive: deadlineFixture.archive,
+      mode: "exact",
+      wrapperSource: deadlineFixture.wrapperSource,
+    }, verificationOptions(deadlineFixture, {
+      npmCommand: "retry",
+      policy: {attempts: 3, delayMs: 100, childMs: 2_000, deadline: performance.now() + 20},
+    })),
+    /deadline/,
+    "retry backoff must honor the operation deadline",
+  );
+} finally {
+  fs.rmSync(deadlineFixture.directory, {recursive: true, force: true});
+}
+
+const missingWrapper = fixture();
+try {
+  await assert.rejects(
+    verifyNativeChannel({
+      packageName: "hardgate-linux-x64",
+      version,
+      sourceSha,
+      archive: missingWrapper.archive,
+      mode: "exact",
+      output: missingWrapper.output,
+    }, verificationOptions(missingWrapper)),
+    /wrapper-source is required/,
+  );
+  assert.equal(fs.existsSync(missingWrapper.log), false, "canonical wrapper source is checked before npm");
+} finally {
+  fs.rmSync(missingWrapper.directory, {recursive: true, force: true});
 }
 
 for (const [overrides, expected] of [
@@ -184,6 +176,7 @@ for (const [overrides, expected] of [
         sourceSha,
         archive: testFixture.archive,
         mode: "exact",
+        wrapperSource: testFixture.wrapperSource,
         output: testFixture.output,
       }, verificationOptions(testFixture, overrides)),
       expected,
@@ -212,6 +205,50 @@ try {
   fs.rmSync(unsupported.directory, {recursive: true, force: true});
 }
 
+assert.equal(detectHost({platform: "linux", arch: "x64", glibcVersion: null, sharedObjects: [], lddOutput: ""}).libc, null, "unknown Linux libc must remain unknown");
+const unknownLibc = fixture();
+try {
+  await assert.rejects(
+    verifyNativeChannel({
+      packageName: "hardgate-linux-x64",
+      version,
+      sourceSha,
+      archive: unknownLibc.archive,
+      mode: "exact",
+      output: unknownLibc.output,
+      wrapperSource: unknownLibc.wrapperSource,
+    }, verificationOptions(unknownLibc, {host: {platform: "linux", arch: "x64", libc: null}})),
+    /libc could not be identified/,
+  );
+} finally {
+  fs.rmSync(unknownLibc.directory, {recursive: true, force: true});
+}
+
+const symlinkArchive = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-native-channel-archive-test-"));
+try {
+  const archiveRoot = path.join(symlinkArchive, "hardgate-linux-x64");
+  fs.mkdirSync(archiveRoot, {recursive: true});
+  fs.writeFileSync(path.join(archiveRoot, "hardgate"), goodBinary, {mode: 0o755});
+  fs.chmodSync(path.join(archiveRoot, "hardgate"), 0o755);
+  fs.symlinkSync("hardgate", path.join(archiveRoot, "BUILD-METADATA.json"));
+  const archive = path.join(symlinkArchive, "hardgate-linux-x64.tar.gz");
+  const tar = spawnSync("/usr/bin/tar", ["-czf", archive, "-C", symlinkArchive, "hardgate-linux-x64"], {encoding: "utf8"});
+  assert.equal(tar.status, 0, tar.stderr);
+  await assert.rejects(
+    verifyNativeArchive({
+      archive,
+      packageName: "hardgate-linux-x64",
+      version,
+      sourceSha,
+      directory: path.join(symlinkArchive, "extract"),
+    }),
+    /bounded regular file/,
+    "archive metadata symlinks must be rejected before extraction",
+  );
+} finally {
+  fs.rmSync(symlinkArchive, {recursive: true, force: true});
+}
+
 const cleanupFailure = fixture();
 let cleanupPath;
 try {
@@ -222,6 +259,7 @@ try {
       sourceSha,
       archive: cleanupFailure.archive,
       mode: "exact",
+      wrapperSource: cleanupFailure.wrapperSource,
       output: cleanupFailure.output,
     }, verificationOptions(cleanupFailure, {
       cleanup: (directory) => {
@@ -238,11 +276,38 @@ try {
 }
 
 assert.throws(() => validateProof({
+  schema_version: 1,
   version,
   source_sha: sourceSha,
   mode: "exact",
   package: "hardgate-linux-x64",
+  archive: {name: "hardgate-linux-x64.tar.gz", sha256: digestBytes(goodBinary)},
   consumer: {executable: "../outside", sha256: digestBytes(goodBinary)},
 }), /normalized package-relative/);
+
+const strictProof = {
+  schema_version: 1,
+  version,
+  source_sha: sourceSha,
+  mode: "exact",
+  package: "hardgate-linux-x64",
+  archive: {name: "hardgate-linux-x64.tar.gz", sha256: digestBytes(goodBinary)},
+  consumer: {executable: "node_modules/hardgate-linux-x64/bin/hardgate", sha256: digestBytes(goodBinary)},
+};
+assert.throws(() => validateProof(strictProof), /wrapper is required/);
+assert.throws(() => validateProof({...strictProof, schema_version: 2, wrapper: strictProof.consumer}), /schema_version is unsupported/);
+assert.throws(() => validateProof({...strictProof, source_sha: `${sourceSha}abcdef`, wrapper: strictProof.consumer}), /40-character/);
+assert.throws(() => validateProof({...strictProof, archive: {...strictProof.archive, extra: true}, wrapper: strictProof.consumer}), /archive has unexpected fields/);
+
+assert.throws(() => validateProof({
+  schema_version: 1,
+  version,
+  source_sha: sourceSha,
+  mode: "exact",
+  package: "hardgate-linux-x64-musl",
+  archive: {name: "hardgate-linux-x64-musl.tar.gz", sha256: digestBytes(goodBinary)},
+  consumer: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
+  wrapper: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
+}), /only valid for the canonical/);
 
 console.log("native_channel_consumer.test: OK (host, exact/default specs, bytes, version, proof, cleanup)");

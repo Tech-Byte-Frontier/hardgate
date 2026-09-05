@@ -2,6 +2,7 @@
 "use strict";
 
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { compareReleaseTags } from "./release-order.mjs";
@@ -63,20 +64,39 @@ export const NATIVE_PACKAGES = Object.freeze({
   }),
 });
 
+const HOST_PACKAGE_RULES = [
+  ["linux", "x64", "glibc", "hardgate-linux-x64"],
+  ["linux", "x64", "musl", "hardgate-linux-x64-musl"],
+  ["linux", "arm64", "glibc", "hardgate-linux-arm64"],
+  ["linux", "arm64", "musl", "hardgate-linux-arm64-musl"],
+  ["darwin", "x64", null, "hardgate-darwin-x64"],
+  ["darwin", "arm64", null, "hardgate-darwin-arm64"],
+];
+
 export const WRAPPER_PACKAGE = "@tech-byte-frontier/hardgate";
 export const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/";
 export const PROOF_VERSION = 1;
 
-const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
-const HASH = /^[0-9a-f]{64}$/;
-const OPTION_NAMES = new Set(["package", "version", "source-sha", "archive", "mode", "output"]);
+const SHA = /^[0-9a-f]{40}$/;
+const OPTION_NAMES = new Set(["package", "version", "source-sha", "archive", "mode", "output", "wrapper-source"]);
 
 export function fail(message) {
   throw new Error(`verify-native-channel: ${message}`);
 }
 
+export function regularFile(file, label) {
+  let stats;
+  try {
+    stats = fs.lstatSync(file);
+  } catch (error) {
+    fail(`${label} cannot be read: ${error.message}`);
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) fail(`${label} must be a regular file`);
+  return stats;
+}
+
 export function packageDescriptor(packageName) {
-  const descriptor = NATIVE_PACKAGES[packageName];
+  const descriptor = Object.hasOwn(NATIVE_PACKAGES, packageName) ? NATIVE_PACKAGES[packageName] : undefined;
   if (!descriptor) fail(`--package must identify one of the six native packages, got ${packageName || "<missing>"}`);
   return descriptor;
 }
@@ -93,7 +113,7 @@ export function assertVersion(version, label = "version") {
 
 export function assertSourceSha(sourceSha, label = "source-sha") {
   if (typeof sourceSha !== "string" || !SHA.test(sourceSha)) {
-    fail(`${label} must be a lowercase 40- or 64-character hexadecimal source identity`);
+    fail(`${label} must be a lowercase 40-character hexadecimal source identity`);
   }
   return sourceSha;
 }
@@ -111,7 +131,7 @@ function optionValue(argv, index, name, inlineValue) {
   return value;
 }
 
-export function parseArgs(argv) {
+function parseOptionValues(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -124,7 +144,16 @@ export function parseArgs(argv) {
     values[rawName] = optionValue(argv, index, `--${rawName}`, inlineValue);
     if (inlineValue === undefined) index += 1;
   }
-  for (const name of OPTION_NAMES) if (!Object.hasOwn(values, name)) fail(`--${name} is required`);
+  return values;
+}
+
+function requireOptions(values) {
+  for (const name of OPTION_NAMES) {
+    if (name !== "wrapper-source" && !Object.hasOwn(values, name)) fail(`--${name} is required`);
+  }
+}
+
+function normalizedArgs(values) {
   const packageName = packageDescriptor(values.package).name;
   const version = assertVersion(values.version);
   const sourceSha = assertSourceSha(values["source-sha"]);
@@ -133,25 +162,60 @@ export function parseArgs(argv) {
   const output = path.resolve(values.output);
   if (archive === output) fail("--archive and --output must identify different files");
   if (archive.includes("\0") || output.includes("\0")) fail("paths cannot contain NUL bytes");
-  return { packageName, version, sourceSha, archive, mode, output };
+  const wrapperSource = values["wrapper-source"] === undefined ? undefined : path.resolve(values["wrapper-source"]);
+  if (wrapperSource?.includes("\0")) fail("--wrapper-source cannot contain NUL bytes");
+  return { packageName, version, sourceSha, archive, mode, output, wrapperSource };
 }
 
-export function detectHost({ platform = process.platform, arch = process.arch, glibcVersion } = {}) {
+export function parseArgs(argv) {
+  const values = parseOptionValues(argv);
+  requireOptions(values);
+  return normalizedArgs(values);
+}
+
+function linuxLibcEvidence({ glibcVersion, sharedObjects, lddOutput } = {}) {
+  if (typeof glibcVersion === "string" && glibcVersion.trim()) return "glibc";
+  if (Array.isArray(sharedObjects) && sharedObjects.some((value) => /(?:^|[\\/])(?:ld-musl-|libc\.musl-)/i.test(String(value)))) return "musl";
+  if (typeof lddOutput === "string") {
+    if (/\bmusl\b/i.test(lddOutput)) return "musl";
+    if (/(?:\bglibc\b|GNU C Library|ldd \([^)]*GLIBC)/i.test(lddOutput)) return "glibc";
+    return null;
+  }
+  const result = spawnSync("/usr/bin/ldd", ["--version"], {
+    encoding: "utf8",
+    timeout: 1_000,
+    killSignal: "SIGKILL",
+    env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` },
+    maxBuffer: 64 * 1024,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  if (/\bmusl\b/i.test(output)) return "musl";
+  if (/(?:\bglibc\b|GNU C Library|ldd \([^)]*GLIBC)/i.test(output)) return "glibc";
+  return null;
+}
+
+export function detectHost({ platform = process.platform, arch = process.arch, glibcVersion, sharedObjects, lddOutput } = {}) {
   if (platform !== "linux") return { platform, arch, libc: null };
   let runtimeGlibc = glibcVersion;
+  let runtimeSharedObjects = sharedObjects;
   if (runtimeGlibc === undefined) {
     try {
-      runtimeGlibc = process.report?.getReport?.().header?.glibcVersionRuntime;
+      const report = process.report?.getReport?.();
+      runtimeGlibc = report?.header?.glibcVersionRuntime;
+      runtimeSharedObjects ??= report?.sharedObjects;
     } catch {
       runtimeGlibc = null;
     }
   }
-  return { platform, arch, libc: typeof runtimeGlibc === "string" && runtimeGlibc.trim() ? "glibc" : "musl" };
+  return { platform, arch, libc: linuxLibcEvidence({ glibcVersion: runtimeGlibc, sharedObjects: runtimeSharedObjects, lddOutput }) };
 }
 
 export function assertHostSupports(descriptor, host) {
   if (!host || host.platform !== descriptor.platform || host.arch !== descriptor.arch) {
     fail(`${descriptor.name} cannot run on ${host?.platform ?? "unknown"}/${host?.arch ?? "unknown"}`);
+  }
+  if (descriptor.platform === "linux" && host.libc !== "glibc" && host.libc !== "musl") {
+    fail(`Linux libc could not be identified for ${host.platform}/${host.arch}`);
   }
   if (descriptor.platform === "linux" && descriptor.libc === "glibc" && host.libc !== "glibc") {
     fail(`${descriptor.name} requires glibc on a ${host.libc ?? "unknown"} host`);
@@ -164,13 +228,9 @@ export function wrapperHost(host) {
 }
 
 export function hostNativePackage(host) {
-  if (host?.platform === "linux" && host?.arch === "x64" && host?.libc === "glibc") return "hardgate-linux-x64";
-  if (host?.platform === "linux" && host?.arch === "x64" && host?.libc === "musl") return "hardgate-linux-x64-musl";
-  if (host?.platform === "linux" && host?.arch === "arm64" && host?.libc === "glibc") return "hardgate-linux-arm64";
-  if (host?.platform === "linux" && host?.arch === "arm64" && host?.libc === "musl") return "hardgate-linux-arm64-musl";
-  if (host?.platform === "darwin" && host?.arch === "x64") return "hardgate-darwin-x64";
-  if (host?.platform === "darwin" && host?.arch === "arm64") return "hardgate-darwin-arm64";
-  return null;
+  return HOST_PACKAGE_RULES.find(([platform, arch, libc]) => (
+    host?.platform === platform && host?.arch === arch && (libc === null || host?.libc === libc)
+  ))?.[3] ?? null;
 }
 
 export function needsNpmForce(descriptor, host) {
@@ -182,21 +242,35 @@ export function npmPackageSpec(packageName, version, mode) {
   return `${packageName}@${mode === "exact" ? version : "latest"}`;
 }
 
-export function sanitizedEnvironment(source = process.env) {
+export function restrictedPath() {
+  return `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+}
+
+export function nodeNpmPath() {
+  const candidate = path.join(path.dirname(process.execPath), "npm");
+  if (!fs.existsSync(candidate)) fail(`npm is missing from the Node prefix: ${candidate}`);
+  return candidate;
+}
+
+export function sanitizedEnvironment(source = process.env, { pathValue } = {}) {
   const result = { ...source };
   for (const key of Object.keys(result)) {
     const lower = key.toLowerCase();
     if (
       lower.startsWith("npm_config_") ||
-      /(?:token|secret|password|credential|authorization|auth|private[_-]?key|github)/i.test(key)
+      /(?:token|secret|password|credential|authorization|auth|private[_-]?key|github|proxy)/i.test(key)
     ) {
       delete result[key];
     }
   }
   delete result.HARDGATE_BINARY;
   delete result.HARDGATE_LAUNCHER_DEPTH;
-  delete result.NPM_CONFIG_USERCONFIG;
-  delete result.npm_config_userconfig;
+  delete result.NODE_OPTIONS;
+  delete result.NODE_PATH;
+  delete result.NODE_TLS_REJECT_UNAUTHORIZED;
+  delete result.TAR_OPTIONS;
+  delete result.tar_options;
+  result.PATH = pathValue ?? restrictedPath();
   return result;
 }
 
@@ -235,97 +309,6 @@ export function assertStableExecutablePath(executable, label = "executable") {
   return executable;
 }
 
-function assertHash(value, label) {
-  if (typeof value !== "string" || !HASH.test(value)) fail(`${label} must be 64 lowercase hexadecimal characters`);
-  return value;
-}
-
-function assertProofConsumer(value, label) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`);
-  const keys = Object.keys(value).sort();
-  if (keys.join("\n") !== ["executable", "sha256"].join("\n")) fail(`${label} has unexpected fields`);
-  return {
-    executable: assertStableExecutablePath(value.executable, `${label}.executable`),
-    sha256: assertHash(value.sha256, `${label}.sha256`),
-  };
-}
-
-export function validateProof(proof) {
-  if (proof === null || typeof proof !== "object" || Array.isArray(proof)) fail("proof must be an object");
-  const keys = Object.keys(proof).sort();
-  const expected = ["consumer", "mode", "package", "source_sha", "version"];
-  const withWrapper = [...expected, "wrapper"].sort();
-  if (keys.join("\n") !== expected.sort().join("\n") && keys.join("\n") !== withWrapper.join("\n")) {
-    fail("proof has unexpected fields");
-  }
-  const packageName = packageDescriptor(proof.package).name;
-  const version = assertVersion(proof.version);
-  const sourceSha = assertSourceSha(proof.source_sha, "proof.source_sha");
-  const mode = assertMode(proof.mode);
-  const result = {
-    version,
-    source_sha: sourceSha,
-    mode,
-    package: packageName,
-    consumer: assertProofConsumer(proof.consumer, "proof.consumer"),
-  };
-  if (Object.hasOwn(proof, "wrapper")) result.wrapper = assertProofConsumer(proof.wrapper, "proof.wrapper");
-  return result;
-}
-
-function writableTarget(target) {
-  try {
-    const stats = fs.lstatSync(target);
-    if (stats.isSymbolicLink() || !stats.isFile()) fail("--output must identify a regular file");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-}
-
-function syncDirectory(directory) {
-  try {
-    const descriptor = fs.openSync(directory, "r");
-    try {
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-  } catch (error) {
-    if (![
-      "EINVAL",
-      "ENOTSUP",
-      "EISDIR",
-    ].includes(error.code)) throw error;
-  }
-}
-
-export function writeProofAtomic(output, proof) {
-  const target = path.resolve(output);
-  const checked = validateProof(proof);
-  const directory = path.dirname(target);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writableTarget(target);
-  const temporary = path.join(directory, `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(12).toString("hex")}.tmp`);
-  const bytes = Buffer.from(`${JSON.stringify(checked, null, 2)}\n`, "utf8");
-  let descriptor;
-  try {
-    descriptor = fs.openSync(temporary, "wx", 0o600);
-    fs.writeFileSync(descriptor, bytes);
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = undefined;
-    writableTarget(target);
-    fs.renameSync(temporary, target);
-    fs.chmodSync(target, 0o600);
-    syncDirectory(directory);
-  } catch (error) {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-    try {
-      fs.unlinkSync(temporary);
-    } catch (cleanupError) {
-      if (cleanupError.code !== "ENOENT") throw error;
-    }
-    throw error;
-  }
-  return checked;
-}
+// Preserve the original support-module API while proof durability lives in
+// its bounded helper module.
+export { validateProof, writeProofAtomic } from "./native-channel-proof.mjs";
