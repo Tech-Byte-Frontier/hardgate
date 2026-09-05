@@ -7,14 +7,17 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 export const WRAPPER_NAME = "@tech-byte-frontier/hardgate";
-export const PLATFORM_PACKAGES = [
-  "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
+// Keep this contract aligned with scripts/verify-npm-publication.mjs, which is
+// the release verifier's authoritative platform map.
+export const PLATFORM_CONTRACT = [
+  { name: "hardgate-linux-x64", os: ["linux"], cpu: ["x64"], libc: ["glibc"] },
+  { name: "hardgate-linux-x64-musl", os: ["linux"], cpu: ["x64"], libc: ["musl"] },
+  { name: "hardgate-linux-arm64", os: ["linux"], cpu: ["arm64"], libc: ["glibc"] },
+  { name: "hardgate-linux-arm64-musl", os: ["linux"], cpu: ["arm64"], libc: ["musl"] },
+  { name: "hardgate-darwin-x64", os: ["darwin"], cpu: ["x64"] },
+  { name: "hardgate-darwin-arm64", os: ["darwin"], cpu: ["arm64"] },
 ];
+export const PLATFORM_PACKAGES = PLATFORM_CONTRACT.map(({ name }) => name);
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_UNPACKED_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -105,6 +108,8 @@ function archiveEntries(archiveBytes, archivePath, budget) {
   budget.unpacked += bytes.length;
   if (budget.unpacked > MAX_TOTAL_UNPACKED_BYTES) fail(`npm archives exceed ${MAX_TOTAL_UNPACKED_BYTES} unpacked bytes`);
   const entries = new Map();
+  const entryModes = new Map();
+  const seen = new Set();
   for (let offset = 0; offset + 512 <= bytes.length; ) {
     const header = bytes.subarray(offset, offset + 512);
     if (header.every((value) => value === 0)) break;
@@ -113,6 +118,17 @@ function archiveEntries(archiveBytes, archivePath, budget) {
     const name = tarString(header, 0, 100);
     const prefix = tarString(header, 345, 155);
     const member = prefix ? `${prefix}/${name}` : name;
+    if (!member || member.startsWith("/") || member.includes("\0") || member.includes("\\")) {
+      fail(`npm archive member path is unsafe: ${JSON.stringify(member)}`);
+    }
+    const segments = member.split("/");
+    if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+      fail(`npm archive member path is not canonical: ${member}`);
+    }
+    const normalized = path.posix.normalize(member);
+    if (normalized !== member) fail(`npm archive member path is not canonical: ${member}`);
+    if (seen.has(normalized)) fail(`npm archive contains duplicate member: ${normalized}`);
+    seen.add(normalized);
     const size = tarNumber(header, 124, 12);
     if (size > MAX_MEMBER_BYTES) fail(`npm archive member exceeds ${MAX_MEMBER_BYTES} bytes: ${member}`);
     budget.memberBytes += size;
@@ -120,10 +136,14 @@ function archiveEntries(archiveBytes, archivePath, budget) {
     const start = offset + 512;
     const end = start + size;
     if (end > bytes.length) fail(`npm archive member exceeds archive length: ${member}`);
-    if (member && !entries.has(member)) entries.set(member, Buffer.from(bytes.subarray(start, end)));
+    const type = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+    if (type !== "0" && type !== "5") fail(`npm archive member has unsupported type ${JSON.stringify(type)}: ${member}`);
+    entryModes.set(member, tarNumber(header, 100, 8));
+    if (type === "0") entries.set(member, Buffer.from(bytes.subarray(start, end)));
+    else if (size !== 0) fail(`npm archive directory has contents: ${member}`);
     offset = start + Math.ceil(size / 512) * 512;
   }
-  return entries;
+  return { entries, entryModes };
 }
 
 function archiveManifest(entries, archivePath) {
@@ -190,8 +210,8 @@ function readArtifact(archivePath, directory, expectedVersion, budget) {
   budget.compressed += stat.size;
   if (budget.compressed > MAX_TOTAL_ARCHIVE_BYTES) fail(`npm archives exceed ${MAX_TOTAL_ARCHIVE_BYTES} compressed bytes`);
   const archiveBytes = readBoundedFile(archivePath, "npm archive", MAX_ARCHIVE_BYTES);
-  const entries = archiveEntries(archiveBytes, archivePath, budget);
-  const manifest = archiveManifest(entries, archivePath);
+  const archive = archiveEntries(archiveBytes, archivePath, budget);
+  const manifest = archiveManifest(archive.entries, archivePath);
   const name = requiredString(manifest.name, `archive ${archivePath} manifest.name`);
   if (name !== WRAPPER_NAME && !PLATFORM_PACKAGES.includes(name)) fail(`unsupported npm package in --packages-dir: ${name}`);
   if (manifest.version !== expectedVersion) fail(`${name} archive version ${manifest.version} does not match --version ${expectedVersion}`);
@@ -207,7 +227,8 @@ function readArtifact(archivePath, directory, expectedVersion, budget) {
     archiveSha256: sha256(archiveBytes),
     shasum: sha1(archiveBytes),
     integrity: integrity(archiveBytes),
-    entries,
+    entries: archive.entries,
+    entryModes: archive.entryModes,
     manifest,
   };
 }
@@ -238,10 +259,38 @@ function validateManifestContract(manifest) {
   }
 }
 
+function exactManifestArray(manifest, field, expected, packageName) {
+  const actual = manifest[field];
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(`${packageName} manifest ${field}=${JSON.stringify(actual)} expected ${JSON.stringify(expected)}`);
+  }
+}
+
+function validatePlatformArtifact({ artifact, descriptor, expectedVersion }) {
+  if (!artifact) fail(`--packages-dir is missing ${descriptor.name}@${expectedVersion}`);
+  const nativeBytes = artifact.entries.get("package/bin/hardgate");
+  if (!nativeBytes) fail(`${descriptor.name}@${expectedVersion}.tgz is missing package/bin/hardgate`);
+  if (nativeBytes.length === 0) fail(`${descriptor.name} package/bin/hardgate is empty`);
+  const nativeMode = artifact.entryModes.get("package/bin/hardgate");
+  if ((nativeMode & 0o111) === 0) fail(`${descriptor.name} package/bin/hardgate is not executable in the archive`);
+  exactManifestArray(artifact.manifest, "os", descriptor.os, descriptor.name);
+  exactManifestArray(artifact.manifest, "cpu", descriptor.cpu, descriptor.name);
+  exactManifestArray(artifact.manifest, "libc", descriptor.libc, descriptor.name);
+  if (Object.hasOwn(artifact.manifest, "optionalDependencies")) {
+    fail(`${descriptor.name} must not declare optionalDependencies`);
+  }
+  validateManifestContract(artifact.manifest);
+  return nativeBytes;
+}
+
 function validateWrapper(wrapper, expectedVersion) {
   if (!wrapper) fail(`--packages-dir is missing ${WRAPPER_NAME}@${expectedVersion}.tgz`);
   const launcherBytes = wrapper.entries.get("package/bin/hardgate.js");
   if (!launcherBytes) fail(`${WRAPPER_NAME}@${expectedVersion}.tgz is missing package/bin/hardgate.js`);
+  const bin = wrapper.manifest.bin;
+  if (!bin || typeof bin !== "object" || Array.isArray(bin) || Object.keys(bin).length !== 1 || bin.hardgate !== "bin/hardgate.js") {
+    fail(`${WRAPPER_NAME} manifest bin.hardgate must be exactly bin/hardgate.js`);
+  }
   const optional = wrapper.manifest.optionalDependencies ?? {};
   const expectedNames = [...PLATFORM_PACKAGES].sort();
   if (JSON.stringify(Object.keys(optional).sort()) !== JSON.stringify(expectedNames)) {
@@ -255,16 +304,9 @@ function validateWrapper(wrapper, expectedVersion) {
 
 function validateHost({ hostArtifact, host, expectedBytes, expectedHash, expectedVersion }) {
   if (!hostArtifact) fail(`--packages-dir is missing host optional dependency ${host}@${expectedVersion}`);
-  const nativeBytes = hostArtifact.entries.get("package/bin/hardgate");
-  if (!nativeBytes) fail(`${host}@${expectedVersion}.tgz is missing package/bin/hardgate`);
+  const descriptor = PLATFORM_CONTRACT.find((candidate) => candidate.name === host);
+  const nativeBytes = validatePlatformArtifact({ artifact: hostArtifact, descriptor, expectedVersion });
   if (!nativeBytes.equals(expectedBytes)) fail(`${host} archive binary bytes do not match --binary (expected sha256 ${expectedHash})`);
-  if ((hostArtifact.manifest.os ?? []).length === 0 || (hostArtifact.manifest.cpu ?? []).length === 0) {
-    fail(`${host} manifest must declare os and cpu constraints`);
-  }
-  if (Object.hasOwn(hostArtifact.manifest, "optionalDependencies")) {
-    fail(`${host} must not declare optionalDependencies`);
-  }
-  validateManifestContract(hostArtifact.manifest);
 }
 
 export function inspectPackedArtifacts(packagesDir, version, binaryPath) {
@@ -284,6 +326,16 @@ export function inspectPackedArtifacts(packagesDir, version, binaryPath) {
   const host = hostPlatformPackage();
   if (!host) fail(`unsupported consumer platform ${process.platform}/${process.arch}`);
   validateHost({ hostArtifact: artifacts.get(host), host, expectedBytes, expectedHash, expectedVersion });
+  const expectedNames = new Set([WRAPPER_NAME, ...PLATFORM_PACKAGES]);
+  const missingNames = [...expectedNames].filter((name) => !artifacts.has(name));
+  const extraNames = [...artifacts.keys()].filter((name) => !expectedNames.has(name));
+  if (missingNames.length > 0 || extraNames.length > 0 || artifacts.size !== expectedNames.size) {
+    const missingLabel = missingNames.map((name) => `${name}@${expectedVersion}`).join(", ") || "none";
+    fail(`--packages-dir must contain exactly the wrapper and six platform archives (missing: ${missingLabel}; extra: ${extraNames.join(", ") || "none"})`);
+  }
+  for (const descriptor of PLATFORM_CONTRACT) {
+    if (descriptor.name !== host) validatePlatformArtifact({ artifact: artifacts.get(descriptor.name), descriptor, expectedVersion });
+  }
   return { expectedBinary, expectedBytes, expectedHash, expectedVersion, host, wrapperLauncherBytes, artifacts };
 }
 

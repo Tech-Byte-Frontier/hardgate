@@ -8,6 +8,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -92,7 +93,7 @@ function makeFixtureArchives() {
   return { packagesDir, nativeBinary };
 }
 
-function packModified(sourceName, label, mutate) {
+function packModified(sourceName, label, mutate, mutateFiles = () => {}) {
   const packageDirectory = path.join(fixtureRoot, `bad-${label}`);
   const packagesDir = path.join(fixtureRoot, `bad-${label}-packages`);
   fs.cpSync(path.join(fixtureRoot, sourceName), packageDirectory, { recursive: true });
@@ -100,6 +101,7 @@ function packModified(sourceName, label, mutate) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   mutate(manifest);
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  mutateFiles(packageDirectory);
   fs.mkdirSync(packagesDir, { recursive: true });
   run("npm", ["pack", "--json", "--loglevel=error", "--pack-destination", packagesDir], {
     cwd: packageDirectory,
@@ -110,6 +112,40 @@ function packModified(sourceName, label, mutate) {
     if (!modifiedArchives.has(archive)) fs.copyFileSync(path.join(fixtureRoot, "packages", archive), path.join(packagesDir, archive));
   }
   return packagesDir;
+}
+
+function makeDuplicateManifestArchives() {
+  const packagesDir = path.join(fixtureRoot, "duplicate-manifest-packages");
+  fs.mkdirSync(packagesDir, { recursive: true });
+  for (const archive of fs.readdirSync(path.join(fixtureRoot, "packages")).filter((name) => name.endsWith(".tgz"))) {
+    fs.copyFileSync(path.join(fixtureRoot, "packages", archive), path.join(packagesDir, archive));
+  }
+  const wrapperArchive = fs.readdirSync(packagesDir).find((name) => name.endsWith(".tgz") && !/^hardgate-(?:linux|darwin)-/.test(name));
+  assert.ok(wrapperArchive, "fixture wrapper archive must be present");
+  const tarPath = path.join(fixtureRoot, "duplicate-manifest.tar");
+  const duplicateRoot = path.join(fixtureRoot, "duplicate-manifest");
+  const marker = path.join(fixtureRoot, "duplicate-hook-ran");
+  fs.writeFileSync(tarPath, zlib.gunzipSync(fs.readFileSync(path.join(packagesDir, wrapperArchive))));
+  fs.mkdirSync(path.join(duplicateRoot, "package"), { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "hardgate", "package.json"), "utf8"));
+  manifest.scripts = { ...(manifest.scripts ?? {}), postinstall: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran')"` };
+  fs.writeFileSync(path.join(duplicateRoot, "package", "package.json"), JSON.stringify(manifest) + "\n");
+  run("tar", ["-rf", tarPath, "-C", duplicateRoot, "package/package.json"]);
+  fs.writeFileSync(path.join(packagesDir, wrapperArchive), zlib.gzipSync(fs.readFileSync(tarPath)));
+  return { packagesDir, marker };
+}
+
+function makeUnsafeArchive() {
+  const directory = path.join(fixtureRoot, "unsafe-member");
+  fs.mkdirSync(directory, { recursive: true });
+  const source = fs.readdirSync(path.join(fixtureRoot, "packages")).find((name) => name.endsWith(".tgz"));
+  assert.ok(source, "fixture archive must be present");
+  const tar = zlib.gunzipSync(fs.readFileSync(path.join(fixtureRoot, "packages", source)));
+  const unsafe = Buffer.from("package//unsafe");
+  tar.fill(0, 0, 100);
+  unsafe.copy(tar, 0);
+  fs.writeFileSync(path.join(directory, "unsafe.tgz"), zlib.gzipSync(tar));
+  return directory;
 }
 
 function httpStatus(url) {
@@ -232,6 +268,52 @@ try {
   await assert.rejects(
     checkPackedConsumers({ packagesDir: badHook, binary: fixture.nativeBinary, version: "0.5.0" }),
     /must not declare npm lifecycle hook postinstall/,
+  );
+
+  const badDescriptor = packModified("hardgate-darwin-x64", "descriptor", (manifest) => {
+    manifest.cpu = ["arm64"];
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: badDescriptor, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /hardgate-darwin-x64 manifest cpu=\["arm64"\] expected \["x64"\]/,
+  );
+
+  const missingNative = packModified("hardgate-darwin-x64", "missing-native", () => {}, (packageDirectory) => {
+    fs.rmSync(path.join(packageDirectory, "bin", "hardgate"));
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: missingNative, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /hardgate-darwin-x64@0\.5\.0\.tgz is missing package\/bin\/hardgate/,
+  );
+
+  const badBin = packModified("hardgate", "bin", (manifest) => {
+    manifest.bin.hardgate = "bin/other.js";
+  });
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: badBin, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /manifest bin\.hardgate must be exactly bin\/hardgate\.js/,
+  );
+
+  const missingNonHost = path.join(fixtureRoot, "missing-non-host");
+  fs.mkdirSync(missingNonHost);
+  for (const name of archiveFiles) {
+    if (!name.startsWith("hardgate-darwin-x64-0.5.0")) fs.copyFileSync(path.join(fixture.packagesDir, name), path.join(missingNonHost, name));
+  }
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: missingNonHost, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /missing: .*hardgate-darwin-x64@0\.5\.0/,
+  );
+
+  const duplicate = makeDuplicateManifestArchives();
+  await assert.rejects(
+    checkPackedConsumers({ packagesDir: duplicate.packagesDir, binary: fixture.nativeBinary, version: "0.5.0" }),
+    /duplicate member: package\/package\.json/,
+  );
+  assert.equal(fs.existsSync(duplicate.marker), false, "duplicate manifest hook must not execute");
+
+  assert.throws(
+    () => inspectPackedArtifacts(makeUnsafeArchive(), "0.5.0", fixture.nativeBinary),
+    /member path is not canonical/,
   );
 
   const inspected = inspectPackedArtifacts(fixture.packagesDir, "0.5.0", fixture.nativeBinary);

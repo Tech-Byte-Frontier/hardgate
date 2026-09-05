@@ -173,6 +173,24 @@ function installedPackageBinary(root, packageName, from) {
   return { ...packageManifest, binary: installedPath(root, binary, `installed ${packageName} binary`) };
 }
 
+function wrapperBinTarget(root, entry, launcher) {
+  const resolved = fs.realpathSync(entry);
+  if (resolved === launcher) return resolved;
+  let shim;
+  try {
+    shim = fs.readFileSync(entry, "utf8");
+  } catch (error) {
+    fail(`installed wrapper .bin entry cannot be read: ${entry} (${error.message})`);
+  }
+  const target = shim.match(/^# cmd-shim-target=(.+)$/m)?.[1]?.trim();
+  if (!target) fail(`installed wrapper .bin entry does not resolve to checked wrapper launcher: ${entry}`);
+  const resolvedTarget = installedPath(root, target, "installed wrapper .bin target");
+  if (resolvedTarget !== launcher) {
+    fail(`installed wrapper .bin target resolves to ${resolvedTarget}; expected ${launcher}`);
+  }
+  return resolvedTarget;
+}
+
 function withEnvironment(environment, operation) {
   const previous = { ...process.env };
   try {
@@ -240,6 +258,7 @@ export async function installAndVerify({ manager, root, registry, version, host,
   if (installedHash !== expectedHash) fail(`${manager} resolved ${host} digest ${installedHash} does not match expected ${expectedHash}`);
   const wrapperBinary = path.join(root, "node_modules", ".bin", "hardgate");
   const installedWrapperBinary = installedPath(root, wrapperBinary, `${manager} installed wrapper .bin entry`);
+  wrapperBinTarget(root, installedWrapperBinary, installedLauncher);
   let wrapperStat;
   try {
     wrapperStat = fs.statSync(installedWrapperBinary);
