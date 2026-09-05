@@ -5,7 +5,7 @@ use hardgate::commands::init::{cmd_init, cmd_init_with_options};
 use hardgate::config::{HardgateConfig, Preset};
 use std::fs;
 use std::path::Path;
-use support::{load_written, options, with_root};
+use support::{assert_commands, load_written, options, with_root};
 
 fn write(root: &Path, name: &str, content: &str) {
     fs::write(root.join(name), content).unwrap();
@@ -81,6 +81,31 @@ fn malformed_and_unsupported_javascript_metadata_stays_unconfigured() {
         |_, config, content| {
             assert_unconfigured(config, content, "");
             assert!(config.orchestration.test_cmd.is_none());
+        },
+    );
+}
+
+#[test]
+fn javascript_package_scripts_supply_all_orchestration_commands() {
+    balanced_case(
+        "javascript-package-scripts",
+        |root| {
+            write(
+                root,
+                "package.json",
+                r#"{"packageManager":"npm@10","scripts":{"format:check":"format-check","format":"format","lint":"lint","test":"test"}}"#,
+            )
+        },
+        |_, config, _| {
+            assert_commands(
+                config,
+                [
+                    "npm run format:check",
+                    "npm run format",
+                    "npm run lint",
+                    "npm run test",
+                ],
+            );
         },
     );
 }
