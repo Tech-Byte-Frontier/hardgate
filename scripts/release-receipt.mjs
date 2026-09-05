@@ -26,6 +26,9 @@ import {
   validateReceipt,
 } from "./release-receipt-validation.mjs";
 
+const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+const READ_CHUNK_BYTES = 64 * 1024;
+
 export {
   CHANNELS,
   MAX_RECEIPT_BYTES,
@@ -70,32 +73,40 @@ function assertOperationObject(value, keys, label) {
   assertExactKeys(value, keys, label);
 }
 
+function commitReceipt(receipt, proposed) {
+  Object.assign(receipt, proposed);
+  return receipt;
+}
+
 export function recordTransition(receipt, operation) {
   validateReceipt(receipt);
   assertOperationObject(operation, ["channel", "from", "to", "evidence"], "transition");
   const channelName = assertChannelName(operation.channel);
-  const evidence = validateEvidence(operation.evidence, receipt.identity);
   const channel = receipt.channels[channelName];
+  const destination = nextState(operation.from);
+  const evidence = validateEvidence(operation.evidence, receipt.identity, "transition.evidence", operation.to);
   const existing = channel.events.find((event) => event.type === "transition" && event.from === operation.from && event.to === operation.to);
   if (existing) {
     if (!isDeepStrictEqual(existing.evidence, evidence)) fail("replayed transition evidence does not match the recorded evidence");
     return receipt;
   }
   if (operation.from !== channel.state) fail("transition source state does not match the channel state");
-  if (operation.to !== nextState(operation.from)) fail("transition must advance exactly one state");
-  channel.events.push({ type: "transition", from: operation.from, to: operation.to, evidence: clone(evidence) });
-  channel.state = operation.to;
-  receipt.complete = completeFromChannels(receipt.channels);
-  validateReceipt(receipt);
-  return receipt;
+  if (operation.to !== destination) fail("transition must advance exactly one state");
+  const proposed = clone(receipt);
+  proposed.channels[channelName].events.push({ type: "transition", from: operation.from, to: operation.to, evidence: clone(evidence) });
+  proposed.channels[channelName].state = operation.to;
+  proposed.complete = completeFromChannels(proposed.channels);
+  validateReceipt(proposed);
+  return commitReceipt(receipt, proposed);
 }
 
 export function recordFailure(receipt, operation) {
   validateReceipt(receipt);
   const { channel: channelName, ...failure } = validateFailureOperation(operation, receipt);
-  receipt.channels[channelName].events.push({ type: "failure", ...failure });
-  validateReceipt(receipt);
-  return receipt;
+  const proposed = clone(receipt);
+  proposed.channels[channelName].events.push({ type: "failure", ...failure });
+  validateReceipt(proposed);
+  return commitReceipt(receipt, proposed);
 }
 
 export function receiptComplete(receipt) {
@@ -230,28 +241,98 @@ function parseReceiptBytes(bytes, expectedIdentity, target) {
   return value;
 }
 
+function assertRegularFile(stats) {
+  if (!stats.isFile()) fail("receipt path must be a regular file");
+}
+
 function assertReadableTargetSync(target) {
   const stats = fs.lstatSync(target);
   if (stats.isSymbolicLink()) fail("refusing to read a symbolic-link receipt path");
-  if (!stats.isFile()) fail("receipt path must be a regular file");
-  if (stats.size > MAX_RECEIPT_BYTES) fail("receipt exceeds the JSON size limit");
+  assertRegularFile(stats);
 }
 
 async function assertReadableTarget(target) {
   const stats = await fs.promises.lstat(target);
   if (stats.isSymbolicLink()) fail("refusing to read a symbolic-link receipt path");
-  if (!stats.isFile()) fail("receipt path must be a regular file");
-  if (stats.size > MAX_RECEIPT_BYTES) fail("receipt exceeds the JSON size limit");
+  assertRegularFile(stats);
+}
+
+function openReadableSync(target) {
+  try {
+    return fs.openSync(target, READ_FLAGS);
+  } catch (error) {
+    if (error.code === "ELOOP") fail("refusing to read a symbolic-link receipt path");
+    throw error;
+  }
+}
+
+async function openReadable(target) {
+  try {
+    return await fs.promises.open(target, READ_FLAGS);
+  } catch (error) {
+    if (error.code === "ELOOP") fail("refusing to read a symbolic-link receipt path");
+    throw error;
+  }
+}
+
+function createBoundedReader() {
+  const chunks = [];
+  let total = 0;
+  return {
+    chunk() {
+      return Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, MAX_RECEIPT_BYTES + 1 - total));
+    },
+    append(chunk, bytesRead) {
+      if (bytesRead === 0) return false;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+      if (total > MAX_RECEIPT_BYTES) fail("receipt exceeds the JSON size limit");
+      return true;
+    },
+    result() {
+      return Buffer.concat(chunks, total);
+    },
+  };
+}
+
+function readBoundedSync(descriptor) {
+  const reader = createBoundedReader();
+  while (true) {
+    const chunk = reader.chunk();
+    const bytesRead = fs.readSync(descriptor, chunk, 0, chunk.length, null);
+    if (!reader.append(chunk, bytesRead)) return reader.result();
+  }
+}
+
+async function readBounded(handle) {
+  const reader = createBoundedReader();
+  while (true) {
+    const chunk = reader.chunk();
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (!reader.append(chunk, bytesRead)) return reader.result();
+  }
 }
 
 export function readReceipt(filePath, expectedIdentity) {
   const target = resolvedReceiptPath(filePath);
   assertReadableTargetSync(target);
-  return parseReceiptBytes(fs.readFileSync(target), expectedIdentity, target);
+  const descriptor = openReadableSync(target);
+  try {
+    assertRegularFile(fs.fstatSync(descriptor));
+    return parseReceiptBytes(readBoundedSync(descriptor), expectedIdentity, target);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 export async function readReceiptAsync(filePath, expectedIdentity) {
   const target = resolvedReceiptPath(filePath);
   await assertReadableTarget(target);
-  return parseReceiptBytes(await fs.promises.readFile(target), expectedIdentity, target);
+  const handle = await openReadable(target);
+  try {
+    assertRegularFile(await handle.stat());
+    return parseReceiptBytes(await readBounded(handle), expectedIdentity, target);
+  } finally {
+    await handle.close();
+  }
 }

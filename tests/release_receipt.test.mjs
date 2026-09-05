@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   CHANNELS,
+  MAX_RECEIPT_BYTES,
   RECEIPT_STATES,
   REQUIRED_CHANNELS,
   createReceipt,
@@ -42,12 +43,15 @@ const identity = {
   ],
 };
 
-const evidence = (receipt, hash = h64("9")) => ({
-  version: receipt.identity.version,
-  source_sha: receipt.identity.source_sha,
-  archives: clone(receipt.identity.archives),
-  consumer: { executable: "hardgate", sha256: hash },
-});
+const evidence = (receipt, hash = h64("9"), includeConsumer = true) => {
+  const result = {
+    version: receipt.identity.version,
+    source_sha: receipt.identity.source_sha,
+    archives: clone(receipt.identity.archives),
+  };
+  if (includeConsumer) result.consumer = { executable: "hardgate", sha256: hash };
+  return result;
+};
 
 const transitionPairs = RECEIPT_STATES.slice(0, -1).map((from, index) => ({
   from,
@@ -118,6 +122,36 @@ recordFailure(failed, { channel: failureChannel, code: "consumer-retry", message
 assert.equal(failed.channels[failureChannel].state, "staged");
 assert.equal(failed.channels[failureChannel].events.length, 3);
 assert.equal(receiptComplete(failed), false);
+
+// Artifact staging and immutable verification do not execute a consumer yet,
+// so identity/archive evidence is sufficient. Consumer evidence is mandatory
+// exactly when entering the two consumer-verification states.
+const stageOnly = createReceipt(identity);
+recordTransition(stageOnly, { channel: failureChannel, from: "pending", to: "staged", evidence: evidence(stageOnly, h64("6"), false) });
+recordTransition(stageOnly, { channel: failureChannel, from: "staged", to: "immutable_verified", evidence: evidence(stageOnly, h64("6"), false) });
+assert.throws(() => recordTransition(stageOnly, {
+  channel: failureChannel,
+  from: "immutable_verified",
+  to: "exact_consumer_verified",
+  evidence: evidence(stageOnly, h64("6"), false),
+}), /consumer is required/);
+recordTransition(stageOnly, { channel: failureChannel, from: "immutable_verified", to: "exact_consumer_verified", evidence: evidence(stageOnly, h64("6")) });
+recordTransition(stageOnly, { channel: failureChannel, from: "exact_consumer_verified", to: "promoted", evidence: evidence(stageOnly, h64("6"), false) });
+assert.throws(() => recordTransition(stageOnly, {
+  channel: failureChannel,
+  from: "promoted",
+  to: "default_consumer_verified",
+  evidence: evidence(stageOnly, h64("6"), false),
+}), /consumer is required/);
+recordTransition(stageOnly, { channel: failureChannel, from: "promoted", to: "default_consumer_verified", evidence: evidence(stageOnly, h64("6")) });
+
+const historicalConsumerEvidence = createReceipt(identity);
+recordTransition(historicalConsumerEvidence, { channel: failureChannel, from: "pending", to: "staged", evidence: evidence(historicalConsumerEvidence, h64("7"), false) });
+recordTransition(historicalConsumerEvidence, { channel: failureChannel, from: "staged", to: "immutable_verified", evidence: evidence(historicalConsumerEvidence, h64("7"), false) });
+recordTransition(historicalConsumerEvidence, { channel: failureChannel, from: "immutable_verified", to: "exact_consumer_verified", evidence: evidence(historicalConsumerEvidence, h64("7")) });
+const forgedHistoricalConsumer = clone(historicalConsumerEvidence);
+delete forgedHistoricalConsumer.channels[failureChannel].events[2].evidence.consumer;
+assertReceiptRejects(forgedHistoricalConsumer);
 
 // Replaying an exact transition is safe and does not add another event. An
 // ambiguous retry with changed evidence is rejected instead of advancing twice.
@@ -199,6 +233,45 @@ assert.throws(() => recordTransition(recoveryReceipt, {
   evidence: wrongEvidenceDigest,
 }), /archives/);
 
+for (const name of ["../escape.tar.gz", "foo/bar.tar.gz", "foo\\bar.tar.gz", "foo/../../bar.tar.gz"]) {
+  const badName = clone(identity);
+  badName.archives[0].name = name;
+  assert.throws(() => createReceipt(badName), /archive name/);
+}
+
+// Proposed event validation is transactional: a failed append at the event
+// limit leaves the caller's mutable receipt byte-for-byte unchanged.
+function receiptAtEventLimit() {
+  const result = createReceipt(identity);
+  result.channels[failureChannel].events = Array.from({ length: 4096 }, () => ({
+    type: "failure",
+    state: "pending",
+    code: "retry",
+    message: "retry recorded",
+  }));
+  validateReceipt(result);
+  return result;
+}
+
+const transitionOverflow = receiptAtEventLimit();
+const transitionBefore = clone(transitionOverflow);
+assert.throws(() => recordTransition(transitionOverflow, {
+  channel: failureChannel,
+  from: "pending",
+  to: "staged",
+  evidence: evidence(transitionOverflow, h64("8"), false),
+}), /4096/);
+assert.deepEqual(transitionOverflow, transitionBefore);
+
+const failureOverflow = receiptAtEventLimit();
+const failureBefore = clone(failureOverflow);
+assert.throws(() => recordFailure(failureOverflow, {
+  channel: failureChannel,
+  code: "retry-overflow",
+  message: "retry recorded",
+}), /4096/);
+assert.deepEqual(failureOverflow, failureBefore);
+
 // IO stays JSON-only and refuses symlink targets. The synchronous writer is
 // covered as well because recovery tooling may run outside an async workflow.
 const ioDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-release-receipt-io-"));
@@ -212,6 +285,10 @@ try {
   const malformedPath = path.join(ioDirectory, "malformed.json");
   fs.writeFileSync(malformedPath, "{ definitely not json\n");
   assert.throws(() => readReceipt(malformedPath), /valid JSON/);
+  const oversizedPath = path.join(ioDirectory, "oversized.json");
+  fs.writeFileSync(oversizedPath, Buffer.alloc(MAX_RECEIPT_BYTES + 1, 0x20));
+  assert.throws(() => readReceipt(oversizedPath), /size limit/);
+  await assert.rejects(readReceiptAsync(oversizedPath), /size limit/);
   const symlinkPath = path.join(ioDirectory, "receipt-link.json");
   fs.symlinkSync(receiptPath, symlinkPath);
   await assert.rejects(writeReceiptAtomic(symlinkPath, pending, identity), /symbolic-link/);

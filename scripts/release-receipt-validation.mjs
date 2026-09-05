@@ -38,13 +38,13 @@ const IDENTITY_KEYS = ["version", "source_sha", "tooling_sha", "signed_tag_objec
 const ARCHIVE_KEYS = ["name", "sha256"];
 const CHANNEL_KEYS = ["state", "events"];
 const TRANSITION_KEYS = ["type", "from", "to", "evidence"];
-const EVIDENCE_KEYS = ["version", "source_sha", "archives", "consumer"];
+const EVIDENCE_KEYS = ["version", "source_sha", "archives"];
 const CONSUMER_KEYS = ["executable", "sha256"];
 const HASH40 = /^[0-9a-f]{40}$/;
 const HASH64 = /^[0-9a-f]{64}$/;
 const POSITIVE_DECIMAL = /^[1-9][0-9]*$/;
 const SAFE_CODE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const SAFE_ARCHIVE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+@/-]*$/;
+const SAFE_ARCHIVE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+@-]*$/;
 const SECRET_KEY = /(?:token|secret|password|credential|authorization|private[_-]?key|api[_-]?key)/i;
 const SECRET_VALUE = /(?:bearer\s+|(?:token|secret|password|credential|authorization)\s*[:=]|-----begin [^-]*private key-----)/i;
 const REQUIRED_CHANNEL_SET = new Set(REQUIRED_CHANNELS);
@@ -157,15 +157,22 @@ function validateConsumer(value, label = "consumer") {
   };
 }
 
-export function validateEvidence(value, identity, label = "evidence") {
+function requiresConsumerEvidence(destinationState) {
+  return destinationState === "exact_consumer_verified" || destinationState === "default_consumer_verified";
+}
+
+export function validateEvidence(value, identity, label = "evidence", destinationState) {
   assertPlainObject(value, label);
-  assertExactKeys(value, EVIDENCE_KEYS, label);
+  assertExactKeys(value, EVIDENCE_KEYS, label, { optional: ["consumer"] });
   const evidence = {
     version: assertVersion(value.version, `${label}.version`),
     source_sha: assertHash(value.source_sha, `${label}.source_sha`, HASH40, 40),
     archives: validateArchives(value.archives, `${label}.archives`),
-    consumer: validateConsumer(value.consumer, `${label}.consumer`),
   };
+  if (Object.prototype.hasOwnProperty.call(value, "consumer")) evidence.consumer = validateConsumer(value.consumer, `${label}.consumer`);
+  if (requiresConsumerEvidence(destinationState) && !Object.prototype.hasOwnProperty.call(evidence, "consumer")) {
+    fail(`${label}.consumer is required for the consumer verification state`);
+  }
   if (evidence.version !== identity.version || evidence.source_sha !== identity.source_sha) fail(`${label} does not identify the receipt version and source`);
   if (!isDeepStrictEqual(evidence.archives, identity.archives)) fail(`${label}.archives do not match the receipt artifact digests`);
   return evidence;
@@ -188,7 +195,7 @@ function validateTransitionEvent(event, identity, state, label) {
   if (!STATE_SET.has(event.from) || !STATE_SET.has(event.to)) fail(`${label} contains an unknown state`);
   return {
     state: event.to,
-    event: { type: "transition", from: event.from, to: event.to, evidence: validateEvidence(event.evidence, identity, `${label}.evidence`) },
+    event: { type: "transition", from: event.from, to: event.to, evidence: validateEvidence(event.evidence, identity, `${label}.evidence`, event.to) },
   };
 }
 
@@ -198,7 +205,7 @@ function validateFailureEvent(event, identity, state, label) {
   if (!STATE_SET.has(event.state)) fail(`${label}.state is unknown`);
   if (typeof event.code !== "string" || !SAFE_CODE.test(event.code)) fail(`${label}.code is invalid`);
   const failure = { type: "failure", state, code: event.code, message: assertText(event.message, `${label}.message`, { max: 2000 }) };
-  if (Object.prototype.hasOwnProperty.call(event, "evidence")) failure.evidence = validateEvidence(event.evidence, identity, `${label}.evidence`);
+  if (Object.prototype.hasOwnProperty.call(event, "evidence")) failure.evidence = validateEvidence(event.evidence, identity, `${label}.evidence`, state);
   return { state, event: failure };
 }
 
@@ -220,7 +227,8 @@ function validateChannels(value, identity) {
     assertPlainObject(channel, label);
     assertExactKeys(channel, ["state", "events"], label);
     if (!STATE_SET.has(channel.state)) fail(`${label}.state is unknown`);
-    if (!Array.isArray(channel.events) || channel.events.length > 4096) fail(`${label}.events must be an array`);
+    if (!Array.isArray(channel.events)) fail(`${label}.events must be an array`);
+    if (channel.events.length > 4096) fail(`${label}.events must contain at most 4096 entries`);
     let state = "pending";
     const events = [];
     for (const [index, event] of channel.events.entries()) {
@@ -259,6 +267,6 @@ export function validateFailureOperation(operation, receipt) {
   const channel = assertChannelName(operation.channel);
   if (typeof operation.code !== "string" || !SAFE_CODE.test(operation.code)) fail("failure.code is invalid");
   const result = { channel, state: receipt.channels[channel].state, code: operation.code, message: assertText(operation.message, "failure.message", { max: 2000 }) };
-  if (Object.prototype.hasOwnProperty.call(operation, "evidence")) result.evidence = validateEvidence(operation.evidence, receipt.identity);
+  if (Object.prototype.hasOwnProperty.call(operation, "evidence")) result.evidence = validateEvidence(operation.evidence, receipt.identity, "failure.evidence", result.state);
   return result;
 }
