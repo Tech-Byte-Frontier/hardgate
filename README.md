@@ -182,6 +182,27 @@ directory. `--root` takes precedence, followed by `CARGO_INSTALL_ROOT`, Cargo's
 rustup, `. "$HOME/.cargo/env"` loads the standard `$HOME/.cargo/bin` path;
 verify the resolved binary with `command -v hardgate` and `hardgate --version`.
 
+### Upgrade from 0.4.2
+
+Pinned installs and lockfiles do not auto-update. To upgrade a Cargo
+installation, use the released crate explicitly:
+
+```sh
+cargo install hardgate --version 0.5.0 --locked --force
+```
+
+The npm wrapper has no published `0.5.0` version yet; keep the exact `0.4.2`
+package or use the source-checkout flow above. For a released shell install,
+pin the GitHub release and let its installer select a supported native target:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
+  HARDGATE_VERSION=v0.5.0 sh
+```
+
+Review the [0.5.0 migration notes](CHANGELOG.md) before upgrading an existing
+policy file or Rust integration.
+
 ### Uninstall
 
 Use the command matching the installation channel:
