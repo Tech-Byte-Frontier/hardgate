@@ -1,3 +1,6 @@
+mod references;
+use references::ReferenceIndex;
+
 use crate::config::DeadCodeConfig;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
@@ -25,7 +28,7 @@ pub struct DeadCodeAnalyzer {
 
 struct AnalysisContext<'a> {
     files: &'a [PathBuf],
-    file_contents: &'a [(PathBuf, String)],
+    file_contents: &'a [(PathBuf, &'a str)],
     root: &'a Path,
 }
 
@@ -51,6 +54,20 @@ impl DeadCodeAnalyzer {
         file_contents: &[(PathBuf, String)],
         root: &Path,
     ) -> Vec<DeadCodeViolation> {
+        let borrowed = file_contents
+            .iter()
+            .map(|(path, content)| (path.clone(), content.as_str()))
+            .collect::<Vec<_>>();
+        self.analyze_borrowed(files, &borrowed, root)
+    }
+
+    /// Analyze shared immutable text without copying its bytes.
+    pub fn analyze_borrowed(
+        &self,
+        files: &[PathBuf],
+        file_contents: &[(PathBuf, &str)],
+        root: &Path,
+    ) -> Vec<DeadCodeViolation> {
         let mut violations = Vec::new();
         let ctx = AnalysisContext {
             files,
@@ -60,7 +77,8 @@ impl DeadCodeAnalyzer {
 
         let referenced_stems = collect_referenced_stems(file_contents);
         self.detect_unreferenced_files(&ctx, &referenced_stems, &mut violations);
-        self.detect_unused_exports(&ctx, &mut violations);
+        let references = ReferenceIndex::build(file_contents);
+        self.detect_unused_exports(&ctx, &references, &mut violations);
 
         violations
     }
@@ -103,6 +121,7 @@ impl DeadCodeAnalyzer {
     fn detect_unused_exports(
         &self,
         ctx: &AnalysisContext,
+        references: &ReferenceIndex<'_>,
         violations: &mut Vec<DeadCodeViolation>,
     ) {
         for (path, content) in ctx.file_contents {
@@ -113,7 +132,7 @@ impl DeadCodeAnalyzer {
 
             let declared_exports = find_declared_exports(content);
             for (line_num, symbol) in declared_exports {
-                if !is_symbol_referenced(&symbol, path, ctx.file_contents) {
+                if !references.is_referenced(&symbol, path) {
                     violations.push(DeadCodeViolation {
                         file: rel.to_path_buf(),
                         line_number: Some(line_num),
@@ -240,7 +259,7 @@ fn export_const_regex() -> &'static Regex {
     })
 }
 
-fn collect_referenced_stems(file_contents: &[(PathBuf, String)]) -> HashSet<String> {
+fn collect_referenced_stems(file_contents: &[(PathBuf, &str)]) -> HashSet<String> {
     let mut stems = HashSet::new();
     let import_re = import_regex();
     let rust_mod_re = rust_mod_regex();
@@ -323,25 +342,4 @@ fn find_declared_exports(content: &str) -> Vec<(usize, String)> {
         }
     }
     exports
-}
-
-fn is_symbol_referenced(
-    symbol: &str,
-    current_file: &Path,
-    file_contents: &[(PathBuf, String)],
-) -> bool {
-    if symbol == "default" || symbol.starts_with('_') {
-        return true;
-    }
-    // Word-boundary search: `used` must not match `unusedFunc`.
-    let pattern = format!(r"\b{}\b", regex::escape(symbol));
-    let Ok(re) = Regex::new(&pattern) else {
-        return true;
-    };
-    for (other_path, other_content) in file_contents {
-        if other_path != current_file && re.is_match(other_content) {
-            return true;
-        }
-    }
-    false
 }

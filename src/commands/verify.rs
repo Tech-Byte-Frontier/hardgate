@@ -1,5 +1,5 @@
 use super::check::{Emission, OutputOptions, emit_gate_report};
-use super::dead_code::run_dead_code_analysis;
+use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::gate_evidence::{
     GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
@@ -59,7 +59,15 @@ pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> Result
     }
 
     if config.analysis.dead_code.enabled {
-        run_dead_code_analysis(config, &read_results, root, &mut report)?;
+        run_scoped_dead_code_analysis(
+            DeadCodeScope {
+                config,
+                root,
+                selected: &files,
+                read_results: &read_results,
+            },
+            &mut report,
+        )?;
     }
 
     run_legacy_ratchet(config, root, &mut report, config.analysis.dead_code.enabled);

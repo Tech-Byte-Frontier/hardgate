@@ -1,4 +1,4 @@
-use super::dead_code::run_dead_code_analysis;
+use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use super::gate_evidence::{
     ChangedLineFilter, GateRun, empty_discovery_advisory, filter_changed_lines,
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
@@ -29,6 +29,18 @@ pub struct CheckOptions {
     pub no_snippets: bool,
     pub summary: bool,
     pub paths: Vec<PathBuf>,
+}
+
+impl CheckOptions {
+    fn output_options(&self) -> OutputOptions {
+        OutputOptions {
+            format: self.format.clone(),
+            json: self.json,
+            compact: self.compact,
+            no_snippets: self.no_snippets,
+            summary: self.summary,
+        }
+    }
 }
 
 /// Resolved output mode shared by `check`, `scan`, and `verify`.
@@ -85,7 +97,15 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<(
     }
 
     if opts.dead_code || config.analysis.dead_code.enabled {
-        run_dead_code_analysis(config, &read_results, root, &mut report)?;
+        run_scoped_dead_code_analysis(
+            DeadCodeScope {
+                config,
+                root,
+                selected: &files,
+                read_results: &read_results,
+            },
+            &mut report,
+        )?;
     }
 
     let reference_evidence = if ratchet_enabled {
@@ -118,9 +138,7 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<(
     }
 
     if opts.all {
-        let orch = OrchestrationEngine::new(&config.orchestration);
-        let (_res, violations) = orch.run_all_checks(root);
-        report.orchestration_violations.extend(violations);
+        run_orchestration(config, root, &mut report);
     }
 
     report.advisories.push(check_scope_advisory(config, &opts));
@@ -132,16 +150,16 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> Result<(
             read_len: read_results.len(),
             fn_len: functions.len(),
             elapsed,
-            opts: &OutputOptions {
-                format: opts.format,
-                json: opts.json,
-                compact: opts.compact,
-                no_snippets: opts.no_snippets,
-                summary: opts.summary,
-            },
+            opts: &opts.output_options(),
         },
     )?;
     Ok(())
+}
+
+fn run_orchestration(config: &HardgateConfig, root: &Path, report: &mut GateReport) {
+    let engine = OrchestrationEngine::new(&config.orchestration);
+    let (_, violations) = engine.run_all_checks(root);
+    report.orchestration_violations.extend(violations);
 }
 
 struct CheckCoverage<'a> {

@@ -50,6 +50,20 @@ hardgate init --preset custom
 
 The strict-agent template is the same preset object used by no-config execution. It enables its configured coverage and mutation report policies and includes the configured formatter/linter commands. Supply real evidence and commands before using it as a gate. Balanced disables coverage/mutation report engines. Legacy-migration disables those report engines and enables the static legacy ratchet.
 
+### Reference context and dead-code limits
+
+Dead-code analysis uses all discoverable source, test, generated and fixture
+references even for `--diff` or explicit paths. Scope filters the reported
+findings, so an unchanged importer can keep a changed export live. A required
+reference that cannot be read produces an incomplete-context failure.
+
+The analyzer indexes words and recognizes common import/module declarations;
+it does not implement compiler module resolution or prove runtime reachability.
+Comments, strings, unrelated same-named symbols and same-stem modules may keep
+otherwise unused code live. Dynamic imports, reflection and language-specific
+module resolution remain heuristic boundaries. Confirm a finding before
+removing code, especially public library exports.
+
 ## `hardgate check`
 
 `check` runs static engines and every enabled report/freshness evaluator:
