@@ -219,7 +219,7 @@ fn command_detection_reports_ambiguity_and_nested_only_projects() {
     assert!(configured.missing_setup.is_empty());
 
     let inventory = ManifestInventory {
-        python: vec![root.join("nested.pyproject")],
+        python: vec![root.join("nested/pyproject.toml")],
         ..ManifestInventory::default()
     };
     assert_eq!(root_python_manifest(&root, &inventory), None);

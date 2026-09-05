@@ -82,7 +82,10 @@ fn executable_local_tools_fill_only_missing_commands() {
         orchestration.format.as_deref(),
         Some("biome format --write .")
     );
-    assert_eq!(orchestration.lint.as_deref(), Some("eslint ."));
+    assert_eq!(
+        orchestration.lint.as_deref(),
+        Some("biome ci --formatter-enabled=false .")
+    );
 
     let mut already_configured = OrchestrationConfig {
         format_check: Some("format-check".to_string()),
