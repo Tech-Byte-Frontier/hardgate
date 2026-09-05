@@ -335,3 +335,105 @@ fn trim_vec<T>(values: &mut Vec<T>, remaining: &mut usize) {
 #[cfg(test)]
 #[path = "display_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod presentation_coverage_tests {
+    use super::{
+        MAX_CHARS_PER_LINE, MAX_LINES_PER_LOCATION, MAX_SNIPPET_BYTES, SnippetBudget,
+        SourceExcerpt, bounded_line, excerpt_for_location, format_location, line_window,
+        render_excerpts, rules, sanitize_controls, visible_token,
+    };
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn location(
+        file: &str,
+        line: Option<usize>,
+        end_line: Option<usize>,
+    ) -> rules::DiagnosticLocation {
+        rules::DiagnosticLocation {
+            file: PathBuf::from(file),
+            line,
+            end_line,
+        }
+    }
+
+    #[test]
+    fn line_windows_reject_empty_and_invalid_ranges() {
+        assert!(line_window(&location("src/a.rs", Some(1), None), 0).is_none());
+        assert!(line_window(&location("src/a.rs", Some(0), None), 3).is_none());
+        assert!(line_window(&location("src/a.rs", Some(4), None), 3).is_none());
+        assert!(line_window(&location("src/a.rs", Some(2), Some(1)), 3).is_none());
+
+        let file_only = line_window(&location("src/a.rs", None, None), 9).unwrap();
+        assert_eq!(file_only.first_line, 1);
+        assert_eq!(file_only.end, MAX_LINES_PER_LOCATION);
+        assert!(file_only.truncated);
+    }
+
+    #[test]
+    fn control_tokens_locations_and_truncated_excerpts_are_rendered() {
+        assert_eq!(visible_token('\0'), "\\u{0}");
+        assert_eq!(visible_token('\t'), "\\t");
+        assert_eq!(visible_token('\r'), "\\r");
+        assert_eq!(sanitize_controls("a\0\t\r"), "a\\u{0}\\t\\r");
+        assert_eq!(
+            format_location(&location("src/\0.rs", Some(2), Some(4))),
+            "src/\\u{0}.rs:2-4"
+        );
+        assert_eq!(
+            format_location(&location("src/a.rs", Some(2), None)),
+            "src/a.rs:2"
+        );
+        assert_eq!(
+            format_location(&location("src/a.rs", None, Some(4))),
+            "src/a.rs"
+        );
+
+        let excerpt = SourceExcerpt {
+            file: PathBuf::from("src/\0.rs"),
+            first_line: 4,
+            lines: vec!["captured".to_string()],
+            truncated: true,
+        };
+        let mut rendered = String::new();
+        render_excerpts(&mut rendered, &[excerpt]);
+        assert!(rendered.contains("excerpt: src/\\u{0}.rs:4"));
+        assert!(rendered.contains("  | captured"));
+        assert!(rendered.contains("  | [truncated]"));
+    }
+
+    #[test]
+    fn bounded_lines_mark_character_and_byte_limits() {
+        let characters = bounded_line(&"x".repeat(MAX_CHARS_PER_LINE + 1), usize::MAX);
+        assert_eq!(characters.text.chars().count(), MAX_CHARS_PER_LINE);
+        assert!(characters.truncated);
+        assert!(!characters.global_truncated);
+
+        let bytes = bounded_line("é", 1);
+        assert!(bytes.text.is_empty());
+        assert!(bytes.truncated);
+        assert!(bytes.global_truncated);
+    }
+
+    #[test]
+    fn global_budget_stops_at_an_unrepresentable_utf8_character() {
+        let file = PathBuf::from("src/budget.rs");
+        let source = BTreeMap::from([(file.clone(), Arc::<str>::from("é"))]);
+        let mut budget = SnippetBudget {
+            enabled: true,
+            bytes: MAX_SNIPPET_BYTES - 1,
+            truncated: false,
+        };
+
+        let excerpt = excerpt_for_location(
+            &location("src/budget.rs", Some(1), None),
+            &source,
+            &mut budget,
+        );
+        assert!(excerpt.is_none());
+        assert_eq!(budget.bytes, MAX_SNIPPET_BYTES - 1);
+        assert!(budget.truncated);
+    }
+}
