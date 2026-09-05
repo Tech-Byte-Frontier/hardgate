@@ -44,7 +44,7 @@ pub(crate) struct Detection {
 }
 
 impl Detection {
-    fn new(ecosystem: Ecosystem) -> Self {
+    pub(super) fn new(ecosystem: Ecosystem) -> Self {
         Self {
             ecosystem,
             orchestration: OrchestrationConfig::default(),
@@ -60,7 +60,7 @@ impl Detection {
         }
     }
 
-    fn add_note(&mut self, message: impl Into<String>) {
+    pub(super) fn add_note(&mut self, message: impl Into<String>) {
         let message = message.into();
         if !self.notes.contains(&message) {
             self.notes.push(message);
@@ -82,7 +82,7 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
         Ecosystem::Python => detect_root_python(root, &inventory, &mut detection),
         Ecosystem::Go => detect_root_go(root, &inventory, &mut detection),
         Ecosystem::Ambiguous => {
-            detect_ambiguous_ecosystems(root, &inventory, &mut detection);
+            super::mixed::detect_ambiguous_ecosystems(root, &inventory, &mut detection);
         }
         Ecosystem::Unknown => detection.add_missing(
             "no supported manifest or configured formatter was detected; configure [orchestration] commands explicitly",
@@ -90,82 +90,6 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
     }
     add_unconfigured_commands(&mut detection);
     detection
-}
-
-fn detect_ambiguous_ecosystems(
-    root: &Path,
-    inventory: &ManifestInventory,
-    detection: &mut Detection,
-) {
-    let has_js = !inventory.packages.is_empty() || inventory.js_config;
-    let has_py = !inventory.python.is_empty() || inventory.python_config;
-
-    let root_js = root_manifest(root, &inventory.packages).is_some() || inventory.js_config;
-    let root_py = root_python_manifest(root, inventory).is_some() || inventory.python_config;
-    if cfg!(unix)
-        && has_js
-        && has_py
-        && root_js
-        && root_py
-        && inventory.cargo.is_empty()
-        && inventory.go.is_empty()
-    {
-        let mut js_detect = Detection::new(Ecosystem::JavaScript);
-        detect_javascript(root, inventory, &mut js_detect);
-
-        let mut py_detect = Detection::new(Ecosystem::Python);
-        detect_root_python(root, inventory, &mut py_detect);
-
-        detection.orchestration.format_check = combine_commands(
-            py_detect.orchestration.format_check,
-            js_detect.orchestration.format_check,
-        );
-        detection.orchestration.format = combine_commands(
-            py_detect.orchestration.format,
-            js_detect.orchestration.format,
-        );
-        detection.orchestration.lint =
-            combine_commands(py_detect.orchestration.lint, js_detect.orchestration.lint);
-        detection.orchestration.test_cmd = combine_commands(
-            py_detect.orchestration.test_cmd,
-            js_detect.orchestration.test_cmd,
-        );
-        detection.orchestration.timeout_secs = Some(300);
-        for missing in js_detect
-            .missing_setup
-            .into_iter()
-            .chain(py_detect.missing_setup)
-        {
-            detection.add_missing(missing);
-        }
-        for note in js_detect.notes.into_iter().chain(py_detect.notes) {
-            detection.add_note(note);
-        }
-        if detection.orchestration.format_check.is_none()
-            || detection.orchestration.lint.is_none()
-            || detection.orchestration.test_cmd.is_none()
-        {
-            detection.add_missing("combined orchestration requires a detected command for both ecosystems; configure missing commands explicitly");
-        }
-        detection.add_note(
-            "Multi-ecosystem project detected (Python + JavaScript/TypeScript); paired orchestration commands run through POSIX sh",
-        );
-        return;
-    }
-
-    detection.add_missing(
-        "multiple supported ecosystems were detected; configure [orchestration] commands explicitly",
-    );
-}
-
-fn combine_commands(first: Option<String>, second: Option<String>) -> Option<String> {
-    match (first, second) {
-        (Some(a), Some(b)) => {
-            let script = format!("{a} && {b}").replace('\'', "'\\''");
-            Some(format!("sh -c '{script}'"))
-        }
-        _ => None,
-    }
 }
 
 fn detect_root_rust(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
@@ -176,7 +100,11 @@ fn detect_root_rust(root: &Path, inventory: &ManifestInventory, detection: &mut 
     }
 }
 
-fn detect_root_python(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
+pub(super) fn detect_root_python(
+    root: &Path,
+    inventory: &ManifestInventory,
+    detection: &mut Detection,
+) {
     if root_python_manifest(root, inventory).is_some() || inventory.python_config {
         detect_python(root, detection);
     } else {
@@ -257,7 +185,11 @@ fn set_detected_commands(detection: &mut Detection, commands: [&str; 4]) {
     };
 }
 
-fn detect_javascript(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
+pub(super) fn detect_javascript(
+    root: &Path,
+    inventory: &ManifestInventory,
+    detection: &mut Detection,
+) {
     let Some(manifest) = root_manifest(root, &inventory.packages) else {
         detect_javascript_without_manifest(root, inventory, detection);
         return;
@@ -350,14 +282,17 @@ fn detect_python(root: &Path, detection: &mut Detection) {
     }
 }
 
-fn root_manifest<'a>(root: &Path, manifests: &'a [PathBuf]) -> Option<&'a Path> {
+pub(super) fn root_manifest<'a>(root: &Path, manifests: &'a [PathBuf]) -> Option<&'a Path> {
     manifests
         .iter()
         .find(|path| path.parent().is_some_and(|parent| parent == root))
         .map(PathBuf::as_path)
 }
 
-fn root_python_manifest<'a>(root: &Path, inventory: &'a ManifestInventory) -> Option<&'a Path> {
+pub(super) fn root_python_manifest<'a>(
+    root: &Path,
+    inventory: &'a ManifestInventory,
+) -> Option<&'a Path> {
     root_manifest(root, &inventory.python)
 }
 
@@ -483,3 +418,6 @@ fn add_unconfigured_commands(detection: &mut Detection) {
 #[cfg(test)]
 #[path = "detect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+use super::mixed::combine_commands;

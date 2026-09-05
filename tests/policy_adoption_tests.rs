@@ -6,7 +6,7 @@ mod fs_git;
 use cli::{Fixture, assert_status, json, run};
 use hardgate::commands::run_static_gate_snapshot;
 use hardgate::config::{HardgateConfig, Preset, Severity};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn init_defaults_to_structural_policy_but_explicit_strict_requires_evidence() {
@@ -83,14 +83,16 @@ fn test_size_is_visible_while_test_complexity_and_safety_remain_blocking() {
             .iter()
             .any(|item| item.contains("tests/setup.rs") && item.contains("Statement Count"))
     );
-    assert!(report.complexity_violations.iter().any(|item| item.file
-        == PathBuf::from("tests/complex.rs")
-        && item.metric == "Nesting Depth"));
+    assert!(
+        report.complexity_violations.iter().any(
+            |item| item.file == Path::new("tests/complex.rs") && item.metric == "Nesting Depth"
+        )
+    );
     assert!(
         report
             .suppression_violations
             .iter()
-            .any(|item| item.file == PathBuf::from("tests/complex.rs"))
+            .any(|item| item.file == Path::new("tests/complex.rs"))
     );
 }
 

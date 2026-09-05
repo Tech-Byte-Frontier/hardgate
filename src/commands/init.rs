@@ -1,5 +1,6 @@
 mod detect;
 mod manifest;
+mod mixed;
 mod reference;
 mod render;
 mod tooling;

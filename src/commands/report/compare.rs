@@ -2,9 +2,10 @@ use super::input::read_report;
 use crate::commands::check::OutputOptions;
 use crate::commands::outcome::{CommandOutcome, CommandResult, write_stdout};
 use crate::diagnostics::GateReport;
+use crate::diagnostics::execution::{EngineId, ExecutionPlan};
 use colored::*;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -149,6 +150,88 @@ pub fn extract_findings(report: &GateReport) -> BTreeSet<FindingRecord> {
     findings
 }
 
+fn comparison_differences(before: &GateReport, after: &GateReport) -> (Vec<String>, Vec<String>) {
+    let mut scope_differences = Vec::new();
+    let mut config_differences = Vec::new();
+
+    if let (Some(b_exec), Some(a_exec)) = (&before.execution, &after.execution) {
+        if b_exec.config.policy_sha256 != a_exec.config.policy_sha256 {
+            config_differences.push(format!(
+                "Config policy changed (before: {}, after: {})",
+                b_exec.config.policy_sha256, a_exec.config.policy_sha256
+            ));
+        }
+        if b_exec.scope.mode != a_exec.scope.mode || b_exec.scope.paths != a_exec.scope.paths {
+            scope_differences.push(format!(
+                "Evaluation scope changed (before: {} paths: {:?}, after: {} paths: {:?})",
+                b_exec.scope.mode, b_exec.scope.paths, a_exec.scope.mode, a_exec.scope.paths
+            ));
+        }
+        if b_exec.command != a_exec.command || b_exec.config.root != a_exec.config.root {
+            scope_differences.push("Command or configuration root changed".into());
+        }
+        if engine_scope(b_exec) != engine_scope(a_exec) {
+            scope_differences.push("Engine selection or required evidence changed".into());
+        }
+        check_evidence_scope(b_exec, a_exec, &mut scope_differences);
+    } else {
+        scope_differences.push(
+            "Execution metadata is missing; equivalent evaluation scope cannot be established"
+                .into(),
+        );
+    }
+    if before.files_scanned != after.files_scanned {
+        scope_differences.push(format!(
+            "Files scanned changed (before: {}, after: {})",
+            before.files_scanned, after.files_scanned
+        ));
+    }
+
+    (scope_differences, config_differences)
+}
+
+fn engine_scope(plan: &ExecutionPlan) -> BTreeMap<EngineId, (bool, bool, Vec<String>)> {
+    plan.engines
+        .iter()
+        .map(|engine| {
+            (
+                engine.id,
+                (
+                    engine.enabled,
+                    engine.selected,
+                    engine.required_evidence.clone(),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn check_evidence_scope(
+    before: &ExecutionPlan,
+    after: &ExecutionPlan,
+    differences: &mut Vec<String>,
+) {
+    for plan in [before, after] {
+        if plan.scope.mode == "diff" {
+            differences
+                .push("Diff reports do not record a complete resolved source inventory".into());
+            break;
+        }
+    }
+    if [before, after].iter().any(|plan| {
+        plan.engines.iter().any(|engine| {
+            engine.selected
+                && matches!(
+                    engine.state,
+                    crate::diagnostics::execution::EngineState::Incomplete
+                        | crate::diagnostics::execution::EngineState::Skipped
+                )
+        })
+    }) {
+        differences.push("Selected engine evidence is incomplete or skipped".into());
+    }
+}
+
 pub fn compare_reports(
     before: &GateReport,
     after: &GateReport,
@@ -171,74 +254,7 @@ pub fn compare_reports(
         .cloned()
         .collect();
 
-    let mut scope_differences = Vec::new();
-    let mut config_differences = Vec::new();
-
-    if let (Some(b_exec), Some(a_exec)) = (&before.execution, &after.execution) {
-        if b_exec.config.policy_sha256 != a_exec.config.policy_sha256 {
-            config_differences.push(format!(
-                "Config policy changed (before: {}, after: {})",
-                b_exec.config.policy_sha256, a_exec.config.policy_sha256
-            ));
-        }
-        if b_exec.scope.mode != a_exec.scope.mode || b_exec.scope.paths != a_exec.scope.paths {
-            scope_differences.push(format!(
-                "Evaluation scope changed (before: {} paths: {:?}, after: {} paths: {:?})",
-                b_exec.scope.mode, b_exec.scope.paths, a_exec.scope.mode, a_exec.scope.paths
-            ));
-        }
-        if b_exec.command != a_exec.command || b_exec.config.root != a_exec.config.root {
-            scope_differences.push("Command or configuration root changed".into());
-        }
-        let engine_scope = |plan: &crate::diagnostics::execution::ExecutionPlan| {
-            plan.engines
-                .iter()
-                .map(|engine| {
-                    (
-                        engine.id,
-                        (
-                            engine.enabled,
-                            engine.selected,
-                            engine.required_evidence.clone(),
-                        ),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<_, _>>()
-        };
-        if engine_scope(b_exec) != engine_scope(a_exec) {
-            scope_differences.push("Engine selection or required evidence changed".into());
-        }
-        for plan in [b_exec, a_exec] {
-            if plan.scope.mode == "diff" {
-                scope_differences
-                    .push("Diff reports do not record a complete resolved source inventory".into());
-                break;
-            }
-        }
-        if [b_exec, a_exec].iter().any(|plan| {
-            plan.engines.iter().any(|engine| {
-                engine.selected
-                    && matches!(
-                        engine.state,
-                        crate::diagnostics::execution::EngineState::Incomplete
-                            | crate::diagnostics::execution::EngineState::Skipped
-                    )
-            })
-        }) {
-            scope_differences.push("Selected engine evidence is incomplete or skipped".into());
-        }
-    } else {
-        scope_differences.push(
-            "Execution metadata is missing; equivalent evaluation scope cannot be established"
-                .into(),
-        );
-    }
-    if before.files_scanned != after.files_scanned {
-        scope_differences.push(format!(
-            "Files scanned changed (before: {}, after: {})",
-            before.files_scanned, after.files_scanned
-        ));
-    }
+    let (scope_differences, config_differences) = comparison_differences(before, after);
 
     let equivalent = scope_differences.is_empty() && config_differences.is_empty();
 
