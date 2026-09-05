@@ -175,11 +175,13 @@ fn lcov_details_keep_ambiguous_names_and_reject_malformed_fields() {
     for (details, expected) in [
         (
             "FN:1,\0\nFNDA:0,\0\nFNF:1\nFNH:0\n",
-            "Malformed LCOV FN function name",
+            "Malformed LCOV FN metric",
         ),
+        ("FNDA:0,\0\n", "Malformed LCOV FNDA function name"),
         ("BRDA:1,,0,1\n", "Malformed LCOV BRDA block field"),
-        ("BRDA:1,0,\0,1\n", "Malformed LCOV BRDA branch field"),
+        ("BRDA:1,0,\0,1\n", "Malformed LCOV BRDA metric"),
         ("BRDA:1,0,,1\n", "Malformed LCOV BRDA branch field"),
+        ("BRDA:1,0,0,-,1\n", "Malformed LCOV BRDA branch field"),
     ] {
         let error = parse_report(&report(details, ""), false, false)
             .expect_err("malformed detail records must fail closed");
