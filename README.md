@@ -10,15 +10,17 @@ Hardgate is a local Rust CLI. It turns repository policy into a deterministic re
 
 ## First run
 
-### Current source checkout: Phase 5 init flow
+### Current source checkout (unreleased)
 
-The initialization and `config` inspection flow below is in this source
-checkout and is unreleased. The published Cargo `0.5.0` and npm `0.4.2`
-channels do not contain these new init affordances. From the exact checkout
-that contains this implementation:
+The initialization and `config` inspection flow below is in this checkout and
+has not shipped in a release. From the exact checkout that contains this
+implementation, install the binary, then change to the project you want to
+initialize. Replace the placeholder path before running the commands:
 
 ```sh
 cargo install --path . --locked
+# Replace this placeholder with the repository you are initializing.
+cd /path/to/your/project
 hardgate init --preset balanced
 hardgate config
 hardgate check
@@ -33,7 +35,7 @@ engines, missing setup, and the next command. An arbitrary existing repository
 may still fail its first check because its source roles, budgets, commands, or
 evidence need project-specific decisions.
 
-Current source checkouts also provide inspection-friendly initialization:
+The same checkout also provides inspection-friendly initialization:
 
 ```sh
 # Run from the same source checkout containing the current init implementation.
@@ -45,9 +47,7 @@ cargo run --release -- config --format toml
 `--preview` writes only valid generated TOML to stdout; its status and completion
 summary go to stderr, so the output can be redirected safely. `--full` renders
 the full effective policy. See the current [`init`](src/commands/init.rs) and
-[`config`](src/commands/inspect.rs) implementations. These commands describe
-this source checkout; do not attribute them to the published `0.5.0` binary
-until a release containing them exists.
+[`config`](src/commands/inspect.rs) implementations.
 
 Without a policy file, the CLI uses the `strict-agent` defaults. That preset
 requires configured LCOV and mutation reports. `legacy-migration` adds a
@@ -122,9 +122,9 @@ freshness check.
 
 ### Install a released CLI
 
-The published Rust CLI is available as Cargo `0.5.0`; the [GitHub release](https://github.com/Tech-Byte-Frontier/hardgate/releases/tag/v0.5.0)
-is `v0.5.0`. These released-channel commands do not include the source-only
-init flow described above:
+Published channels are listed here for released installations: the Rust CLI is
+available as Cargo `0.5.0`, and the [GitHub release](https://github.com/Tech-Byte-Frontier/hardgate/releases/tag/v0.5.0)
+is `v0.5.0`. The npm wrapper remains at `0.4.2`.
 
 ```sh
 cargo install hardgate --version 0.5.0 --locked
@@ -160,20 +160,27 @@ pnpm add --global @tech-byte-frontier/hardgate@0.4.2
 hardgate --version
 ```
 
+The npm wrapper requires Node.js 18 or newer.
+
 For npm, `npm prefix --global` prints the global prefix; its `bin` directory
 must be on `PATH`. For pnpm, run `pnpm setup` if it reports that no global bin
 directory is configured, then open a new shell so `PNPM_HOME` is on `PATH`.
 The wrapper's supported platform packages and `HARDGATE_BINARY` resolution are
 documented in the [wrapper README](npm/hardgate/README.md).
 
-For a source build of the released tag, use the tag explicitly; this is not
-the source checkout containing the unreleased init flow:
+For a source build of the released tag, use the tag explicitly:
 
 ```sh
 git clone --branch v0.5.0 https://github.com/Tech-Byte-Frontier/hardgate.git
 cd hardgate
 cargo install --path . --locked
 ```
+
+Cargo installs the executable under the selected install root's `bin`
+directory. `--root` takes precedence, followed by `CARGO_INSTALL_ROOT`, Cargo's
+`install.root` setting, and `$CARGO_HOME` (normally `$HOME/.cargo`). With
+rustup, `. "$HOME/.cargo/env"` loads the standard `$HOME/.cargo/bin` path;
+verify the resolved binary with `command -v hardgate` and `hardgate --version`.
 
 ### Uninstall
 
