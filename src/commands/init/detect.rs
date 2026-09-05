@@ -3,7 +3,6 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub(crate) enum Ecosystem {
@@ -84,10 +83,10 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
     let ecosystem = classify(&inventory);
     let mut detection = Detection::new(ecosystem);
     match ecosystem {
-        Ecosystem::Rust => detect_rust(&mut detection),
+        Ecosystem::Rust => detect_root_rust(root, &inventory, &mut detection),
         Ecosystem::JavaScript => detect_javascript(root, &inventory, &mut detection),
-        Ecosystem::Python => detect_python(root, &inventory, &mut detection),
-        Ecosystem::Go => detect_go(&mut detection),
+        Ecosystem::Python => detect_root_python(root, &inventory, &mut detection),
+        Ecosystem::Go => detect_root_go(root, &inventory, &mut detection),
         Ecosystem::Ambiguous => detection.add_missing(
             "multiple supported ecosystems were detected; configure [orchestration] commands explicitly",
         ),
@@ -99,25 +98,39 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
     detection
 }
 
-pub(crate) fn legacy_reference_status(root: &Path, branch: &str) -> ReferenceStatus {
-    let Some(root) = root.to_str() else {
-        return ReferenceStatus::Unknown;
-    };
-    let reference = format!("{branch}^{{commit}}");
-    match Command::new("git")
-        .args(["-C", root, "rev-parse", "--verify"])
-        .arg(&reference)
-        .output()
-    {
-        Ok(output) if output.status.success() => ReferenceStatus::Available,
-        Ok(_) => ReferenceStatus::Missing,
-        Err(_) => ReferenceStatus::Unknown,
+fn detect_root_rust(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
+    if root_manifest(root, &inventory.cargo).is_some() {
+        detect_rust(detection);
+    } else {
+        add_nested_manifest_missing(detection, "Cargo.toml");
     }
 }
+
+fn detect_root_python(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
+    if root_python_manifest(root, inventory).is_some() || inventory.python_config {
+        detect_python(root, detection);
+    } else {
+        add_nested_manifest_missing(detection, "Python");
+    }
+}
+
+fn detect_root_go(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
+    if root_manifest(root, &inventory.go).is_some() {
+        detect_go(detection);
+    } else {
+        add_nested_manifest_missing(detection, "go.mod");
+    }
+}
+
+pub(crate) use super::reference::legacy_reference_status;
 
 fn collect_manifests(root: &Path) -> ManifestInventory {
     let mut inventory = ManifestInventory::default();
     collect_manifests_at(root, 3, &mut inventory);
+    inventory.cargo.sort();
+    inventory.packages.sort();
+    inventory.python.sort();
+    inventory.go.sort();
     inventory.js_config = has_any(
         root,
         &[
@@ -238,7 +251,12 @@ fn detect_rust(detection: &mut Detection) {
 fn detect_go(detection: &mut Detection) {
     set_detected_commands(
         detection,
-        ["gofmt -l .", "gofmt -w .", "go vet ./...", "go test ./..."],
+        [
+            "sh -c 'files=$(gofmt -l .) || exit $?; test -z \"$files\"'",
+            "gofmt -w .",
+            "go vet ./...",
+            "go test ./...",
+        ],
     );
     detection.add_note("go.mod detected; using gofmt, go vet, and go test");
 }
@@ -254,10 +272,8 @@ fn set_detected_commands(detection: &mut Detection, commands: [&str; 4]) {
 }
 
 fn detect_javascript(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
-    let Some(manifest) = choose_manifest(root, &inventory.packages) else {
-        detection.add_missing(
-            "a JavaScript/TypeScript package manifest is nested or ambiguous; add explicit [orchestration] commands",
-        );
+    let Some(manifest) = root_manifest(root, &inventory.packages) else {
+        detect_javascript_without_manifest(root, inventory, detection);
         return;
     };
     let Some(package) = read_package(manifest) else {
@@ -266,42 +282,70 @@ fn detect_javascript(root: &Path, inventory: &ManifestInventory, detection: &mut
         );
         return;
     };
+    if let Some(manager) = package_manager_for(manifest, root, &package, detection) {
+        set_script_commands(&mut detection.orchestration, &package.scripts, manager);
+    }
+    let missing = super::tooling::set_javascript_config_commands(
+        manifest.parent().unwrap_or(root),
+        &mut detection.orchestration,
+    );
+    for message in missing {
+        detection.add_missing(message);
+    }
+    detection.orchestration.timeout_secs = Some(300);
+    if !package.scripts.is_empty() {
+        detection.add_note(
+            "package scripts are referenced by package-manager command, without embedding script bodies",
+        );
+    }
+}
+
+fn detect_javascript_without_manifest(
+    root: &Path,
+    inventory: &ManifestInventory,
+    detection: &mut Detection,
+) {
+    if !inventory.js_config {
+        add_nested_manifest_missing(detection, "package.json");
+        return;
+    }
+    let missing =
+        super::tooling::set_javascript_config_commands(root, &mut detection.orchestration);
+    for message in missing {
+        detection.add_missing(message);
+    }
+    detection.orchestration.timeout_secs = Some(300);
+}
+
+fn package_manager_for(
+    manifest: &Path,
+    root: &Path,
+    package: &PackageInfo,
+    detection: &mut Detection,
+) -> Option<String> {
     if package.manager_invalid {
         detection.add_missing(
             "package.json declares an unsupported package manager; add explicit [orchestration] commands",
         );
-        return;
+        return None;
     }
     let manager = package
         .manager
+        .clone()
         .or_else(|| package_manager(manifest.parent().unwrap_or(root)));
-    let Some(manager) = manager else {
+    if manager.is_none() {
         detection.add_missing(
-            "package manager could not be identified; add explicit [orchestration] commands",
+            "multiple package manager lockfiles were found without packageManager; declare one explicitly",
         );
-        return;
-    };
-    set_script_commands(&mut detection.orchestration, &package.scripts, manager);
-    super::tooling::set_javascript_config_commands(
-        manifest.parent().unwrap_or(root),
-        &mut detection.orchestration,
-    );
-    detection.orchestration.timeout_secs = Some(300);
-    detection.add_note(
-        "package scripts are referenced by package-manager command, without embedding script bodies",
-    );
+    }
+    manager
 }
 
-fn detect_python(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
-    let project_root = inventory
-        .python
-        .iter()
-        .find_map(|path| path.parent())
-        .unwrap_or(root);
-    let pyproject = project_root.join("pyproject.toml");
+fn detect_python(root: &Path, detection: &mut Detection) {
+    let pyproject = root.join("pyproject.toml");
     let content = fs::read_to_string(&pyproject).unwrap_or_default();
-    let ruff = has_toml_table(&content, &["tool", "ruff"])
-        || has_any(project_root, &["ruff.toml", ".ruff.toml"]);
+    let ruff =
+        has_toml_table(&content, &["tool", "ruff"]) || has_any(root, &["ruff.toml", ".ruff.toml"]);
     let black = has_toml_table(&content, &["tool", "black"]);
     if ruff {
         detection.orchestration.format_check = Some("ruff format --check .".to_string());
@@ -311,9 +355,7 @@ fn detect_python(root: &Path, inventory: &ManifestInventory, detection: &mut Det
         detection.orchestration.format_check = Some("black --check .".to_string());
         detection.orchestration.format = Some("black .".to_string());
     }
-    if has_toml_table(&content, &["tool", "pytest"])
-        || has_any(project_root, &["pytest.ini", "tox.ini"])
-    {
+    if has_toml_table(&content, &["tool", "pytest"]) || has_any(root, &["pytest.ini", "tox.ini"]) {
         detection.orchestration.test_cmd = Some("pytest".to_string());
     }
     detection.orchestration.timeout_secs = Some(300);
@@ -322,12 +364,21 @@ fn detect_python(root: &Path, inventory: &ManifestInventory, detection: &mut Det
     }
 }
 
-fn choose_manifest<'a>(root: &Path, manifests: &'a [PathBuf]) -> Option<&'a Path> {
+fn root_manifest<'a>(root: &Path, manifests: &'a [PathBuf]) -> Option<&'a Path> {
     manifests
         .iter()
-        .find(|path| path.parent() == Some(root))
-        .or_else(|| (manifests.len() == 1).then(|| &manifests[0]))
+        .find(|path| path.parent().is_some_and(|parent| parent == root))
         .map(PathBuf::as_path)
+}
+
+fn root_python_manifest<'a>(root: &Path, inventory: &'a ManifestInventory) -> Option<&'a Path> {
+    root_manifest(root, &inventory.python)
+}
+
+fn add_nested_manifest_missing(detection: &mut Detection, manifest: &str) {
+    detection.add_missing(format!(
+        "{manifest} was found below the policy root; initialize inside that package or provide explicit [orchestration] overrides"
+    ));
 }
 
 #[derive(Debug)]
@@ -350,7 +401,17 @@ fn read_package(manifest: &Path) -> Option<PackageInfo> {
     let scripts = object
         .get("scripts")
         .and_then(Value::as_object)
-        .map(|scripts| scripts.keys().cloned().collect())
+        .map(|scripts| {
+            scripts
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .as_str()
+                        .filter(|command| !command.trim().is_empty())
+                        .map(|_| name.clone())
+                })
+                .collect()
+        })
         .unwrap_or_default();
     Some(PackageInfo {
         manager,
@@ -365,18 +426,23 @@ fn parse_manager(value: &str) -> Option<String> {
 }
 
 fn package_manager(root: &Path) -> Option<String> {
-    for (name, manager) in [
+    let lockfiles = [
         ("pnpm-lock.yaml", "pnpm"),
         ("yarn.lock", "yarn"),
         ("bun.lock", "bun"),
         ("bun.lockb", "bun"),
         ("package-lock.json", "npm"),
-    ] {
-        if root.join(name).is_file() {
-            return Some(manager.to_string());
-        }
-    }
-    Some("npm".to_string())
+    ]
+    .into_iter()
+    .filter(|(name, _)| root.join(name).is_file())
+    .map(|(_, manager)| manager.to_string())
+    .collect::<Vec<_>>();
+    (lockfiles.len() <= 1).then(|| {
+        lockfiles
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "npm".to_string())
+    })
 }
 
 fn set_script_commands(
@@ -385,25 +451,21 @@ fn set_script_commands(
     manager: String,
 ) {
     if let Some(script) = first_script(scripts, &["format:check", "fmt:check", "check:format"]) {
-        orchestration.format_check = Some(run_script(&manager, script));
+        orchestration.format_check = Some(format!("{manager} run {script}"));
     }
     if let Some(script) = first_script(scripts, &["format", "fmt"]) {
-        orchestration.format = Some(run_script(&manager, script));
+        orchestration.format = Some(format!("{manager} run {script}"));
     }
     if let Some(script) = first_script(scripts, &["lint", "check:lint"]) {
-        orchestration.lint = Some(run_script(&manager, script));
+        orchestration.lint = Some(format!("{manager} run {script}"));
     }
     if let Some(script) = first_script(scripts, &["test"]) {
-        orchestration.test_cmd = Some(run_script(&manager, script));
+        orchestration.test_cmd = Some(format!("{manager} run {script}"));
     }
 }
 
 fn first_script<'a>(scripts: &'a BTreeSet<String>, names: &[&str]) -> Option<&'a str> {
     names.iter().find(|name| scripts.contains(*name)).copied()
-}
-
-fn run_script(manager: &str, script: &str) -> String {
-    format!("{manager} run {script}")
 }
 
 fn has_toml_table(content: &str, path: &[&str]) -> bool {

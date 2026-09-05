@@ -1,76 +1,10 @@
+#[path = "support/init_experience.rs"]
+mod support;
+
 use hardgate::commands::init::{InitOptions, cmd_init_with_options};
 use hardgate::config::HardgateConfig;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static CURRENT_DIRECTORY: OnceLock<Mutex<()>> = OnceLock::new();
-
-struct WorkingDirectory {
-    original: PathBuf,
-}
-
-impl WorkingDirectory {
-    fn enter(root: &Path) -> Self {
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(root).unwrap();
-        Self { original }
-    }
-}
-
-impl Drop for WorkingDirectory {
-    fn drop(&mut self) {
-        std::env::set_current_dir(&self.original).unwrap();
-    }
-}
-
-fn with_root(tag: &str, callback: impl FnOnce(&Path)) {
-    let _lock = CURRENT_DIRECTORY
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap();
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "hardgate-init-experience-{}-{stamp}-{tag}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&root).unwrap();
-    let directory = WorkingDirectory::enter(&root);
-    callback(&root);
-    drop(directory);
-    fs::remove_dir_all(root).unwrap();
-}
-
-fn options(preset: &str) -> InitOptions {
-    InitOptions {
-        preset: preset.to_string(),
-        ..InitOptions::default()
-    }
-}
-
-fn load_written(root: &Path) -> HardgateConfig {
-    HardgateConfig::load_or_default(Some(&root.join("hardgate.toml"))).unwrap()
-}
-
-fn initialize_manifest(root: &Path, name: &str, content: &str) -> HardgateConfig {
-    fs::write(root.join(name), content).unwrap();
-    cmd_init_with_options(options("balanced")).unwrap();
-    load_written(root)
-}
-
-fn assert_commands(config: &HardgateConfig, expected: [&str; 4]) {
-    assert_eq!(
-        config.orchestration.format_check.as_deref(),
-        Some(expected[0])
-    );
-    assert_eq!(config.orchestration.format.as_deref(), Some(expected[1]));
-    assert_eq!(config.orchestration.lint.as_deref(), Some(expected[2]));
-    assert_eq!(config.orchestration.test_cmd.as_deref(), Some(expected[3]));
-}
+use support::{assert_commands, load_written, options, with_root};
 
 #[test]
 fn presets_round_trip_and_explain_their_first_step() {
@@ -88,10 +22,13 @@ fn presets_round_trip_and_explain_their_first_step() {
             assert_eq!(config.mutation.enabled, mutation, "{preset}");
             assert_eq!(config.legacy.ratchet, ratchet, "{preset}");
             assert!(content.contains("Detected project kind"));
-            assert!(content.contains("Next step") || content.contains("next"));
             if preset == "strict-agent" {
                 assert!(content.contains("mutation.reports"));
                 assert!(content.contains("95% line/function"));
+                assert!(content.contains("remains incomplete until real LCOV"));
+            }
+            if preset == "balanced" {
+                assert!(content.contains("structural starting point"));
             }
             if preset == "legacy-migration" {
                 assert!(content.contains("legacy-migration"));
@@ -206,6 +143,32 @@ fn python_detection_requires_explicit_configured_tools() {
 }
 
 #[test]
+fn root_python_metadata_wins_over_nested_inventory_order() {
+    with_root("python-root-first", |root| {
+        fs::write(
+            root.join("pyproject.toml"),
+            "[project]\nname = \"root\"\n\n[tool.black]\nline-length = 88\n",
+        )
+        .unwrap();
+        let nested = root.join("packages").join("app");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("pyproject.toml"),
+            "[project]\nname = \"nested\"\n\n[tool.ruff]\nline-length = 100\n",
+        )
+        .unwrap();
+        cmd_init_with_options(options("balanced")).unwrap();
+        let config = load_written(root);
+        assert_eq!(
+            config.orchestration.format_check.as_deref(),
+            Some("black --check .")
+        );
+        assert_eq!(config.orchestration.format.as_deref(), Some("black ."));
+        assert!(config.orchestration.lint.is_none());
+    });
+}
+
+#[test]
 fn go_detection_uses_go_tools_without_js_defaults() {
     with_root("go", |root| {
         fs::write(root.join("go.mod"), "module example.test\n\ngo 1.23\n").unwrap();
@@ -213,7 +176,12 @@ fn go_detection_uses_go_tools_without_js_defaults() {
         let config = load_written(root);
         assert_commands(
             &config,
-            ["gofmt -l .", "gofmt -w .", "go vet ./...", "go test ./..."],
+            [
+                "sh -c 'files=$(gofmt -l .) || exit $?; test -z \"$files\"'",
+                "gofmt -w .",
+                "go vet ./...",
+                "go test ./...",
+            ],
         );
         assert_ne!(
             config.orchestration.lint.as_deref(),
@@ -250,12 +218,15 @@ fn explicit_commands_override_detection() {
         })
         .unwrap();
         let config = load_written(root);
+        let content = fs::read_to_string(root.join("hardgate.toml")).unwrap();
         assert_eq!(
             config.orchestration.format_check.as_deref(),
             Some("tool format --check")
         );
         assert_eq!(config.orchestration.format.as_deref(), Some("tool format"));
         assert_eq!(config.orchestration.lint.as_deref(), Some("tool lint"));
+        assert!(!content.contains("formatter command is not configured"));
+        assert!(!content.contains("linter command is not configured"));
     });
 }
 

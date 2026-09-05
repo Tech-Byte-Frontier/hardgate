@@ -1,4 +1,5 @@
 mod detect;
+mod reference;
 mod render;
 mod tooling;
 
@@ -57,7 +58,7 @@ pub fn cmd_init_with_options(options: InitOptions) -> Result<()> {
 fn init_at(root: &Path, options: &InitOptions) -> Result<()> {
     let target = root.join("hardgate.toml");
     if !options.preview && entry_exists(&target)? {
-        write_stdout("warning: hardgate.toml already exists in this directory.\n")?;
+        write_stderr("warning: hardgate.toml already exists in this directory.\n")?;
         return Ok(());
     }
 
@@ -94,25 +95,24 @@ fn init_at(root: &Path, options: &InitOptions) -> Result<()> {
         preview: options.preview,
     });
 
-    let mut output = String::new();
+    let mut status = String::new();
     if fallback {
-        output.push_str("warning: unknown preset; using strict-agent.\n");
+        status.push_str("warning: unknown preset; using strict-agent.\n");
     }
     if options.preview {
-        output.push_str("preview: no file was written.\n\n");
-        output.push_str(&content);
-        output.push('\n');
+        write_stdout(&content)?;
+        status.push_str("preview: no file was written.\n");
     } else {
         match write_new(&target, content.as_bytes())? {
-            true => output.push_str("created: hardgate.toml\n"),
+            true => status.push_str("created: hardgate.toml\n"),
             false => {
-                output.push_str("warning: hardgate.toml already exists in this directory.\n");
-                return write_stdout(&output);
+                status.push_str("warning: hardgate.toml already exists in this directory.\n");
+                return write_stderr(&status);
             }
         }
     }
-    output.push_str(&summary);
-    write_stdout(&output)
+    status.push_str(&summary);
+    write_stderr(&status)
 }
 
 fn parse_preset(value: &str) -> (Preset, bool) {
@@ -157,7 +157,13 @@ struct SetupContext<'a> {
 }
 
 fn missing_setup(context: &SetupContext<'_>) -> Vec<String> {
-    let mut missing = context.detection.missing_setup.clone();
+    let mut missing = context
+        .detection
+        .missing_setup
+        .iter()
+        .filter(|message| !resolved_by_override(message, context.config))
+        .cloned()
+        .collect();
     append_coverage_setup(&mut missing, context.root, context.config);
     append_mutation_setup(&mut missing, context.root, context.config);
     if context.preset == Preset::LegacyMigration
@@ -166,6 +172,21 @@ fn missing_setup(context: &SetupContext<'_>) -> Vec<String> {
         missing.push("legacy reference origin/main is not currently usable".to_string());
     }
     deduplicate(missing)
+}
+
+fn resolved_by_override(message: &str, config: &HardgateConfig) -> bool {
+    let message = message.to_ascii_lowercase();
+    let formatter_override =
+        config.orchestration.format_check.is_some() || config.orchestration.format.is_some();
+    let linter_override = config.orchestration.lint.is_some();
+    (formatter_override
+        && (message.contains("formatter")
+            || message.contains("prettier")
+            || message.contains("biome")))
+        || (linter_override
+            && (message.contains("linter")
+                || message.contains("eslint")
+                || message.contains("oxlint")))
 }
 
 fn append_coverage_setup(missing: &mut Vec<String>, root: &Path, config: &HardgateConfig) {
@@ -303,7 +324,7 @@ fn next_command(
             .iter()
             .any(|item| item.contains("coverage") || item.contains("mutation"))
     {
-        return "hardgate check";
+        return "configure coverage.report and mutation.reports, generate the required evidence, then run hardgate verify";
     }
     if config.orchestration.format_check.is_some()
         || config.orchestration.lint.is_some()
@@ -336,6 +357,14 @@ pub(crate) fn preset_name(preset: Preset) -> &'static str {
 fn write_stdout(content: &str) -> Result<()> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
+    writer.write_all(content.as_bytes())?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_stderr(content: &str) -> Result<()> {
+    let stderr = io::stderr();
+    let mut writer = BufWriter::new(stderr.lock());
     writer.write_all(content.as_bytes())?;
     writer.flush()?;
     Ok(())

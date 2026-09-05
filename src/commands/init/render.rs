@@ -81,7 +81,8 @@ fn preset_guidance(preset: Preset) -> String {
             "# strict-agent keeps the strict structural thresholds (95% line/function,\n\
              # 90% branch coverage, and an 85% mutation floor) and requires evidence.\n\
              # Provide coverage/lcov.info and [mutation].reports before hardgate verify.\n\
-             # A structural hardgate check is useful while evidence is being generated.\n"
+             # The policy remains incomplete until real LCOV and mutation reports exist;\n\
+             # generate those reports before using hardgate verify.\n"
                 .to_string()
         }
         Preset::Balanced => {
