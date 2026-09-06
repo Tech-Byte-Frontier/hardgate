@@ -42,6 +42,104 @@ const CARGO_CAUGHT: &str = r#"{
 }"#;
 
 #[test]
+fn structured_cargo_outcomes_require_identity_counts_and_executed_phase_scope() {
+    let root = tempdir("mutation-structured-fields");
+    let original: serde_json::Value = serde_json::from_str(CARGO_CAUGHT).unwrap();
+    for pointer in [
+        "/outcomes/0/scenario",
+        "/outcomes/0/summary",
+        "/caught",
+        "/outcomes/1/phase_results/1/argv",
+    ] {
+        let mut report = original.clone();
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        report
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        let path = write_report(&root, "missing.json", &report.to_string());
+        assert!(
+            gatekeeper().evaluate_report(&path).is_err(),
+            "accepted missing {pointer}"
+        );
+    }
+    for arguments in [
+        serde_json::json!(["cargo", "test", "--list"]),
+        serde_json::json!(["cargo", "check"]),
+    ] {
+        let mut report = original.clone();
+        report["outcomes"][1]["phase_results"][1]["argv"] = arguments;
+        let path = write_report(&root, "not-executed.json", &report.to_string());
+        assert!(gatekeeper().evaluate_report(&path).is_err());
+    }
+    let mut report = original;
+    report["outcomes"][1]["phase_results"][1]["argv"] =
+        serde_json::json!(["cargo", "nextest", "run"]);
+    let path = write_report(&root, "nextest.json", &report.to_string());
+    assert!(gatekeeper().evaluate_report(&path).unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn timeout_and_unviable_outcomes_require_matching_phases_and_remain_blocking() {
+    let root = tempdir("mutation-phase-outcomes");
+    for (summary, counter, phase, status) in [
+        ("Timeout", "timeout", "Test", serde_json::json!("Timeout")),
+        (
+            "Unviable",
+            "unviable",
+            "Build",
+            serde_json::json!({"Failure":101}),
+        ),
+    ] {
+        let mut report: serde_json::Value = serde_json::from_str(CARGO_CAUGHT).unwrap();
+        report["caught"] = serde_json::json!(0);
+        report[counter] = serde_json::json!(1);
+        report["outcomes"][1]["summary"] = serde_json::json!(summary);
+        report["outcomes"][1]["phase_results"] =
+            serde_json::json!([{"phase":phase,"process_status":status}]);
+        let path = write_report(&root, "outcome.json", &report.to_string());
+        assert!(!gatekeeper().evaluate_report(&path).unwrap().is_empty());
+        report["outcomes"][1]["phase_results"][0]["process_status"] = serde_json::json!("Success");
+        std::fs::write(&path, report.to_string()).unwrap();
+        assert!(gatekeeper().evaluate_report(&path).is_err());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn report_ingestion_api_keeps_parse_failures_distinct_from_mutation_scores() {
+    let root = tempdir("mutation-public-ingestion");
+    let path = write_report(&root, "mutation.json", CARGO_CAUGHT);
+    let mut config = hardgate::config::HardgateConfig::default();
+    config.mutation.enabled = true;
+    let mut report = hardgate::GateReport::new("fixture".into());
+    hardgate::commands::verify::verify_mutation(
+        &config,
+        Some(path.display().to_string()),
+        &mut report,
+    );
+    assert!(report.mutation_violations.is_empty());
+    assert!(report.orchestration_violations.is_empty());
+    std::fs::write(&path, "not JSON").unwrap();
+    hardgate::commands::verify::verify_mutation(
+        &config,
+        Some(path.display().to_string()),
+        &mut report,
+    );
+    assert!(report.mutation_violations.is_empty());
+    assert_eq!(report.orchestration_violations.len(), 1);
+    assert!(
+        report.orchestration_violations[0]
+            .output
+            .contains("Failed to parse required mutation report")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn test_mutation_report_parsers() {
     let tmp = tempdir("mut");
     let keeper = gatekeeper();

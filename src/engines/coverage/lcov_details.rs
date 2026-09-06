@@ -36,45 +36,26 @@ impl RecordDetails {
         if test_lines.is_empty() {
             return Ok(());
         }
-        // Recompute from complete producer records only. Aggregate-only or
-        // ambiguous details cannot establish production-only denominators.
-        anyhow::ensure!(
-            coverage.lines_found == coverage.line_hits.len()
-                && coverage.lines_hit
-                    == coverage
-                        .line_hits
-                        .values()
-                        .filter(|hits| **hits > 0)
-                        .count(),
-            "mixed production/test LCOV requires complete DA line details"
-        );
         let functions = self.production_functions(coverage)?;
         anyhow::ensure!(
-            coverage.branches_found == self.branches.values.len()
-                && coverage.branches_hit
-                    == self
-                        .branches
-                        .values
-                        .values()
-                        .filter(|hits| hits.is_some_and(|hits| hits > 0))
-                        .count(),
+            coverage.branches_found == self.branches.values.len(),
             "mixed production/test LCOV requires complete BRDA branch details"
         );
-        coverage
-            .line_hits
-            .retain(|line, _| !test_lines.contains(line));
-        coverage.lines_found = coverage.line_hits.len();
-        coverage.lines_hit = coverage
-            .line_hits
-            .values()
-            .filter(|hits| **hits > 0)
-            .count();
+        retain_lines(coverage, &test_lines);
         let functions = functions
             .iter()
             .filter(|(line, _)| !test_lines.contains(line))
             .collect::<Vec<_>>();
         coverage.functions_found = functions.len();
         coverage.functions_hit = functions.iter().filter(|(_, hit)| *hit).count();
+        let test_branch_hits = self
+            .branches
+            .values
+            .iter()
+            .filter(|(key, hits)| {
+                test_lines.contains(&key.line) && hits.is_some_and(|hits| hits > 0)
+            })
+            .count();
         let branches = self
             .branches
             .values
@@ -85,7 +66,8 @@ impl RecordDetails {
         coverage.branches_hit = branches
             .iter()
             .filter(|(_, hits)| hits.is_some_and(|hits| hits > 0))
-            .count();
+            .count()
+            .min(coverage.branches_hit.saturating_sub(test_branch_hits));
         Ok(())
     }
 
@@ -174,6 +156,29 @@ impl RecordDetails {
         validate_functions(&self.functions, &input)?;
         validate_branches(&self.branches, &input)
     }
+}
+
+fn retain_lines(coverage: &mut super::FileCoverage, test_lines: &HashSet<usize>) {
+    // LLVM's function summaries can count overlapping source lines more than
+    // once. Keep every unattributed summary observation in the denominator,
+    // but give hit credit only to proven production DA records. This is a
+    // conservative lower bound, never an inferred hit or a reduced denominator.
+    let test_hits = coverage
+        .line_hits
+        .iter()
+        .filter(|(line, hits)| test_lines.contains(line) && **hits > 0)
+        .count();
+    let before = coverage.line_hits.len();
+    coverage
+        .line_hits
+        .retain(|line, _| !test_lines.contains(line));
+    coverage.lines_found -= before - coverage.line_hits.len();
+    let production_hits = coverage
+        .line_hits
+        .values()
+        .filter(|hits| **hits > 0)
+        .count();
+    coverage.lines_hit = production_hits.min(coverage.lines_hit.saturating_sub(test_hits));
 }
 
 #[derive(Default)]

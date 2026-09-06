@@ -71,3 +71,29 @@ fn mixed_source_test_line_is_not_credited_as_production() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn overlapping_summary_lines_keep_unattributed_counts_without_test_hit_credit() {
+    let root = fs_tests::tempdir("coverage-summary-overlap");
+    std::fs::write(
+        root.join("lib.rs"),
+        "pub fn production() {}\n#[cfg(test)]\nfn helper() {}\n",
+    )
+    .unwrap();
+    let path = root.join("report.lcov");
+    let config = HardgateConfig::default();
+    for (summary_hits, branch_hits, expected_hits) in [(3, 2, 1), (1, 1, 0)] {
+        std::fs::write(&path, format!("SF:lib.rs\nFN:1,production\nFN:3,helper\nFNDA:1,production\nFNDA:1,helper\nFNF:2\nFNH:2\nDA:1,1\nDA:3,1\nLF:3\nLH:{summary_hits}\nBRDA:1,0,0,1\nBRDA:3,0,0,1\nBRF:2\nBRH:{branch_hits}\nend_of_record\n")).unwrap();
+        let map = CoverageScorer::new(&config.coverage)
+            .parse_lcov_for_project(&path, &root, &config)
+            .unwrap();
+        let record = &map[Path::new("lib.rs")];
+        assert_eq!(record.lines_found, 2);
+        assert_eq!(record.lines_hit, expected_hits);
+        assert_eq!(record.branches_found, 1);
+        assert_eq!(record.branches_hit, expected_hits);
+        assert_eq!(record.line_hits.len(), 1);
+        assert!(!record.line_hits.contains_key(&3));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

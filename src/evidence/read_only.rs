@@ -37,7 +37,7 @@ impl Session {
         );
         let root = root.canonicalize()?;
         let before = Snapshot::capture(&root)?;
-        let workspace = EvidenceWorkspace::create(&root, &[])?;
+        let workspace = EvidenceWorkspace::create(&root)?;
         before.require_same(
             &Snapshot::capture(workspace.root())?,
             "read-only check copy",

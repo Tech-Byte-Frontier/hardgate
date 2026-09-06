@@ -206,3 +206,92 @@ fn test_check_progress_jsonl() {
     let parsed: Value = serde_json::from_str(&stdout_str).unwrap();
     assert!(parsed["passed"].as_bool().unwrap());
 }
+
+#[test]
+fn saved_reports_reject_invalid_json_incomplete_shapes_and_removed_findings() {
+    let fixture = Fixture::new("report", "invalid-inputs", None);
+    let base = serde_json::to_value(make_test_report()).unwrap();
+    let mut removed = base.clone();
+    removed["dead_code_violations"] = serde_json::json!([{"message":"legacy"}]);
+    let mut wrong_type = base.clone();
+    wrong_type["dead_code_violations"] = serde_json::json!({});
+    let mut unsupported = base.clone();
+    unsupported["schema_version"] = 2.into();
+    for (content, expected) in [
+        ("not JSON".to_owned(), "Failed to parse report JSON"),
+        ("{}".to_owned(), "Expected a full gate report"),
+        (removed.to_string(), "removed dead-code findings"),
+        (wrong_type.to_string(), "removed dead-code findings"),
+        (unsupported.to_string(), "Unsupported report schema version"),
+    ] {
+        fixture.write("input.json", &content);
+        let output = run(fixture.as_ref(), &["report", "input.json"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+    }
+    let mut legacy = base;
+    legacy.as_object_mut().unwrap().remove("schema_version");
+    legacy["dead_code_violations"] = serde_json::json!([]);
+    legacy["status"] = "incomplete".into();
+    legacy["inspection"] = serde_json::json!({"original_total_errors":19,"filtered":true});
+    fixture.write("input.json", &legacy.to_string());
+    let output = run(
+        fixture.as_ref(),
+        &["report", "input.json", "--format", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let parsed = json(&output);
+    assert_eq!(parsed["status"], "incomplete");
+    assert_eq!(parsed["inspection"]["original_total_errors"], 19);
+    assert_eq!(parsed["inspection"]["filtered"], true);
+}
+
+#[test]
+fn specialist_report_filters_select_rules_and_rank_files_without_changing_verdict() {
+    let fixture = Fixture::new("report", "specialist-filters", None);
+    let mut report = make_test_report();
+    for (file, rule) in [
+        ("src/alpha.rs", "clippy::unwrap_used"),
+        ("src/beta.rs", "rustc::unused"),
+    ] {
+        report
+            .tool_diagnostics
+            .push(hardgate::engines::cargo_diagnostics::ToolDiagnostic {
+                tool: "clippy".into(),
+                rule: rule.into(),
+                level: "warning".into(),
+                message: "fixture diagnostic".into(),
+                file: file.into(),
+                line: 1,
+                column: 1,
+                end_line: 1,
+                package_id: "fixture".into(),
+                target: serde_json::json!({}),
+                targets: vec![],
+                blocking: true,
+            });
+    }
+    report.finalize(2, 2, 50);
+    fixture.write("input.json", &serde_json::to_string(&report).unwrap());
+    for (flags, expected) in [
+        (vec!["--metric", "UNWRAP"], 1),
+        (vec!["--top", "1"], 1),
+        (vec!["--engine", "specialist"], 2),
+        (vec!["--top", "0"], 0),
+    ] {
+        let mut args = vec!["report", "input.json", "--format", "json"];
+        args.extend(flags);
+        let output = run(fixture.as_ref(), &args);
+        assert_eq!(output.status.code(), Some(1));
+        let parsed = json(&output);
+        assert_eq!(
+            parsed["tool_diagnostics"].as_array().unwrap().len(),
+            expected
+        );
+        assert_eq!(parsed["inspection"]["original_total_errors"], 5);
+        assert_eq!(parsed["passed"], false);
+        if expected == 1 {
+            assert_eq!(parsed["tool_diagnostics"][0]["file"], "src/alpha.rs");
+        }
+    }
+}

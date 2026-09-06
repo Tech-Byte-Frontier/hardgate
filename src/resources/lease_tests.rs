@@ -201,4 +201,72 @@ mod platform {
             "{error}"
         );
     }
+
+    #[test]
+    fn unsafe_directory_and_file_metadata_cannot_establish_a_lease() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = LockFixture::new();
+        fixture.create_directory();
+        let file = fixture.create_file(&fixture.path);
+        for mode in [0o644, 0o660] {
+            fs::set_permissions(&fixture.path, fs::Permissions::from_mode(mode)).unwrap();
+            let error = error_from(fixture.acquire(false), "shared lock permissions must fail");
+            assert!(error.to_string().contains("0600"), "{error}");
+        }
+        fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o600)).unwrap();
+        let error = error_from(
+            super::super::validate_lock_metadata(&file.metadata().unwrap(), current_uid() + 1),
+            "foreign file owner must fail",
+        );
+        assert!(error.to_string().contains("another user"));
+        let error = error_from(
+            ensure_lock_directory(&fixture.path, current_uid() + 1),
+            "foreign directory owner must fail",
+        );
+        assert!(error.to_string().contains("another user"));
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = error_from(fixture.acquire(false), "shared lock directory must fail");
+        assert!(error.to_string().contains("0700"));
+        fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_file(&fixture.path).unwrap();
+        fs::create_dir(&fixture.path).unwrap();
+        let error = error_from(fixture.acquire(false), "directory cannot replace lock file");
+        assert!(error.to_string().contains("not a regular file"));
+    }
+
+    #[test]
+    fn lock_directory_symlinks_and_non_directories_are_rejected() {
+        let fixture = LockFixture::new();
+        let other = LockFixture::new();
+        other.create_directory();
+        std::os::unix::fs::symlink(&other.directory, &fixture.directory).unwrap();
+        let error = error_from(fixture.acquire(false), "symlink directory must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("directory must not be a symlink")
+        );
+        fs::remove_file(&fixture.directory).unwrap();
+        drop(fixture.create_file(&fixture.directory));
+        let error = error_from(fixture.acquire(false), "regular file directory must fail");
+        assert!(error.to_string().contains("not a directory"));
+        fs::remove_file(&fixture.directory).unwrap();
+    }
+
+    #[test]
+    fn a_held_lock_reaches_its_deadline_without_stealing_the_lease() {
+        let fixture = LockFixture::new();
+        fixture.create_directory();
+        let holder = fixture.create_file(&fixture.path);
+        holder.try_lock().unwrap();
+        let error = error_from(
+            acquire_at(&fixture.path, current_uid(), Instant::now(), false),
+            "busy lock must time out",
+        );
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let probe = File::open(&fixture.path).unwrap();
+        assert!(matches!(probe.try_lock(), Err(TryLockError::WouldBlock)));
+        drop(holder);
+        probe.try_lock().unwrap();
+    }
 }

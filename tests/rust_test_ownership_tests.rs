@@ -12,6 +12,114 @@ fn policy() -> HardgateConfig {
     config
 }
 
+#[test]
+fn cfg_logic_requires_positive_test_ownership_and_bounds_uncertain_predicates() {
+    let predicates = [
+        ("#[cfg(all(test, true))]", true),
+        ("#[cfg(any(test, false))]", true),
+        ("#[cfg(all(test, unix))]", true),
+        ("#[cfg(any(test, unix))]", false),
+        ("#[cfg(not(not(test)))]", true),
+        ("#[cfg(not(test))]", false),
+        ("#[cfg(all(test, not(test)))]", false),
+        ("#[cfg(all())]", false),
+        ("#[cfg(any())]", false),
+        ("#[cfg(not())]", false),
+        ("#[cfg(not(test, true))]", false),
+        ("#[cfg(unknown(test))]", false),
+        ("#[cfg(test, unix)]", false),
+        ("#[cfg[test]]", false),
+        ("#[cfg]", false),
+        ("#[custom]", false),
+        ("#[test]", true),
+        ("#[bench]", true),
+        (
+            "#[cfg(all(/* explanation */ test, feature = r#\"a,b\"#))]",
+            true,
+        ),
+    ];
+    for (attribute, expected) in predicates {
+        let source = format!("{attribute}\nfn candidate() {{}}\n");
+        let report = analyze(&policy(), &[("lib.rs", &source)]);
+        let candidate = report
+            .functions
+            .iter()
+            .find(|function| function.name == "candidate")
+            .unwrap();
+        assert_eq!(candidate.test_only, expected, "{attribute}: {report:?}");
+    }
+    let nested = format!(
+        "#[cfg({}test{})]\nfn bounded() {{}}\n",
+        "not(".repeat(66),
+        ")".repeat(66)
+    );
+    let report = analyze(&policy(), &[("lib.rs", &nested)]);
+    assert!(!report.functions[0].test_only);
+}
+
+#[test]
+fn declared_named_targets_override_test_imports_even_with_auto_discovery_disabled() {
+    for (section, directory, automatic, expected) in [
+        ("bin", "src/bin", "autobins", false),
+        ("example", "examples", "autoexamples", false),
+        ("test", "tests", "autotests", true),
+        ("bench", "benches", "autobenches", true),
+    ] {
+        for suffix in ["demo.rs", "demo/main.rs"] {
+            let path = format!("{directory}/{suffix}");
+            let manifest = format!(
+                "[package]\nname='layout'\nversion='0.1.0'\n{automatic}=false\n[lib]\npath='lib.rs'\n[[{section}]]\nname='demo'\n"
+            );
+            let library = format!("#[cfg(test)]\n#[path = r#\"{path}\"#]\nmod imported;\n");
+            let report = analyze(
+                &policy(),
+                &[
+                    ("Cargo.toml", &manifest),
+                    ("lib.rs", &library),
+                    (&path, "pub fn candidate() {}\n"),
+                ],
+            );
+            let candidate = report
+                .functions
+                .iter()
+                .find(|function| function.name == "candidate")
+                .unwrap();
+            assert_eq!(
+                candidate.test_only, expected,
+                "{section}/{suffix}: {report:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_build_scripts_and_implicit_library_paths_remain_production_roots() {
+    let report = analyze(
+        &policy(),
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname='layout'\nversion='0.1.0'\nbuild='compile.rs'\n[lib]\nname='layout'\n",
+            ),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\n#[path=\"../compile.rs\"]\nmod helper;\n",
+            ),
+            ("compile.rs", "fn compile() {}\n"),
+            ("examples/no_extension", "ignored"),
+            ("examples/demo/readme.txt", "ignored"),
+        ],
+    );
+    assert!(
+        !report
+            .functions
+            .iter()
+            .find(|function| function.name == "compile")
+            .unwrap()
+            .test_only
+    );
+}
+
 fn analyze(config: &HardgateConfig, files: &[(&str, &str)]) -> hardgate::GateReport {
     let files = files
         .iter()

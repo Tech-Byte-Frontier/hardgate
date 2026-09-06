@@ -358,6 +358,11 @@ critical_paths = ["src/core.ts"]
 
 Only LCOV is parsed. Full checks evaluate global line/function/branch floors, critical paths, and missing source records. Source-role Rust files with no parsed executable functions (for example, declaration-only module files) do not require an LCOV source record; every Rust source with a parsed function and every non-Rust Source file remains required. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check` resolves the report as follows: an explicit CLI path takes precedence over `coverage.report`; it does not auto-discover conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
+When filtering inline Rust tests, overlapping LLVM line summaries are scored
+conservatively: unassigned summary observations remain in the denominator and
+only proven production line details receive hit credit. Function and branch
+details must still establish an unambiguous production/test split.
+
 This repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
 instrumentation is unstable. The producer-only nightly toolchain does not

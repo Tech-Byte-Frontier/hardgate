@@ -383,3 +383,30 @@ fn nested_mcp_tools_share_policy_and_honor_explicit_config() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn check_tool_rejects_wrong_argument_types_and_empty_scope_as_tool_errors() {
+    let root = fs::tempdir("mcp-check-argument-types");
+    let cases = [
+        (json!({"paths":"src"}), "must be an array of strings"),
+        (json!({"paths":[1]}), "must contain only strings"),
+        (json!({"paths":[""]}), "must not contain empty paths"),
+        (json!({"paths":[]}), "No paths provided"),
+        (json!({"diff":"true"}), "must be a boolean"),
+    ];
+    let requests = cases.iter().enumerate().map(|(index, (args, _))| {
+        request(
+            index as u64,
+            "tools/call",
+            Some(json!({"name":"hardgate_check","arguments":args})),
+        )
+    });
+    let responses = run_mcp(&root, &ndjson(requests));
+    assert_eq!(responses.len(), cases.len());
+    for (response, (_, expected)) in responses.iter().zip(cases) {
+        assert_eq!(response["result"]["isError"], true);
+        assert!(tool_text(response).contains(expected), "{response}");
+        assert!(response.get("error").is_none());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -183,9 +183,11 @@ fn validate_lock_metadata(metadata: &Metadata, uid: u32) -> io::Result<()> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_lock_file(path: &Path) -> io::Result<File> {
+    // flock needs the descriptor, not write access to the file contents.
+    // Reusing the shared lock must work inside a source-write sandbox too.
     let descriptor = rustix::fs::open(
         path,
-        rustix::fs::OFlags::RDWR
+        rustix::fs::OFlags::RDONLY
             | rustix::fs::OFlags::CREATE
             | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::CLOEXEC,

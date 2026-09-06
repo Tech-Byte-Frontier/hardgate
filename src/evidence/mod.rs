@@ -79,7 +79,7 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
         !before.0.is_empty(),
         "evidence requires non-empty project inputs"
     );
-    let workspace = workspace::EvidenceWorkspace::create(&root, &[])?;
+    let workspace = workspace::EvidenceWorkspace::create(&root)?;
     before.require_same(&Snapshot::capture(workspace.root())?, "producer copy")?;
     before.require_same(&Snapshot::capture(&root)?, "checkout during copy")?;
     let spec = producer::prepare(&options, workspace.root())?;

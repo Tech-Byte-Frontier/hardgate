@@ -14,10 +14,9 @@ pub(super) struct EvidenceWorkspace {
 }
 
 impl EvidenceWorkspace {
-    pub(super) fn create(source: &Path, targets: &[PathBuf]) -> Result<Self> {
+    pub(super) fn create(source: &Path) -> Result<Self> {
         crate::cancellation::install()?;
         let source = source.canonicalize()?;
-        validate_targets(&source, targets)?;
         let workspace = Self {
             root: private_directory()?,
         };
@@ -27,14 +26,6 @@ impl EvidenceWorkspace {
             );
         }
         copy::copy_tree(&source, &workspace.root)?;
-        for target in targets {
-            if !workspace.root.join(target).is_file() {
-                bail!(
-                    "evidence target `{}` is outside the supported source snapshot",
-                    target.display()
-                );
-            }
-        }
         Ok(workspace)
     }
 
@@ -83,27 +74,4 @@ fn private_directory() -> Result<PathBuf> {
         }
     }
     bail!("unable to allocate a private evidence workspace")
-}
-
-fn validate_targets(root: &Path, targets: &[PathBuf]) -> Result<()> {
-    for target in targets {
-        let path = root.join(target);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if fs::metadata(&path)?.nlink() > 1 {
-                bail!(
-                    "refusing evidence target `{}`: source has pre-existing hardlinks",
-                    target.display()
-                );
-            }
-        }
-        if !path.canonicalize()?.starts_with(root) {
-            bail!(
-                "evidence target escapes the source workspace: {}",
-                target.display()
-            );
-        }
-    }
-    Ok(())
 }
