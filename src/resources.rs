@@ -12,6 +12,8 @@ use std::io;
 use std::time::{Duration, Instant};
 
 pub(crate) use budget::MutationBudget;
+#[cfg(target_os = "linux")]
+pub(crate) use lease::prepare as prepare_mutation_lease;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 

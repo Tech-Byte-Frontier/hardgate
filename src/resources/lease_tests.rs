@@ -269,4 +269,66 @@ mod platform {
         drop(holder);
         probe.try_lock().unwrap();
     }
+
+    #[test]
+    fn sandboxed_lease_child() {
+        let Some(path) = std::env::var_os("HARDGATE_PRIVATE_LEASE_TEST") else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        let _lease = acquire_at(
+            &path,
+            current_uid(),
+            Instant::now() + Duration::from_secs(1),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::write(&path, b"forbidden").unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn preparing_a_fresh_lease_allows_sandboxed_locking_without_file_write_access() {
+        use crate::engines::process::{ProcessOutcome, run_command_in_copy};
+        let fixture = LockFixture::new();
+        let root = crate::fs_tests::tempdir("lease-sandbox-parent");
+        let copy = root.join("copy");
+        let original = root.join("source");
+        fs::create_dir(&copy).unwrap();
+        fs::create_dir(&original).unwrap();
+        let tokens = vec![
+            "env".into(),
+            format!("HARDGATE_PRIVATE_LEASE_TEST={}", fixture.path.display()),
+            std::env::current_exe().unwrap().display().to_string(),
+            "--exact".into(),
+            "resources::lease::tests::platform::sandboxed_lease_child".into(),
+            "--nocapture".into(),
+        ];
+        let before = run_command_in_copy(
+            &tokens,
+            (&copy, &original),
+            Duration::from_secs(5),
+            "evidence",
+        );
+        assert!(
+            matches!(before, ProcessOutcome::Completed { status, .. } if !status.success()),
+            "{before:?}"
+        );
+        assert!(!fixture.directory.exists());
+        drop(super::super::prepare_at(&fixture.path, current_uid()).unwrap());
+        let after = run_command_in_copy(
+            &tokens,
+            (&copy, &original),
+            Duration::from_secs(5),
+            "evidence",
+        );
+        assert!(
+            matches!(after, ProcessOutcome::Completed { status, .. } if status.success()),
+            "{after:?}"
+        );
+        assert!(fs::read(&fixture.path).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

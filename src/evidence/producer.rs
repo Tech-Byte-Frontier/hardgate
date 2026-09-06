@@ -107,7 +107,8 @@ fn mutation_baseline(options: &EvidenceOptions, root: &Path) -> Result<Vec<Strin
     // mutants, even with --test-workspace=true. Prove the full test scope on
     // original code so an existing failure elsewhere cannot become a kill.
     let mut tokens = cargo_prefix(options);
-    tokens.extend(strings(&["test", "--workspace", "--locked"]));
+    // Keep failure diagnostics within bounded capture without hiding test failures.
+    tokens.extend(strings(&["test", "--workspace", "--locked", "--quiet"]));
     let selected = rust_scope(&options.args, true)?;
     let mut position = 0;
     while position < selected.len() {

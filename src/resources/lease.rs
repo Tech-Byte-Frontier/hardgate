@@ -82,6 +82,25 @@ fn acquire_at(
         return Ok(MutationLease { _inner: inner });
     }
 
+    let file = prepare_at(path, uid)?;
+    lock_file(&file, path, deadline)?;
+
+    let inner = Rc::new(LeaseInner {
+        _file: file,
+        path: path.to_path_buf(),
+    });
+    HELD_LEASE.with(|held| *held.borrow_mut() = Rc::downgrade(&inner));
+    Ok(MutationLease { _inner: inner })
+}
+
+/// Create and validate the shared lock before child write restrictions apply.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn prepare() -> io::Result<()> {
+    prepare_at(&lock_path(), current_uid()).map(drop)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prepare_at(path: &Path, uid: u32) -> io::Result<File> {
     ensure_lock_directory(path, uid)?;
     validate_existing_lock_path(path, uid)?;
     let file = open_lock_file(path)?;
@@ -91,14 +110,7 @@ fn acquire_at(
             .map_err(|error| filesystem_error("inspect lock file", error))?,
         uid,
     )?;
-    lock_file(&file, path, deadline)?;
-
-    let inner = Rc::new(LeaseInner {
-        _file: file,
-        path: path.to_path_buf(),
-    });
-    HELD_LEASE.with(|held| *held.borrow_mut() = Rc::downgrade(&inner));
-    Ok(MutationLease { _inner: inner })
+    Ok(file)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

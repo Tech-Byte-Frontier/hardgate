@@ -29,6 +29,9 @@ pub(super) fn configure(command: &mut Command, copy: &Path, original: &Path) -> 
     let original = original.canonicalize()?;
     require_disjoint(&copy, &original)?;
     let ruleset = create_ruleset()?;
+    // A descendant may run a mutation producer. Prepare its validated shared
+    // lease now; the sandbox must never grant writes to the global lock path.
+    crate::resources::prepare_mutation_lease()?;
     allow(&ruleset, &copy)?;
     if let Some(cache) = cargo_home().filter(|path| path.is_dir()) {
         let cache = cache.canonicalize()?;
