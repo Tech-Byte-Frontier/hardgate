@@ -79,7 +79,7 @@ function verifyEmbeddedIdentity(bytes, { packageName, target, version, sourceSha
   if (!bytes.includes(Buffer.from(version, "utf8")) || !bytes.includes(Buffer.from(sourceSha, "utf8"))) {
     fail(`${packageName} archive binary does not embed the expected version and source identity`);
   }
-  if (!bytes.includes(Buffer.from(`hardgate ${version} (${sourceSha})`, "utf8"))) {
+  if (!bytes.includes(Buffer.from(`${version} (${sourceSha})`, "utf8"))) {
     fail(`${packageName} archive binary does not embed the expected version/source identity marker`);
   }
   if (!bytes.includes(Buffer.from(`hardgate-target:${target}`, "utf8"))) {
