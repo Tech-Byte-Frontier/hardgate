@@ -121,3 +121,23 @@ not. Mixed lines can contribute to more than one category. Physical byte/line
 budgets remain enforced as configured. Size observations guide review, and do
 not prove that extracting code would improve the design. Older reports without
 these observations remain readable without invented measurements.
+
+## Display views and complete capture (0.6.1)
+
+Schema version remains 1. `check --engine` filters the displayed diagnostic and
+violation arrays; `summary`, verdict, execution and omitted requirements retain
+the complete result. `total`, `shown`, and `omitted` count blocking findings;
+advisories stay visible separately. Findings have a deterministic category,
+path, span and metric order; engine filtering precedes `--max-diagnostics`.
+The additive `failures` array retains setup/tool and missing-evidence diagnostic
+context even when display filtering or a zero limit hides ordinary findings.
+Unsupported-source diagnostics carry file-only locations (`line` and `end_line`
+are null).
+
+`check --report-json PATH` writes all findings independently of the displayed
+view. `--output` continues to write the exact rendered stdout representation.
+`--snippets` at capture time stores bounded excerpts in `diagnostics[].excerpts`;
+saved inspection reuses only those captured excerpts. A limited/filtered saved
+view is marked non-equivalent during comparison, including views saved directly
+from a bounded `check`. Saved `inspection.displayed_errors` respects the display
+limit, while `inspection.original_total_errors` retains the original count.

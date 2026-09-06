@@ -416,3 +416,31 @@ linter diagnostics for target-aware analysis.
 ## Validation and fail-closed rules
 
 Serde handles types and enum values; semantic validation rejects non-positive thresholds, invalid/duplicate globs (including invariant import globs), enabled freshness without a command, enabled legacy ratchet without a reference, and unsafe mutation settings. Empty required reports/outcomes, unreadable files, parser failures, Git failures, and configured command failures are never silently converted into a pass. The CLI retains an advisory when source discovery is empty and still evaluates enabled evidence; MCP `hardgate_check` rejects empty scopes/discovery explicitly.
+
+### Check outputs and bound coverage
+
+Ordinary verification runs in a disposable copy. Recognized cache records
+(`.ruff_cache`, `.import_linter_cache`, `.pytest_cache`, `.eslintcache`, and
+`__pycache__/*.pyc`) may change; other ignored source/test/config files remain
+protected. An explicit classification rule protects a cache-named required input.
+External virtualenv interpreter links must match the `pyvenv.cfg` runtime;
+other external links are rejected. No Python analysis is provided.
+
+A declared `coverage.report` ending in `.lcov` or `.info` is a disposable output
+only when classified as unknown, generated or vendor. It can be generated
+by `orchestration.test_cmd` in the copy, but cannot establish evidence freshness
+or produce a receipt. Generate trusted evidence separately:
+
+```sh
+hardgate evidence vitest
+# Rust branch coverage requires an installed branch-capable toolchain:
+hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>
+hardgate check --format agent
+```
+
+Set `coverage.report = ".hardgate/evidence/coverage.lcov"` to use that producer
+artifact. The original report and receipt are checked for source binding,
+freshness and integrity regardless of disposable test output. Coverage tools
+must not overwrite source/test/config inputs. Commands needing temporary files
+should use their runtime `$TMPDIR`, for example
+`mktemp -d "${TMPDIR:-/tmp}/finance-hardgate.XXXXXXXX"`.

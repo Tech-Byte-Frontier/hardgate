@@ -95,6 +95,14 @@ impl ExecutionPlan {
                 .any(|engine| engine.enabled && !engine.selected)
     }
 
+    pub(crate) fn is_complete(&self) -> bool {
+        !self.is_partial()
+            && self.engines.iter().all(|engine| {
+                !engine.selected
+                    || matches!(engine.state, EngineState::Completed | EngineState::Cached)
+            })
+    }
+
     pub fn omitted_requirements(&self) -> Vec<EngineId> {
         self.engines
             .iter()

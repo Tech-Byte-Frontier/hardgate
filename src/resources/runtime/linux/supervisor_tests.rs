@@ -44,7 +44,7 @@ fn cancellation_reaps_an_unacknowledged_launcher() {
 fn launch_keeps_limits_and_literal_arguments_in_the_supervisor_command() {
     let ready = fixture();
     let runtime = ready.0.parent().unwrap();
-    let command = launch(runtime, &ready.0, 1024 * 1024 * 1024).unwrap();
+    let command = launch(runtime, &ready, 1024 * 1024 * 1024).unwrap();
     let args = command
         .get_args()
         .map(|v| v.to_string_lossy().into_owned())
@@ -61,6 +61,9 @@ fn launch_keeps_limits_and_literal_arguments_in_the_supervisor_command() {
     ] {
         assert!(args.iter().any(|arg| arg == value), "missing {value}");
     }
+    assert!(args.contains(&format!("--unit={}", ready.1)));
+    assert_ne!(ready.1, fixture().1);
+    assert_ne!(ready.1, "hardgate-workload.scope");
     assert!(
         command
             .get_envs()

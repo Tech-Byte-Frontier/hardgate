@@ -3,7 +3,7 @@ use std::io::{self, BufWriter, Write};
 
 #[path = "file_output.rs"]
 mod file_output;
-pub(crate) use file_output::write_atomic_file;
+pub(crate) use file_output::{same_output_path, write_atomic_file};
 
 /// Process-independent result: main alone chooses the process exit status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,9 @@ impl CommandOutcome {
     }
 
     pub fn from_report(report: &GateReport) -> Self {
+        if let Some(outcome) = report.saved_outcome {
+            return outcome;
+        }
         if incomplete_evidence(report) {
             Self::Incomplete
         } else if report.passed {

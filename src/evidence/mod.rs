@@ -1,8 +1,11 @@
 //! Fresh producer execution and source identity, separate from report scoring.
+mod environment;
+mod inputs;
 mod mutation_scope;
 mod producer;
 pub(crate) mod read_only;
 mod snapshot;
+pub(crate) mod temporary;
 mod workspace;
 
 use crate::commands::{CommandOutcome, CommandResult};
@@ -74,14 +77,13 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
     let root = context.root.canonicalize()?;
     let destination = output_path(&root, &options)?;
     remove_receipt(&destination)?;
-    let before = Snapshot::capture(&root)?;
+    let input_policy = inputs::InputPolicy::new(&root, &context.config)?;
+    let before = Snapshot::capture_with(&root, &input_policy)?;
     ensure!(
         !before.0.is_empty(),
         "evidence requires non-empty project inputs"
     );
-    let workspace = workspace::EvidenceWorkspace::create(&root)?;
-    before.require_same(&Snapshot::capture(workspace.root())?, "producer copy")?;
-    before.require_same(&Snapshot::capture(&root)?, "checkout during copy")?;
+    let workspace = workspace::EvidenceWorkspace::create_verified(&root, &input_policy, &before)?;
     let spec = producer::prepare(&options, workspace.root())?;
     ensure!(!spec.report.exists(), "producer report must start absent");
     let version = execute_version(&spec.version, workspace.root(), &root)?;
@@ -98,11 +100,11 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
             "evidence",
         );
         before.require_same(
-            &Snapshot::capture(workspace.root())?,
+            &Snapshot::capture_with(workspace.root(), &input_policy)?,
             "producer prerequisite restoration",
         )?;
         before.require_same(
-            &Snapshot::capture(&root)?,
+            &Snapshot::capture_with(&root, &input_policy)?,
             "checkout during producer prerequisite",
         )?;
         let (exit, output) = completed_outcome(outcome, options.producer)?;
@@ -118,11 +120,11 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
     // Compare both trees even when the producer failed. A failed or interrupted
     // run cannot leave a usable receipt from an earlier invocation.
     before.require_same(
-        &Snapshot::capture(workspace.root())?,
+        &Snapshot::capture_with(workspace.root(), &input_policy)?,
         "producer restoration",
     )?;
     before.require_same(
-        &Snapshot::capture(&root)?,
+        &Snapshot::capture_with(&root, &input_policy)?,
         "checkout during producer execution",
     )?;
     let (exit, output) = completed_outcome(outcome, options.producer)?;
@@ -140,6 +142,7 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
             before,
             workspace,
             config: &context.config,
+            input_policy,
         },
     )
 }
@@ -152,6 +155,7 @@ struct ProductionOutput {
 }
 
 struct Publication<'a> {
+    input_policy: inputs::InputPolicy,
     root: &'a Path,
     destination: &'a Path,
     before: Snapshot,
@@ -172,6 +176,7 @@ fn publish(produced: ProductionOutput, publication: Publication<'_>) -> CommandR
         before,
         workspace,
         config,
+        input_policy,
     } = publication;
     let bytes = normalized_report(&spec.report, workspace.root(), producer)?;
     let temporary = destination.with_extension("pending");
@@ -207,7 +212,7 @@ fn publish(produced: ProductionOutput, publication: Publication<'_>) -> CommandR
     };
     workspace.close()?;
     receipt.inputs.require_same(
-        &Snapshot::capture(root)?,
+        &Snapshot::capture_with(root, &input_policy)?,
         "checkout before evidence publication",
     )?;
     fs::rename(&temporary, destination)?;
@@ -267,9 +272,11 @@ pub fn verify(
         file_hash(report)? == receipt.report_sha256,
         "report bytes changed after producer execution; regenerate evidence"
     );
-    receipt
-        .inputs
-        .require_same(&Snapshot::capture(root)?, "stale evidence")?;
+    let input_policy = inputs::InputPolicy::new(root, config)?;
+    receipt.inputs.require_same(
+        &Snapshot::capture_with(root, &input_policy)?,
+        "stale evidence",
+    )?;
     validate_producer_report(
         receipt.producer,
         report,

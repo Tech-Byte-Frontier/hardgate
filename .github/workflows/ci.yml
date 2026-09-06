@@ -70,6 +70,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: scripts/with-resource-limits.sh cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: scripts/with-resource-limits.sh cargo test --all-targets --all-features --locked
+      - name: Resource boundary and supervisor concurrency regressions
+        run: |
+          node tests/resource_boundary.test.mjs
+          node tests/resource_scope.test.mjs
+          node tests/resource_concurrency.test.mjs
       - name: RustSec dependency audit
         run: scripts/dependency-audit.sh
       - if: steps.scope.outputs.distribution == 'true'

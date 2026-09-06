@@ -46,6 +46,14 @@ impl MutationLease {
     pub(crate) fn acquire() -> io::Result<Self> {
         acquire()
     }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn inherit_workload(&self) -> io::Result<()> {
+        // A surviving scope leader must retain the workload slot if its outer
+        // supervisor is terminated. Mutation leases keep their CLOEXEC policy.
+        rustix::io::fcntl_setfd(&self._inner._file, rustix::io::FdFlags::empty())?;
+        Ok(())
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -84,13 +92,17 @@ fn acquire_at(
 
     let file = prepare_at(path, uid)?;
     lock_file(&file, path, deadline)?;
+    Ok(hold(file, path))
+}
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn hold(file: File, path: &Path) -> MutationLease {
     let inner = Rc::new(LeaseInner {
         _file: file,
         path: path.to_path_buf(),
     });
     HELD_LEASE.with(|held| *held.borrow_mut() = Rc::downgrade(&inner));
-    Ok(MutationLease { _inner: inner })
+    MutationLease { _inner: inner }
 }
 
 /// Create and validate the shared lock before child write restrictions apply.
@@ -264,9 +276,23 @@ mod tests;
 pub(super) fn acquire_workload() -> io::Result<MutationLease> {
     let uid = current_uid();
     let path = PathBuf::from(format!("/tmp/hardgate-workload-{uid}/slot.lock"));
-    acquire_at(&path, uid, Instant::now() + LOCK_WAIT_TIMEOUT, false).map_err(|cause| {
+    let file = prepare_at(&path, uid)?;
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    if !try_lock_or_wait(&file, &path, deadline)? {
+        eprintln!(
+            "hardgate: another workload owns the per-user resource slot; waiting (up to 30 minutes, Ctrl-C to cancel)"
+        );
+        lock_file(&file, &path, deadline).map_err(|cause| {
+            if cause.kind() == io::ErrorKind::TimedOut {
+                return crate::resources::runtime::error("workload contention: the per-user resource slot remained busy for 30 minutes; no evaluation was started");
+            }
+            crate::resources::runtime::error(format!("cannot wait for the per-user workload slot: {cause}"))
+        })?;
+    }
+    crate::cancellation::check().map_err(|cause| {
         crate::resources::runtime::error(format!(
             "cannot acquire the per-user workload slot: {cause}"
         ))
-    })
+    })?;
+    Ok(hold(file, &path))
 }

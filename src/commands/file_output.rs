@@ -58,3 +58,29 @@ pub(crate) fn write_atomic_file(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 #[path = "file_output_tests.rs"]
 mod tests;
+
+/// Resolve existing parent links and lexical dot components before writing either output.
+pub(crate) fn same_output_path(left: &Path, right: &Path) -> Result<bool> {
+    fn identity(path: &Path) -> Result<PathBuf> {
+        let absolute = std::env::current_dir()?.join(path);
+        let ancestor = absolute
+            .ancestors()
+            .find(|path| path.exists())
+            .context("output path has no existing ancestor")?;
+        let mut resolved = ancestor.canonicalize()?;
+        for part in absolute.strip_prefix(ancestor)?.components() {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    resolved.pop();
+                }
+                _ => resolved.push(part.as_os_str()),
+            }
+        }
+        Ok(crate::engines::clones::repository_relative_path(
+            &resolved,
+            Path::new("/"),
+        ))
+    }
+    Ok(identity(left)? == identity(right)?)
+}

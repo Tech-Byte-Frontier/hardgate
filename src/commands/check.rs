@@ -38,6 +38,7 @@ pub struct CheckOptions {
     pub paths: Vec<PathBuf>,
     pub display: crate::diagnostics::display::DisplayOptions,
     pub output_file: Option<PathBuf>,
+    pub report_json: Option<PathBuf>,
     pub progress: Option<String>,
 }
 
@@ -51,6 +52,7 @@ impl CheckOptions {
             summary: self.summary,
             display: self.display.clone(),
             output_file: self.output_file.clone(),
+            report_json: self.report_json.clone(),
             progress: self.progress.clone(),
         }
     }
@@ -66,6 +68,7 @@ pub struct OutputOptions {
     pub summary: bool,
     pub display: crate::diagnostics::display::DisplayOptions,
     pub output_file: Option<PathBuf>,
+    pub report_json: Option<PathBuf>,
     pub progress: Option<String>,
 }
 
@@ -92,6 +95,12 @@ pub fn cmd_check(opts: CheckOptions) -> CommandResult {
 }
 
 pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandResult {
+    if let (Some(json), Some(rendered)) = (&opts.report_json, &opts.output_file) {
+        anyhow::ensure!(
+            !crate::commands::outcome::same_output_path(json, rendered)?,
+            "--report-json and --output must use different paths"
+        );
+    }
     context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
     opts.mutation_report = context.input_report(opts.mutation_report);
     let resolved = super::check_selection::resolved_context(context, &opts)?;
@@ -319,7 +328,7 @@ fn run_orchestration(
             });
         }
     }
-    for result in engine.run_sequence(&steps, root) {
+    for result in engine.run_sequence(&steps, root, config) {
         super::specialist::record(report, result, root);
     }
 }

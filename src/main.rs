@@ -57,6 +57,9 @@ struct OutputArgs {
     /// Include bounded excerpts captured during analysis
     #[arg(long, conflicts_with = "no_snippets")]
     snippets: bool,
+    /// Include detailed explanations and AST contributors in human output
+    #[arg(long)]
+    details: bool,
     /// Display at most N diagnostics; complete analysis and verdict are unchanged
     #[arg(long, value_name = "N")]
     max_diagnostics: Option<usize>,
@@ -76,12 +79,15 @@ impl OutputArgs {
             display: self.display_options(),
             output_file: self.output_file.clone(),
             progress: None,
+            ..Default::default()
         }
     }
     fn display_options(&self) -> hardgate::diagnostics::display::DisplayOptions {
         hardgate::diagnostics::display::DisplayOptions {
             snippets: self.snippets,
             max_diagnostics: self.max_diagnostics,
+            details: self.details,
+            ..Default::default()
         }
     }
 }
@@ -122,6 +128,18 @@ enum Commands {
         lint: Option<String>,
     },
     /// Run combined policy, formatting, linting, and configured acceptance checks
+    #[command(after_help = "Examples:
+  hardgate check --compact
+  hardgate check --engine clones --format agent --report-json gate.json
+  hardgate check --engine clones --snippets --max-diagnostics 5
+  hardgate report gate.json --engine clones --top 5 --format agent
+  hardgate check --format agent
+
+--engine filters display only. Engines: complexity, budget, suppression, invariant, clones, coverage, mutation, orchestration, specialist.
+clones -> policy: --checks policy executes the whole policy group and is a partial check; --engine clones retains all execution requirements.
+Exit: 0 requested checks passed (partial runs are not acceptance); 1 violations; 2 incomplete evaluation/setup.
+With jq, preserve failure: set -o pipefail; hardgate check --json | jq '.clone_violations'
+Saved-report --top ranks files; --max-diagnostics limits findings after filtering.")]
     Check {
         #[command(flatten)]
         output: OutputArgs,
@@ -131,9 +149,15 @@ enum Commands {
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
-        /// Select check groups explicitly; omitted requirements are labeled partial
-        #[arg(long, value_enum, value_delimiter = ',')]
+        /// Execute check groups; clones -> policy. Omitted requirements are partial
+        #[arg(long, value_parser = commands::check_selection::parse_check_kind, value_delimiter = ',')]
         checks: Vec<commands::CheckKind>,
+        /// Filter displayed findings only; same engine names as report (e.g. clones)
+        #[arg(long, value_parser = hardgate::diagnostics::filter::parse_engine)]
+        engine: Option<hardgate::diagnostics::filter::FilterEngine>,
+        /// Save complete JSON independently of display filters, limits and --output
+        #[arg(long, value_name = "PATH")]
+        report_json: Option<PathBuf>,
         /// Require a source-bound mutation report
         #[arg(long)]
         mutation_report: Option<String>,
@@ -361,6 +385,8 @@ fn execute_check_command(
         progress,
         diff,
         checks,
+        engine,
+        report_json,
         mutation_report,
         coverage_report,
         paths,
@@ -368,12 +394,14 @@ fn execute_check_command(
     else {
         anyhow::bail!("expected check command");
     };
-    let opts = output.output_options();
+    let mut opts = output.output_options();
+    opts.display.engine = engine;
     commands::cmd_check_in(
         commands::CheckOptions {
             format: opts.format,
             diff,
             checks,
+            report_json,
             mutation_report,
             coverage_report,
             json: opts.json,

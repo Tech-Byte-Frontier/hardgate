@@ -50,3 +50,11 @@ pub(crate) fn resolved_context(
     }
     Ok(resolved)
 }
+
+/// Parse execution groups with actionable guidance for the display-only clone engine.
+pub fn parse_check_kind(value: &str) -> Result<CheckKind, String> {
+    use clap::ValueEnum;
+    CheckKind::from_str(value, false).map_err(|error| {
+        format!("{error}. clones -> policy: use --checks policy for partial policy execution; use --engine clones --compact for clone-only display with all checks still executed")
+    })
+}

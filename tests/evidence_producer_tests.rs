@@ -8,5 +8,7 @@ use serde_json::{Value, json};
 mod boundary_cases_tests;
 #[path = "evidence/diagnostic_cases_tests.rs"]
 mod diagnostic_cases_tests;
+#[path = "evidence/lifecycle_cases_tests.rs"]
+mod lifecycle_cases_tests;
 #[path = "evidence/producer_cases_tests.rs"]
 mod producer_cases_tests;

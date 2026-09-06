@@ -14,6 +14,23 @@ pub(super) struct EvidenceWorkspace {
 }
 
 impl EvidenceWorkspace {
+    pub(super) fn create_verified(
+        root: &Path,
+        policy: &super::inputs::InputPolicy,
+        before: &super::Snapshot,
+    ) -> Result<Self> {
+        let workspace = Self::create(root)?;
+        before.require_same(
+            &super::Snapshot::capture_with(workspace.root(), policy)?,
+            "producer copy",
+        )?;
+        before.require_same(
+            &super::Snapshot::capture_with(root, policy)?,
+            "checkout during copy",
+        )?;
+        Ok(workspace)
+    }
+
     pub(super) fn create(source: &Path) -> Result<Self> {
         crate::cancellation::install()?;
         let source = source.canonicalize()?;
@@ -70,7 +87,9 @@ fn private_directory() -> Result<PathBuf> {
         match builder.create(&root) {
             Ok(()) => return Ok(root),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error).with_context(|| format!(
+                "could not create private workspace under selected TMPDIR={}; this failure precedes Hardgate containment. Check host/agent permissions or set TMPDIR to a writable directory outside the project", std::env::temp_dir().display()
+            )),
         }
     }
     bail!("unable to allocate a private evidence workspace")

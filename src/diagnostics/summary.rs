@@ -41,6 +41,9 @@ pub struct TopFileEntry {
 impl GateReport {
     /// Build the [`GateSummary`] rollup for this report.
     pub fn summary(&self) -> GateSummary {
+        if let Some(summary) = &self.saved_summary {
+            return summary.clone();
+        }
         let code_findings = self.code_findings_count();
         let analysis_blockers = self.analysis_blockers_count();
         GateSummary {
@@ -219,6 +222,7 @@ impl GateReport {
         serde_json::to_string_pretty(&FullJson {
             outcome: super::machine::MachineOutcome::from_report(self),
             display: super::display::diagnostics(self),
+            failures: self.failure_diagnostics(),
             report: &visible,
             review_targets: visible.function_reviews(),
             summary: self.summary(),
@@ -246,6 +250,7 @@ impl GateReport {
 
 #[derive(Serialize)]
 struct FullJson<'a> {
+    failures: Vec<super::rules::RuleDiagnostic>,
     #[serde(flatten)]
     display: super::display::DiagnosticDisplay,
     #[serde(flatten)]

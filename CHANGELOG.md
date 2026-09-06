@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1 (unreleased)
+
+- Coordinate CLI and maintenance workloads through one per-user resource slot
+  with unique scope identities, cancellable waiting, and inherited lock ownership.
+
+- Add display-only `check --engine`, concise agent triage, deterministic finding
+  limits, complete `--report-json` capture, and saved captured-excerpt inspection.
+- Keep full verdict/scope/counts and failure context visible through filters;
+  explain clone-to-policy execution selection and unsupported source locations.
+- Use syntax boundaries to distinguish literal tables and declarative JSX from
+  duplicated executable logic, without increasing clone thresholds.
+- Accept verified virtualenv interpreter links and disposable verifier caches;
+  explain writable temporary paths and separate disposable coverage outputs from
+  source-bound producer evidence.
+
 ## 0.6.0 (2026-09-06)
 
 - Support is limited to Rust and JavaScript/TypeScript. Python/Go parsers,

@@ -29,6 +29,17 @@ pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<()> {
 
 /// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
 pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<()> {
+    if let Some(path) = &opts.report_json {
+        let mut complete = report.clone();
+        complete.display = crate::diagnostics::display::DisplayOptions {
+            snippets: opts.display.snippets,
+            ..Default::default()
+        };
+        crate::commands::outcome::write_atomic_file(
+            path,
+            &format!("{}\n", complete.render_json()?),
+        )?;
+    }
     let output = format_report_with_opts(report, opts)?;
     if let Some(ref path) = opts.output_file {
         crate::commands::outcome::write_atomic_file(path, &output)?;
@@ -39,9 +50,7 @@ pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Res
 
 pub(crate) fn format_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<String> {
     let mut owned;
-    let report = if report.display.snippets != opts.display.snippets
-        || report.display.max_diagnostics != opts.display.max_diagnostics
-    {
+    let report = if report.display != opts.display {
         owned = report.clone();
         owned.display = opts.display.clone();
         &owned
@@ -54,36 +63,30 @@ pub(crate) fn format_report_with_opts(report: &GateReport, opts: &OutputOptions)
         human_report(report, opts)
     };
     if !opts.is_json() {
-        if report
-            .execution
-            .as_ref()
-            .is_some_and(|plan| plan.is_partial())
-        {
-            output.insert_str(
-                0,
-                "Partial check: this result does not establish complete project acceptance.\n",
-            );
-        }
         crate::commands::outcome::append_scan_metrics(&mut output, &report.functions);
     }
     Ok(output)
 }
 
 fn human_report(report: &GateReport, opts: &OutputOptions) -> String {
-    if !opts.is_summary() && (opts.display.max_diagnostics.is_some() || opts.display.snippets) {
-        let display = crate::diagnostics::display::diagnostics(report);
+    if opts.is_summary() {
         return format!(
             "{}{}",
-            report.render_summary(),
-            crate::diagnostics::display::render_diagnostics(&display)
+            report.render_acceptance_context(),
+            report.render_summary()
         );
     }
-    match opts.format.as_deref() {
-        Some("agent") => report.render_agent(),
-        _ if opts.is_summary() => report.render_summary(),
-        _ if opts.is_compact() => report.render_compact(),
-        _ => report.render_terminal(),
+    if opts.format.as_deref() == Some("agent") {
+        return report.render_agent();
     }
+    if opts.is_compact() || opts.display != Default::default() {
+        return report.render_triage(false);
+    }
+    format!(
+        "{}{}",
+        report.render_acceptance_context(),
+        report.render_terminal()
+    )
 }
 
 fn json_report(report: &GateReport, opts: &OutputOptions) -> Result<String> {

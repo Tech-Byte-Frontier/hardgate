@@ -12,11 +12,11 @@ mod readiness;
 pub(super) fn acknowledge() -> io::Result<()> {
     readiness::acknowledge()
 }
-const UNIT: &str = "hardgate-workload.scope";
 
 pub(super) fn run(memory: u64) -> io::Result<u8> {
     let runtime = runtime_directory()?;
     let _lease = crate::resources::lease::acquire_workload()?;
+    _lease.inherit_workload()?;
     let identity = format!(
         "{}-{}",
         std::process::id(),
@@ -26,7 +26,7 @@ pub(super) fn run(memory: u64) -> io::Result<u8> {
             .as_nanos()
     );
     let ready = readiness::Readiness::create(&identity)?;
-    let command = launch(&runtime, &ready.0, memory)?;
+    let command = launch(&runtime, &ready, memory)?;
     supervise(command, &ready)
 }
 
@@ -44,7 +44,7 @@ fn supervise(mut command: Command, ready: &readiness::Readiness) -> io::Result<u
     };
     let result = match result {
         Ok(0 | 1) if !ready.observed() => Err(error(
-            "could not establish the workload scope; it may already be active or the user manager refused its limits",
+            "the systemd user manager did not establish the owned workload scope; no evaluation was acknowledged",
         )),
         other => other,
     };
@@ -79,7 +79,7 @@ fn validate_runtime(directory: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn launch(runtime: &Path, ready: &Path, memory: u64) -> io::Result<Command> {
+fn launch(runtime: &Path, ready: &readiness::Readiness, memory: u64) -> io::Result<Command> {
     let mut command = Command::new("systemd-run");
     command
         .args([
@@ -89,11 +89,11 @@ fn launch(runtime: &Path, ready: &Path, memory: u64) -> io::Result<Command> {
             "--collect",
             "--expand-environment=no",
         ])
-        .arg(format!("--unit={UNIT}"))
-        .arg(format!("--description={}", description(ready)))
+        .arg(format!("--unit={}", ready.1))
+        .arg(format!("--description={}", description(&ready.0)))
         .env("XDG_RUNTIME_DIR", runtime)
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
-        .env(CHILD_MARKER, ready);
+        .env(CHILD_MARKER, &ready.0);
     let cpus = std::thread::available_parallelism().map_or(1, usize::from);
     let quota = if cpus <= 2 { 50 * cpus } else { 200 };
     for property in [
@@ -171,7 +171,11 @@ fn manager(args: &[&str]) -> io::Result<String> {
 }
 
 fn owned_active(ready: &readiness::Readiness) -> io::Result<bool> {
-    let output = manager(&["show", UNIT, "--property=LoadState,ActiveState,Description"])?;
+    let output = manager(&[
+        "show",
+        &ready.1,
+        "--property=LoadState,ActiveState,Description",
+    ])?;
     scope_active(&output, &description(&ready.0))
 }
 
@@ -199,7 +203,7 @@ fn stop_scope(ready: &readiness::Readiness) -> io::Result<()> {
     if !owned_active(ready)? {
         return Ok(());
     }
-    manager(&["stop", UNIT])?;
+    manager(&["stop", &ready.1])?;
     if owned_active(ready)? {
         return Err(error("owned workload scope remains active after cleanup"));
     }

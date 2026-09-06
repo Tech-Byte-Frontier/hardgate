@@ -29,17 +29,10 @@ impl<'a> MachineOutcome<'a> {
                 .as_ref()
                 .is_none_or(|plan| plan.is_partial()),
             accepted: report.passed
-                && report.execution.as_ref().is_some_and(|plan| {
-                    !plan.is_partial()
-                        && plan.engines.iter().all(|engine| {
-                            !engine.selected
-                                || matches!(
-                                    engine.state,
-                                    super::execution::EngineState::Completed
-                                        | super::execution::EngineState::Cached
-                                )
-                        })
-                }),
+                && report
+                    .execution
+                    .as_ref()
+                    .is_some_and(|plan| plan.is_complete()),
             omitted_requirements: report
                 .execution
                 .as_ref()

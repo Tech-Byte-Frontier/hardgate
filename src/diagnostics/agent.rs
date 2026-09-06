@@ -1,145 +1,207 @@
-use super::GateReport;
-use crate::engines::ComplexityContribution;
+use super::{GateReport, display, rules};
+use std::fmt::Write;
 
 impl GateReport {
-    /// Structured Markdown for LLM context windows: pinpoint breakdowns with
-    /// actionable refactor directives instead of terminal styling.
+    /// Concise review targets with complete acceptance context.
     pub fn render_agent(&self) -> String {
-        if self.passed {
-            let mut out = format!(
-                "✅ **Hardgate Passed**: All {} files and {} functions satisfied the evaluated policy ({}ms).\n\n",
-                self.files_scanned, self.functions_analyzed, self.duration_ms
-            );
-            self.render_advisories_agent(&mut out);
-            return out;
-        }
+        self.render_triage(true)
+    }
 
-        let mut out = format!(
-            "❌ **Hardgate Failed**: {} violations detected across {} files.\n\n",
-            self.total_violations(),
-            self.files_scanned
+    pub(crate) fn render_triage(&self, guidance: bool) -> String {
+        self.render_triage_with_context(self, guidance)
+    }
+
+    pub(crate) fn render_triage_with_context(&self, original: &Self, guidance: bool) -> String {
+        let mut out = original.render_acceptance_context();
+        let shown = display::diagnostics(self);
+        let visible = display::report_for_display(self);
+        render_items(&mut out, &shown, &visible, guidance);
+        let _ = writeln!(
+            out,
+            "Displayed: {}/{} findings; omitted: {} diagnostics.",
+            shown.shown,
+            original.summary().total_errors,
+            original.summary().total_errors.saturating_sub(shown.shown)
         );
-        self.render_advisories_agent(&mut out);
-        self.render_suppressions_agent(&mut out);
-        self.render_complexity_agent(&mut out);
-        self.render_budgets_agent(&mut out);
-        self.render_invariants_agent(&mut out);
-        self.render_clones_agent(&mut out);
-        self.render_coverage_agent(&mut out);
-        self.render_mutation_agent(&mut out);
-        self.render_orchestration_agent(&mut out);
+        if original.summary().total_errors > shown.shown {
+            out.push_str("Inspect omitted findings: remove --engine/--metric/--top/--max-diagnostics, or run hardgate report <complete.json> --format agent. Save all findings with --report-json <complete.json>.\n");
+        }
+        if self.display.snippets
+            && shown
+                .diagnostics
+                .iter()
+                .any(|item| !item.diagnostic.locations.is_empty() && item.excerpts.is_empty())
+        {
+            out.push_str("Excerpts unavailable for some locations; only captured report excerpts are used during saved-report inspection.\n");
+        }
+        if self.display.details {
+            out.push_str(&visible.render_agent_details());
+        }
         out
     }
+}
 
-    fn render_advisories_agent(&self, out: &mut String) {
-        if self.advisories.is_empty() {
-            return;
-        }
-        for advisory in &self.advisories {
-            out.push_str(&format!("> ⚠️ **Advisory**: {}\n\n", advisory));
-        }
-    }
-
-    fn render_suppressions_agent(&self, out: &mut String) {
-        for v in &self.suppression_violations {
-            out.push_str(&format!(
-                "### 🚫 Anti-Gaming in `{}:{}`\n- Pragma: `{}`\n- Line: `{}`\n- Directive: Suppressions are prohibited. Fix the underlying compiler/linter error.\n\n",
-                v.file.display(), v.line_number, v.token, v.line_content
-            ));
-        }
-    }
-
-    fn render_complexity_agent(&self, out: &mut String) {
-        for group in self.function_reviews() {
-            out.push_str(&format!(
-                "### ⚡ Complexity in `{}`\n\nFunction: `{}` ({} related metric findings).\n\n",
-                group.location(),
-                group.function_name,
-                group.metrics.len()
-            ));
-            if let Some(size) = group.size {
-                out.push_str(&format!("Size: {}.\n\n", size.description()));
+fn render_finding(
+    out: &mut String,
+    item: &display::DisplayedDiagnostic,
+    report: &GateReport,
+    guidance: bool,
+) {
+    let diagnostic = &item.diagnostic;
+    let locations = diagnostic
+        .locations
+        .iter()
+        .map(display::format_location)
+        .collect::<Vec<_>>()
+        .join(" <-> ");
+    let _ = writeln!(out, "{locations} {}", diagnostic.rule_id);
+    let message =
+        measurement(report, diagnostic).unwrap_or_else(|| short_text(&diagnostic.message));
+    let _ = writeln!(out, "  {}", display::sanitize_controls(&message));
+    if guidance {
+        let review = match diagnostic.category.as_str() {
+            "clone" => "Review whether the duplicated logic has one shared responsibility.",
+            "budget" => {
+                "Review code and documentation separately before extracting cohesive modules."
             }
-            for v in group.metrics {
-                out.push_str(&format!(
-                    "- Metric: {} is {:.0} (Budget limit: {:.0})\n",
-                    v.metric, v.actual, v.limit
-                ));
-                append_agent_contributors(&v.breakdown, out);
-                out.push_str(&format!("- Review: {}\n\n", v.recommendation));
+            _ => &diagnostic.recommendation,
+        };
+        let _ = writeln!(out, "  Review: {}", display::sanitize_controls(review));
+    }
+    display::render_excerpts(out, &item.excerpts);
+}
+
+pub(super) fn short_text(text: &str) -> String {
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let mut shortened: String = line.chars().take(240).collect();
+    if shortened.len() < text.len() {
+        shortened.push_str(" … (--details)");
+    }
+    display::sanitize_controls(&shortened)
+}
+
+fn render_items(
+    out: &mut String,
+    shown: &display::DiagnosticDisplay,
+    visible: &GateReport,
+    guidance: bool,
+) {
+    let mut functions = std::collections::BTreeSet::new();
+    for item in &shown.diagnostics {
+        if item.diagnostic.category == "complexity" {
+            let location = &item.diagnostic.locations[0];
+            if functions.insert((location.file.clone(), location.line, location.end_line)) {
+                render_function(out, visible, location, guidance);
+                display::render_excerpts(out, &item.excerpts);
             }
-        }
-    }
-
-    fn render_budgets_agent(&self, out: &mut String) {
-        for v in &self.budget_violations {
-            out.push_str(&format!(
-                "### 📦 Physical Budget in `{}`\n- Metric: {}\n- Value: {} (Budget limit: {})\n- Size: {}\n- Review: Assess code and documentation separately before choosing an extraction.\n\n",
-                v.file.display(), v.metric, v.actual, v.limit, self.file_size_description(&v.file).unwrap_or_else(|| "syntax breakdown unavailable in this saved report".into())
-            ));
-        }
-    }
-
-    fn render_invariants_agent(&self, out: &mut String) {
-        for v in &self.invariant_violations {
-            out.push_str(&format!(
-                "### 🏛️ Architecture in `{}:{}`\n- Rule: `{}`\n- Target: `{}` ({})\n- Requirement: {}\n\n",
-                v.file.display(), v.line_number, v.rule_name, v.offending_target, v.violation_type, v.message
-            ));
-        }
-    }
-
-    fn render_clones_agent(&self, out: &mut String) {
-        for v in &self.clone_violations {
-            out.push_str(&format!(
-                "### 👥 Duplication Clone\n- Loc A: `{}:{}-{}`\n- Loc B: `{}:{}-{}`\n- Span: {} lines, ~{} tokens\n- Refactor: {}\n\n",
-                v.file_a.display(), v.lines_a.0, v.lines_a.1, v.file_b.display(), v.lines_b.0, v.lines_b.1, v.lines, v.tokens, v.recommendation
-            ));
-        }
-    }
-
-    fn render_coverage_agent(&self, out: &mut String) {
-        for v in &self.coverage_violations {
-            out.push_str(&format!(
-                "### 🎯 Coverage in `{}`\n- Metric: {} is {:.1} (Threshold: {:.1})\n- Hint: {}\n\n",
-                v.file.display(),
-                v.metric,
-                v.actual,
-                v.limit,
-                v.recommendation
-            ));
-        }
-    }
-
-    fn render_mutation_agent(&self, out: &mut String) {
-        for v in &self.mutation_violations {
-            out.push_str(&format!(
-                "### 🧬 Mutation Floor in `{}`\n- Metric: {} is {:.1}% (Floor: {:.1}%)\n- Hint: {}\n\n",
-                v.report_file.display(), v.metric, v.actual, v.limit, v.recommendation
-            ));
-        }
-    }
-
-    fn render_orchestration_agent(&self, out: &mut String) {
-        self.render_specialist_findings(out);
-        for v in &self.orchestration_violations {
-            out.push_str(&format!(
-                "### 🛠️ Tool Failure: `{}`\n- Command: `{}`\n- Exit Code: {:?}\n- Output:\n```text\n{}\n```\n- Directive: {}\n\n",
-                v.step, v.command, v.exit_code, v.output, v.recommendation
-            ));
+        } else {
+            render_finding(out, item, visible, guidance);
         }
     }
 }
 
-fn append_agent_contributors(breakdown: &[ComplexityContribution], out: &mut String) {
-    if breakdown.is_empty() {
-        return;
+fn measurement(report: &GateReport, diagnostic: &rules::RuleDiagnostic) -> Option<String> {
+    match diagnostic.category.as_str() {
+        "clone" => clone_measurement(report, diagnostic),
+        "budget" => budget_measurement(report, diagnostic),
+        "coverage" => report
+            .coverage_violations
+            .iter()
+            .find(|finding| {
+                finding.message == diagnostic.message
+                    && diagnostic.locations[0].file == finding.file
+            })
+            .map(|finding| {
+                format!(
+                    "{} {:.1}/{:.1}",
+                    finding.metric, finding.actual, finding.limit
+                )
+            }),
+        "mutation" => report
+            .mutation_violations
+            .iter()
+            .find(|finding| finding.message == diagnostic.message)
+            .map(|finding| {
+                format!(
+                    "{} {:.1}/{:.1}",
+                    finding.metric, finding.actual, finding.limit
+                )
+            }),
+        _ => None,
     }
-    out.push_str("- Key AST Contributors:\n");
-    for b in breakdown {
-        out.push_str(&format!(
-            "  - Line {}: +{} for {}\n",
-            b.line, b.score, b.description
-        ));
+}
+
+fn clone_measurement(report: &GateReport, diagnostic: &rules::RuleDiagnostic) -> Option<String> {
+    report
+        .clone_violations
+        .iter()
+        .find(|finding| {
+            diagnostic.locations[0].file == finding.file_a
+                && diagnostic.locations[0].line == Some(finding.lines_a.0)
+                && diagnostic.locations[0].end_line == Some(finding.lines_a.1)
+                && diagnostic.locations[1].file == finding.file_b
+                && diagnostic.locations[1].line == Some(finding.lines_b.0)
+                && diagnostic.locations[1].end_line == Some(finding.lines_b.1)
+        })
+        .map(|finding| {
+            format!(
+                "duplicate: {} lines, ~{} tokens",
+                finding.lines, finding.tokens
+            )
+        })
+}
+
+fn budget_measurement(report: &GateReport, diagnostic: &rules::RuleDiagnostic) -> Option<String> {
+    report
+        .budget_violations
+        .iter()
+        .find(|finding| {
+            finding.message == diagnostic.message && diagnostic.locations[0].file == finding.file
+        })
+        .map(|finding| {
+            format!(
+                "{} {}/{}{}",
+                finding.metric,
+                finding.actual,
+                finding.limit,
+                report
+                    .file_size_description(&finding.file)
+                    .map(|size| format!("; {size}"))
+                    .unwrap_or_default()
+            )
+        })
+}
+
+fn render_function(
+    out: &mut String,
+    report: &GateReport,
+    location: &rules::DiagnosticLocation,
+    guidance: bool,
+) {
+    for group in report.function_reviews().into_iter().filter(|group| {
+        group.file == location.file
+            && Some(group.line) == location.line
+            && Some(group.end_line) == location.end_line
+    }) {
+        let _ = writeln!(out, "{} `{}`", group.location(), group.function_name);
+        if let Some(size) = group.size {
+            let _ = writeln!(out, "  {}", size.description());
+        }
+        for metric in group.metrics {
+            let _ = writeln!(
+                out,
+                "  {}: {} {:.0}/{:.0}",
+                rules::complexity_rule_id(&metric.metric),
+                metric.metric,
+                metric.actual,
+                metric.limit
+            );
+        }
+        if guidance {
+            out.push_str("  Review: simplify the shared control flow; preserve behavior.\n");
+        }
     }
 }

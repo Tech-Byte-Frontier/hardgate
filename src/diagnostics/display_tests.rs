@@ -155,9 +155,16 @@ fn zero_limit_omits_all_findings_without_changing_verdict() {
 }
 
 #[test]
-fn no_limit_borrows_the_original_report() {
-    let report = report();
-    assert!(matches!(report_for_display(&report), Cow::Borrowed(_)));
+fn no_limit_displays_all_findings_in_stable_order_without_mutating_the_report() {
+    let mut report = report();
+    report.budget_violations = vec![budget("src/z.rs"), budget("src/a.rs")];
+    let displayed = report_for_display(&report);
+    assert_eq!(displayed.budget_violations.len(), 2);
+    assert_eq!(
+        displayed.budget_violations[0].file,
+        PathBuf::from("src/a.rs")
+    );
+    assert_eq!(report.budget_violations[0].file, PathBuf::from("src/z.rs"));
 }
 
 #[test]

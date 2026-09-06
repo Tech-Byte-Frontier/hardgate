@@ -15,7 +15,7 @@ const MUTATION: &str = "mutation";
 const ORCHESTRATION: &str = "orchestration";
 
 /// Stable machine-readable explanation of one blocking gate finding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleDiagnostic {
     pub rule_id: String,
     pub category: String,
@@ -25,7 +25,7 @@ pub struct RuleDiagnostic {
 }
 
 /// A source or evidence location attached to a [`RuleDiagnostic`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticLocation {
     pub file: PathBuf,
     pub line: Option<usize>,
@@ -201,7 +201,14 @@ fn orchestration_diagnostic(violation: &OrchestrationViolation) -> RuleDiagnosti
     diagnostic(
         (ORCHESTRATION, orchestration_rule_id(&violation.step)),
         message,
-        Vec::new(),
+        if matches!(
+            violation.step.as_str(),
+            "unsupported-source" | "classify-source" | "read-source" | "parse-source"
+        ) {
+            vec![location(Path::new(&violation.command), None, None)]
+        } else {
+            Vec::new()
+        },
         recommendation_or(
             &violation.recommendation,
             "Resolve the failing orchestration step before accepting the gate.",
@@ -261,7 +268,7 @@ fn budget_rule_id(metric: &str) -> &'static str {
     }
 }
 
-fn complexity_rule_id(metric: &str) -> &'static str {
+pub(crate) fn complexity_rule_id(metric: &str) -> &'static str {
     lookup_rule_id(metric, COMPLEXITY_IDS, "HG-COMPLEXITY-UNKNOWN-METRIC")
 }
 

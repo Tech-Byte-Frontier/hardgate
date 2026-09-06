@@ -11,9 +11,11 @@ const MAX_CHARS_PER_LINE: usize = 240;
 const MAX_SNIPPET_BYTES: usize = 64 * 1024;
 
 /// Display-only controls for bounded diagnostics output.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DisplayOptions {
     pub snippets: bool,
+    pub details: bool,
+    pub engine: Option<super::filter::FilterEngine>,
     pub max_diagnostics: Option<usize>,
 }
 
@@ -26,7 +28,7 @@ pub struct DisplayedDiagnostic {
 }
 
 /// Sanitized source lines attached to one diagnostic location.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone)]
 pub struct SourceExcerpt {
     pub file: PathBuf,
     pub first_line: usize,
@@ -47,10 +49,11 @@ pub struct DiagnosticDisplay {
 
 /// Build display diagnostics in the same order as [`rules::diagnostics`].
 pub fn diagnostics(report: &super::GateReport) -> DiagnosticDisplay {
-    let total = report.total_violations();
+    let total = report.summary().total_errors;
     let limit = report.display.max_diagnostics.unwrap_or(usize::MAX);
     let mut budget = SnippetBudget::new(report.display.snippets);
-    let diagnostics = rules::diagnostics(report)
+    let visible = report_for_display(report);
+    let diagnostics = rules::diagnostics(&visible)
         .into_iter()
         .take(limit)
         .map(|diagnostic| displayed_diagnostic(diagnostic, report, &mut budget))
@@ -66,14 +69,15 @@ pub fn diagnostics(report: &super::GateReport) -> DiagnosticDisplay {
     }
 }
 
-/// Limit legacy renderer input without changing the original gate verdict or
-/// execution metadata. A report without a display cap is borrowed unchanged.
+/// Sort, filter and limit renderer input without changing the original gate
+/// verdict or execution metadata.
 pub fn report_for_display(report: &super::GateReport) -> Cow<'_, super::GateReport> {
-    let Some(limit) = report.display.max_diagnostics else {
-        return Cow::Borrowed(report);
-    };
-
+    let limit = report.display.max_diagnostics.unwrap_or(usize::MAX);
     let mut display = report.clone();
+    if let Some(engine) = report.display.engine {
+        super::filter::retain_engine(&mut display, engine);
+    }
+    super::display_order::sort(&mut display);
     let mut remaining = limit;
     trim_vec(&mut display.budget_violations, &mut remaining);
     trim_vec(&mut display.suppression_violations, &mut remaining);
@@ -82,8 +86,10 @@ pub fn report_for_display(report: &super::GateReport) -> Cow<'_, super::GateRepo
     trim_vec(&mut display.clone_violations, &mut remaining);
     trim_vec(&mut display.coverage_violations, &mut remaining);
     trim_vec(&mut display.mutation_violations, &mut remaining);
-    display.tool_diagnostics.retain(|finding| finding.blocking);
-    trim_vec(&mut display.tool_diagnostics, &mut remaining);
+    if report.display.max_diagnostics.is_some() {
+        display.tool_diagnostics.retain(|finding| finding.blocking);
+        trim_vec(&mut display.tool_diagnostics, &mut remaining);
+    }
     trim_vec(&mut display.orchestration_violations, &mut remaining);
     Cow::Owned(display)
 }
@@ -156,7 +162,10 @@ fn displayed_diagnostic(
         diagnostic
             .locations
             .iter()
-            .filter_map(|location| excerpt_for_location(location, &report.source_text, budget))
+            .filter_map(|location| {
+                excerpt_for_location(location, &report.source_text, budget)
+                    .or_else(|| saved_excerpt(location, report, budget))
+            })
             .collect()
     } else {
         Vec::new()
@@ -165,6 +174,36 @@ fn displayed_diagnostic(
         diagnostic,
         excerpts,
     }
+}
+
+fn saved_excerpt(
+    location: &rules::DiagnosticLocation,
+    report: &super::GateReport,
+    budget: &mut SnippetBudget,
+) -> Option<SourceExcerpt> {
+    let excerpt = report.saved_excerpts.iter().find(|excerpt| {
+        excerpt.file == location.file && excerpt.first_line == location.line.unwrap_or(1)
+    })?;
+    let mut lines = Vec::new();
+    let mut truncated = excerpt.truncated || excerpt.lines.len() > MAX_LINES_PER_LOCATION;
+    for line in excerpt.lines.iter().take(MAX_LINES_PER_LOCATION) {
+        let available = MAX_SNIPPET_BYTES.saturating_sub(budget.bytes);
+        if available == 0 {
+            truncated = true;
+            break;
+        }
+        let bounded = bounded_line(line, available);
+        budget.bytes += bounded.text.len();
+        truncated |= bounded.truncated;
+        lines.push(bounded.text);
+    }
+    budget.truncated |= truncated;
+    (!lines.is_empty()).then(|| SourceExcerpt {
+        file: excerpt.file.clone(),
+        first_line: excerpt.first_line,
+        lines,
+        truncated,
+    })
 }
 
 fn excerpt_for_location(
@@ -286,7 +325,7 @@ fn line_window(location: &rules::DiagnosticLocation, line_count: usize) -> Optio
     })
 }
 
-fn sanitize_controls(value: &str) -> String {
+pub(crate) fn sanitize_controls(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
@@ -301,7 +340,7 @@ fn sanitize_controls(value: &str) -> String {
     output
 }
 
-fn format_location(location: &rules::DiagnosticLocation) -> String {
+pub(crate) fn format_location(location: &rules::DiagnosticLocation) -> String {
     let file = sanitize_controls(&location.file.to_string_lossy());
     match (location.line, location.end_line) {
         (Some(line), Some(end_line)) => format!("{file}:{line}-{end_line}"),
@@ -310,7 +349,7 @@ fn format_location(location: &rules::DiagnosticLocation) -> String {
     }
 }
 
-fn render_excerpts(output: &mut String, excerpts: &[SourceExcerpt]) {
+pub(crate) fn render_excerpts(output: &mut String, excerpts: &[SourceExcerpt]) {
     for excerpt in excerpts {
         let _ = writeln!(
             output,

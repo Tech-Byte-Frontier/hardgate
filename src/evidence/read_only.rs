@@ -27,31 +27,38 @@ pub(crate) struct Session {
     root: PathBuf,
     before: Snapshot,
     workspace: EvidenceWorkspace,
+    input_policy: super::inputs::InputPolicy,
 }
 
 impl Session {
     pub(crate) fn create(root: &Path) -> Result<Self> {
+        Self::create_for(root, &Default::default())
+    }
+
+    pub(crate) fn create_for(root: &Path, config: &crate::config::HardgateConfig) -> Result<Self> {
         ensure!(
             crate::resources::runtime::inherited()?,
             "external checks require verified CPU and memory containment"
         );
         let root = root.canonicalize()?;
-        let before = Snapshot::capture(&root)?;
+        let input_policy = super::inputs::InputPolicy::new(&root, config)?;
+        let before = Snapshot::capture_with(&root, &input_policy)?;
         let workspace = EvidenceWorkspace::create(&root)?;
         before.require_same(
-            &Snapshot::capture(workspace.root())?,
+            &Snapshot::capture_with(workspace.root(), &input_policy)?,
             "read-only check copy",
         )?;
         Ok(Self {
             root,
             before,
             workspace,
+            input_policy,
         })
     }
 
     pub(crate) fn run(&self, tokens: &[String], timeout: Duration) -> Result<ProcessOutcome> {
         self.before.require_same(
-            &Snapshot::capture(self.workspace.root())?,
+            &Snapshot::capture_with(self.workspace.root(), &self.input_policy)?,
             "check inputs before command",
         )?;
         let outcome = run_command_in_copy(
@@ -61,19 +68,22 @@ impl Session {
             "evidence",
         );
         let copy_state = self.before.require_same(
-            &Snapshot::capture(self.workspace.root())?,
+            &Snapshot::capture_with(self.workspace.root(), &self.input_policy)?,
             "check command wrote project inputs",
         );
         let source_state = self.before.require_same(
-            &Snapshot::capture(&self.root)?,
+            &Snapshot::capture_with(&self.root, &self.input_policy)?,
             "checkout changed during check",
         );
         copy_state?;
         source_state?;
-        Ok(remap_output(
-            outcome,
-            &self.workspace.root().display().to_string(),
-            &self.root.display().to_string(),
+        Ok(super::temporary::explain(
+            remap_output(
+                outcome,
+                &self.workspace.root().display().to_string(),
+                &self.root.display().to_string(),
+            ),
+            self.workspace.root(),
         ))
     }
 

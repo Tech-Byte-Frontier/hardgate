@@ -174,7 +174,7 @@ fn empty_policy_check_renders_every_output_mode() {
         &[command, "--checks", "policy", "--format", "compact"],
     );
     assert_status(&compact, true, &format!("{command} compact"));
-    assert!(output_text(&compact).contains("result: pass"));
+    assert!(output_text(&compact).contains("Hardgate Passed"));
 
     let summary = run(
         fixture.as_ref(),

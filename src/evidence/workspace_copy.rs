@@ -171,6 +171,12 @@ fn verify_file_end_state(
 #[cfg(unix)]
 fn copy_link(source: &Path, destination: &Path, relative: &Path) -> Result<()> {
     let target = source.join(relative).canonicalize()?;
+    if !target.starts_with(source)
+        && let Some(interpreter) = super::super::environment::interpreter_target(source, relative)?
+    {
+        std::os::unix::fs::symlink(interpreter, destination.join(relative))?;
+        return Ok(());
+    }
     let mapped = target.strip_prefix(source).with_context(|| {
         format!("symlink `{}` leaves the workspace; invoke from a root containing its source/dependency target", relative.display())
     })?;

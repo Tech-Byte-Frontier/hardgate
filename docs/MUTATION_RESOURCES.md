@@ -1,6 +1,6 @@
 # Workload resources
 
-These safeguards apply to the unreleased 0.6.0 CLI. Resource exhaustion is
+These safeguards apply to the CLI and maintenance runners. Resource exhaustion is
 incomplete evaluation, never a passing gate or a killed-mutant credit.
 
 ## Complete CLI boundary
@@ -19,10 +19,15 @@ formatters, linters, test runners and detached subprocesses. Common worker setti
 are capped at two and smaller settings are retained. Analysis also uses at most
 two Rayon workers; requesting more workers is an error, not a policy override.
 
-A per-user slot and reserved scope prevent independent invocations from multiplying
-the resource allowance. Nested commands reuse their inherited boundary. Cancellation
-stops the owned scope; a killed supervisor cannot create an unrestricted orphan.
-The scope has a 30-minute runtime ceiling and a remaining scope blocks new work.
+A shared per-user flock slot prevents independent invocations and maintenance
+runners from multiplying the resource allowance. Each outer invocation creates
+a unique scope identity, so stale unit cleanup cannot collide with a subsequent
+launch. Overlapping commands wait up to 30 minutes and print a waiting message;
+cancellation while queued starts no workload. A timeout reports workload contention.
+Nested commands reuse their inherited boundary. Cancellation stops only the owned
+scope. The scope leader inherits the workload lock, so terminating its outer
+supervisor does not release the slot while that leader remains live. The scope
+has a 30-minute runtime ceiling. Mutation's separate serialization lease remains.
 Hard memory-limit, OOM, and task-limit events invalidate evidence before report publication. Normal `memory.high` reclaim events alone do not invalidate a completed evaluation; live PSI checks still stop sustained pressure.
 
 `scripts/coverage.sh` and `scripts/self-gate.sh` require the same kernel limits.

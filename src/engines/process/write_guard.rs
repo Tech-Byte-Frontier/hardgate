@@ -40,13 +40,14 @@ pub(super) fn configure(command: &mut Command, copy: &Path, original: &Path) -> 
         command.env("CARGO_HOME", cache);
     }
     allow(&ruleset, Path::new("/dev/null"))?;
-    let scratch = copy.join(".hardgate/evidence/tmp");
+    let scratch = crate::evidence::temporary::scratch_directory(&copy);
     fs::create_dir_all(&scratch)?;
     command
         .env("TMPDIR", &scratch)
         .env("TMP", &scratch)
         .env("TEMP", &scratch)
         .env("XDG_CACHE_HOME", scratch.join("cache"))
+        .env("UV_CACHE_DIR", scratch.join("uv"))
         .env("npm_config_cache", scratch.join("npm"))
         .env("npm_config_store_dir", scratch.join("pnpm-store"))
         .env("pnpm_config_store_dir", scratch.join("pnpm-store"))

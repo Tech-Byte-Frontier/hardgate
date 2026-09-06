@@ -108,6 +108,8 @@ hardgate check --coverage-report .hardgate/evidence/coverage.lcov
 hardgate check --format agent
 hardgate check --format json
 hardgate check --compact
+hardgate check --engine clones --format agent --report-json gate.json
+hardgate check --engine clones --snippets --max-diagnostics 5
 hardgate check --summary
 hardgate check src/routes/revenue.ts
 ```
@@ -131,6 +133,13 @@ When `[legacy].ratchet = true`, static and clone analysis disables diff filterin
 
 ### Selecting checks and interpreting acceptance
 
+`--engine clones` filters **display only**, using the same engine names and aliases
+as `report`. It does not select execution. Verdict, full category counts, scope,
+omitted requirements, advisories and setup/tool failure context remain visible,
+even with no matching findings or `--max-diagnostics 0`. `clones -> policy`:
+`--checks clones` is invalid because clone detection belongs to the policy group.
+Use `--checks policy --engine clones --compact` for explicitly partial policy triage.
+
 `--checks policy,format,lint,tests,typecheck` selects named groups. Omit it to run all requirements. Path arguments and `--diff` narrow policy analysis; external commands retain the package/target/feature scope recorded in `execution.engines[].required_evidence`. A partial run can pass its requested checks and exit zero, but reports `partial: true`, `accepted: false`, and omitted requirements. Complete acceptance requires every selected engine to finish successfully. The former `verify` command and `--all` option are removed.
 
 ```sh
@@ -145,7 +154,27 @@ Rust defaults cover workspace members with `cargo test --workspace --all-targets
 
 ### Read-only execution
 
-Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary and JS cache output stays in the disposable copy. pnpm dependency verification uses its error mode so a check cannot silently reinstall dependencies; projects whose copied dependency state needs installation receive a setup failure. Configure a direct local verifier when package-manager installation metadata prevents running an otherwise ready check. Original absolute source paths remain unwritable. Changes to copied source/test/config inputs fail the check; intentional fixes require `hardgate fmt` or direct tool invocation. The guard restricts file-content and directory-entry writes; it is not a general sandbox for arbitrary hostile programs or external services. Git administrative data is not copied, so commands requiring checkout metadata must report their unmet requirement. Receipts describe source freshness, not a hermetic environment.
+Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary and JS cache output stays in the disposable copy. pnpm dependency verification uses its error mode so a check cannot silently reinstall dependencies; projects whose copied dependency state needs installation receive a setup failure. Configure a direct local verifier when package-manager installation metadata prevents running an otherwise ready check. Original absolute source paths remain unwritable. Known cache records from Ruff, import-linter, pytest, ESLint and Python bytecode
+may change in the disposable copy. Other files remain protected even when
+Git ignores them; explicit classification rules can protect cache-named inputs.
+Configured commands receive a disposable `UV_CACHE_DIR`, including when the
+caller has set an external uv cache path.
+Verified virtualenv interpreter links are copied as tool links bound to the
+runtime declared by `pyvenv.cfg`; arbitrary external source/data links still fail.
+Virtualenv contents remain copied and bound, without adding Python analysis.
+
+Changes to copied source/test/config inputs fail the check; intentional fixes require `hardgate fmt` or direct tool invocation. The guard restricts file-content and directory-entry writes; it is not a general sandbox for arbitrary hostile programs or external services. Git administrative data is not copied, so commands requiring checkout metadata must report their unmet requirement. Receipts describe source freshness, not a hermetic environment.
+
+A configured coverage report with a `.lcov` or `.info` name can be rewritten in
+the disposable copy when its role is unknown, generated or vendor. This
+does not publish that output or issue a receipt. Run a supported evidence producer
+first (below), and point `coverage.report` at its bound report. Missing, stale and
+tampered original evidence still fail even if the test command writes a report.
+
+If a configured command hardcodes `/tmp`, containment can reject it. The diagnostic
+prints the actual disposable runtime `$TMPDIR`; use
+`mktemp -d "${TMPDIR:-/tmp}/finance-hardgate.XXXXXXXX"` inside that command.
+A shell outside Hardgate has its own host/agent permissions and `$TMPDIR`.
 
 ## Mutation producers
 
@@ -160,6 +189,7 @@ outcomes and runner integrity failures remain blocking.
 Inspect a full saved gate report without loading the current policy or rescanning:
 
 ```sh
+hardgate check --engine clones --format agent --snippets --report-json gate.json
 hardgate check --json --output gate.json
 hardgate report gate.json --engine complexity --top 5 --json
 hardgate report gate.json --metric 'Statement Count'
@@ -170,8 +200,10 @@ Inspection filters the displayed findings and preserves the saved verdict and
 exit status, including missing-evidence failures. JSON `inspection` metadata
 distinguishes the original error total from the displayed count. Unknown engine
 names fail instead of silently ignoring the filter. `--metric` selects matching
-metric categories; `--top` selects findings with file locations, leaving tool
-failure status in the saved verdict.
+metric categories; `--top N` ranks files by finding count (ties by path), retaining both sides of
+selected clone pairs. `--max-diagnostics N` limits findings **after** engine,
+metric and top-file filtering. Counts say how many findings are displayed and
+omitted; the original totals and failure context remain available.
 
 Comparison accepts terminal or JSON output and returns the after-report's exit
 status. It lists added, removed and retained findings. Missing execution metadata,
@@ -179,6 +211,26 @@ changed engine selection, policy, roots or scope, incomplete evidence, and
 filtered views prevent a claim of equivalent evaluation scope. Diff reports lack
 a complete resolved inventory and are also marked non-equivalent. Removed findings
 are not proof of remediation when the evaluation scope differs.
+
+`check --report-json PATH` saves a complete schema-v1 JSON report atomically in
+the same run, independent of display filters, limits or human format. Add
+`--snippets` during capture to retain bounded excerpts for later inspection.
+Saved inspection uses captured excerpts only; missing excerpts are reported,
+never filled from changed live files. `--output` and `--report-json` must name
+different files. Complete evidence can be inspected without rerunning tools:
+
+```sh
+# All requirements execute; display only the first five clones. Exit 1/2 still fails.
+hardgate check --engine clones --compact --max-diagnostics 5 --report-json gate.json
+hardgate report gate.json --engine clones --format agent
+# Partial policy triage: exit 0 does not establish complete acceptance.
+hardgate check --checks policy --engine clones --format agent
+# Complete acceptance; produce any required bound evidence first.
+hardgate check --format agent
+# Bash/zsh pipelines must preserve Hardgate's exit status:
+set -o pipefail
+hardgate check --json | jq '.clone_violations'
+```
 
 `--output PATH` saves the final rendered report atomically for `check`, `scan`,
 `check` and saved-report commands while retaining stdout output.
@@ -214,7 +266,11 @@ An unconfigured formatter is a setup failure with exit 2.
 
 ## Output modes
 
-`check` and `scan` accept `--format terminal|agent|json|compact|summary`, plus `--json`, `--compact`/`--no-snippets`, and `--summary`. JSON is a single machine-readable report; agent output is structured Markdown with actionable locations.
+`check` and `scan` accept `--format terminal|agent|json|compact|summary`, plus `--json`, `--compact`/`--no-snippets`, and `--summary`. JSON is a single machine-readable report. Agent output leads with verdict and
+evaluated scope, then stable rule IDs, locations, measurements/limits and short
+review guidance. Related function metrics share one location; clone pairs stay
+together. Use `--details` for longer explanations and AST contributors, and
+`--snippets` for bounded captured source excerpts.
 
 Exit codes are **0** for success or an explicit no-op, **1** for policy
 violations, and **2** when arguments, configuration, runtime failures or missing
@@ -250,7 +306,11 @@ Workload commands require verified CPU, memory, swap and task limits before
 loading project input. On Linux, Hardgate establishes a systemd user scope when
 it does not already inherit suitable cgroup-v2 limits. The scope covers analysis
 and every child tool, including detached descendants. Separate invocations share
-one per-user workload slot. Help, version, shell completion generation, `init` and `config` do not
+one per-user workload slot with maintenance runners. Each invocation uses a unique
+scope identity; overlapping commands wait for the slot (up to 30 minutes), with
+cancellation and contention reported separately from manager setup failures.
+The scope leader retains the slot if its outer supervisor is terminated.
+Help, version, shell completion generation, `init` and `config` do not
 need a workload scope. Unsupported environments fail with exit 2 before work;
 there is no implicit unrestricted fallback. See [resource limits](MUTATION_RESOURCES.md).
 

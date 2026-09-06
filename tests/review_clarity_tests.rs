@@ -90,7 +90,10 @@ fn eight_metric_findings_are_presented_as_two_function_review_targets() {
         2
     );
     assert_eq!(
-        report.render_agent().matches("### ⚡ Complexity").count(),
+        report
+            .render_agent()
+            .matches("Review: simplify the shared control flow")
+            .count(),
         2
     );
     assert_eq!(

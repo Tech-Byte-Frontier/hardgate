@@ -24,7 +24,15 @@ pub(super) fn omitted(path: &Path, dependencies: bool) -> bool {
 }
 
 impl Snapshot {
+    #[cfg(test)]
     pub(super) fn capture(root: &Path) -> Result<Self> {
+        Self::capture_with(
+            root,
+            &super::inputs::InputPolicy::new(root, &Default::default())?,
+        )
+    }
+
+    pub(super) fn capture_with(root: &Path, policy: &super::inputs::InputPolicy) -> Result<Self> {
         let root = root.canonicalize()?;
         let mut files = BTreeMap::new();
         let mut pending = vec![PathBuf::new()];
@@ -38,18 +46,12 @@ impl Snapshot {
                     continue;
                 }
                 let metadata = fs::symlink_metadata(entry.path())?;
+                if metadata.is_file() && policy.is_output(&path) {
+                    continue;
+                }
                 if metadata.is_symlink() {
-                    let target = entry.path().canonicalize()?;
-                    let target = target.strip_prefix(&root).with_context(|| {
-                        format!("source symlink leaves the workspace: {}", path.display())
-                    })?;
-                    if omitted(target, true) {
-                        bail!(
-                            "source symlink targets unbound build/dependency data: {}",
-                            path.display()
-                        );
-                    }
-                    files.insert(path, format!("symlink:{}", target.display()));
+                    let binding = symlink_binding(&root, &path, policy)?;
+                    files.insert(path, binding);
                 } else if metadata.is_dir() {
                     pending.push(path);
                 } else if metadata.is_file() {
@@ -81,6 +83,39 @@ impl Snapshot {
                 .unwrap_or_default()
         );
     }
+}
+
+fn symlink_binding(
+    root: &Path,
+    path: &Path,
+    policy: &super::inputs::InputPolicy,
+) -> Result<String> {
+    if policy.is_output(path) {
+        bail!(
+            "cache/report output must not be a symlink: {}",
+            path.display()
+        );
+    }
+    let target = root.join(path).canonicalize()?;
+    if !target.starts_with(root)
+        && let Some(interpreter) = super::environment::interpreter_target(root, path)?
+    {
+        return Ok(format!(
+            "interpreter:{}:{}",
+            interpreter.display(),
+            file_hash(&interpreter)?
+        ));
+    }
+    let target = target
+        .strip_prefix(root)
+        .with_context(|| format!("source symlink leaves the workspace: {}", path.display()))?;
+    if omitted(target, true) {
+        bail!(
+            "source symlink targets unbound build/dependency data: {}",
+            path.display()
+        );
+    }
+    Ok(format!("symlink:{}", target.display()))
 }
 
 pub(super) fn file_hash(path: &Path) -> Result<String> {

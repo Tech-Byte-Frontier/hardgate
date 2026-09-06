@@ -4,13 +4,16 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-pub(super) struct Readiness(pub(super) PathBuf);
+pub(super) struct Readiness(pub(super) PathBuf, pub(super) String);
 
 impl Readiness {
     pub(super) fn create(identity: &str) -> io::Result<Self> {
         let directory = std::env::temp_dir().join(format!("hardgate-workload-ready-{identity}"));
         DirBuilder::new().mode(0o700).create(&directory)?;
-        Ok(Self(directory.join("ready")))
+        Ok(Self(
+            directory.join("ready"),
+            format!("hardgate-workload-{identity}.scope"),
+        ))
     }
 
     pub(super) fn observed(&self) -> bool {
@@ -35,21 +38,10 @@ pub(super) fn acknowledge() -> io::Result<()> {
 }
 
 fn acknowledge_path(path: &Path) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| error("invalid workload readiness path"))?;
-    let metadata = fs::symlink_metadata(parent)?;
     let uid = rustix::process::getuid().as_raw();
-    if path.file_name() != Some(std::ffi::OsStr::new("ready"))
-        || !parent.file_name().is_some_and(|name| {
-            name.to_string_lossy()
-                .starts_with("hardgate-workload-ready-")
-        })
-        || !metadata.is_dir()
-        || metadata.uid() != uid
-        || metadata.mode() & 0o7777 != 0o700
-    {
-        return Err(error("workload readiness directory is not owner-validated"));
+    validate_parent(path, uid)?;
+    if fs::symlink_metadata(path).is_ok() {
+        return validate_existing(path, uid);
     }
     match OpenOptions::new()
         .write(true)
@@ -61,6 +53,25 @@ fn acknowledge_path(path: &Path) -> io::Result<()> {
         Err(cause) if cause.kind() == io::ErrorKind::AlreadyExists => validate_existing(path, uid),
         Err(cause) => Err(cause),
     }
+}
+
+fn validate_parent(path: &Path, uid: u32) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| error("invalid workload readiness path"))?;
+    let metadata = fs::symlink_metadata(parent)?;
+    if path.file_name() != Some(std::ffi::OsStr::new("ready"))
+        || !parent.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .starts_with("hardgate-workload-ready-")
+        })
+        || !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(error("workload readiness directory is not owner-validated"));
+    }
+    Ok(())
 }
 
 fn validate_existing(path: &Path, uid: u32) -> io::Result<()> {

@@ -71,11 +71,12 @@ impl OrchestrationEngine {
         &self,
         specs: &[OrchestrationStep<'_>],
         root: &Path,
+        config: &crate::config::HardgateConfig,
     ) -> Vec<Result<OrchestrationResult, OrchestrationViolation>> {
         if specs.is_empty() {
             return Vec::new();
         }
-        let session = match crate::evidence::read_only::Session::create(root) {
+        let session = match crate::evidence::read_only::Session::create_for(root, config) {
             Ok(session) => session,
             Err(error) => {
                 return specs
@@ -299,12 +300,19 @@ fn finish_outcome(
             step: spec.step.to_string(),
             command: spec.command.to_string(),
             exit_code: status.code(),
+            recommendation: failure_recommendation(&output, spec.recommendation),
             output,
-            recommendation: spec.recommendation.to_string(),
         }),
         ProcessOutcome::TimedOut { output } => Err(timeout_violation(spec, output, timeout_secs)),
         ProcessOutcome::Failed { message, output } => Err(runner_violation(spec, message, output)),
     }
+}
+
+fn failure_recommendation(output: &str, fallback: &str) -> String {
+    output
+        .lines()
+        .find(|line| line.starts_with("Hardgate containment restricts writes"))
+        .map_or_else(|| fallback.to_owned(), str::to_owned)
 }
 
 fn timeout_violation(
@@ -336,7 +344,7 @@ fn runner_violation(
     output: String,
 ) -> OrchestrationViolation {
     let recommendation = if message.contains("check command wrote") {
-        "Use a read-only verification command; run intentional fixes with hardgate fmt or the project tool explicitly.".to_string()
+        "Use a read-only verification command; run intentional fixes with hardgate fmt or the project tool explicitly. For coverage, declare coverage.report as a separate .lcov/.info output; generate trusted evidence first with `hardgate evidence vitest` or `hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>`.".to_string()
     } else if message.contains("resource guard:") {
         "Reduce concurrent workloads or narrow the selected scope, then retry within the resource limits.".to_owned()
     } else {

@@ -21,32 +21,40 @@ pub struct ReportInspectOptions {
 
 pub fn cmd_report_inspect(opts: ReportInspectOptions) -> CommandResult {
     let saved = input::read_report(&opts.file)?;
+    let original = saved.report.clone();
     let mut report = saved.report;
     let filtered =
         saved.filtered || opts.engine.is_some() || opts.metric.is_some() || opts.top.is_some();
 
-    if let Some(ref engine) = opts.engine {
-        filter_by_engine(&mut report, engine)?;
-    }
+    apply_filters(&mut report, &opts)?;
 
-    if let Some(ref metric) = opts.metric {
-        filter_by_metric(&mut report, metric);
-    }
-
-    if let Some(top) = opts.top {
-        filter_by_top(&mut report, top);
-    }
-
-    let mut output = format_report_with_opts(&report, &opts.output)?;
+    report.display = opts.output.display.clone();
+    let displayed = crate::diagnostics::display::diagnostics(&report).shown;
+    let mut output = if opts.output.is_json() {
+        format_report_with_opts(&report, &opts.output)?
+    } else if opts.output.is_summary() {
+        format!(
+            "{}{}",
+            original.render_acceptance_context(),
+            original.render_summary()
+        )
+    } else {
+        report.render_triage_with_context(&original, opts.output.format.as_deref() == Some("agent"))
+    };
     if opts.output.is_json() {
         let mut value: serde_json::Value = serde_json::from_str(&output)?;
         value["command"] = "report".into();
         value["status"] = saved.outcome.status().into();
         value["exit_code"] = saved.outcome.exit_code().into();
+        value["summary"] = serde_json::to_value(original.summary())?;
+        value["summary"]["total_errors"] = saved.original_total_errors.into();
+        value["total"] = saved.original_total_errors.into();
+        value["omitted"] = saved.original_total_errors.saturating_sub(displayed).into();
+        value["failures"] = serde_json::to_value(original.failure_diagnostics())?;
         value["inspection"] = serde_json::json!({
             "filtered": filtered,
             "original_total_errors": saved.original_total_errors,
-            "displayed_errors": report.total_violations(),
+            "displayed_errors": displayed,
         });
         output = format!("{}\n", serde_json::to_string_pretty(&value)?);
     } else {
@@ -54,7 +62,7 @@ pub fn cmd_report_inspect(opts: ReportInspectOptions) -> CommandResult {
             "\nSaved verdict: {} ({} total errors); displaying {} findings.\n",
             saved.outcome.status(),
             saved.original_total_errors,
-            report.total_violations()
+            displayed
         ));
     }
     if let Some(path) = &opts.output.output_file {
@@ -64,81 +72,17 @@ pub fn cmd_report_inspect(opts: ReportInspectOptions) -> CommandResult {
     Ok(saved.outcome)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FilterEngine {
-    Complexity,
-    Budget,
-    Suppression,
-    Invariant,
-    Clone,
-    Coverage,
-    Mutation,
-    Orchestration,
-    Specialist,
-}
-
-fn parse_static_engine(norm: &str) -> Option<FilterEngine> {
-    match norm {
-        "complexity" => Some(FilterEngine::Complexity),
-        "budget" | "file-budget" | "file-budgets" => Some(FilterEngine::Budget),
-        "suppression" | "suppressions" | "anti-gaming" => Some(FilterEngine::Suppression),
-        "invariant" | "invariants" => Some(FilterEngine::Invariant),
-        "clone" | "clones" => Some(FilterEngine::Clone),
-        _ => None,
+fn apply_filters(report: &mut GateReport, opts: &ReportInspectOptions) -> anyhow::Result<()> {
+    if let Some(engine) = &opts.engine {
+        crate::diagnostics::filter::filter_by_engine(report, engine)?;
     }
-}
-
-fn parse_verification_engine(norm: &str) -> Option<FilterEngine> {
-    match norm {
-        "coverage" => Some(FilterEngine::Coverage),
-        "mutation" | "mutation-report" => Some(FilterEngine::Mutation),
-        "orchestration" | "tool" => Some(FilterEngine::Orchestration),
-        "specialist" | "clippy" | "rustc" => Some(FilterEngine::Specialist),
-        _ => None,
+    if let Some(metric) = &opts.metric {
+        filter_by_metric(report, metric);
     }
-}
-
-fn filter_by_engine(report: &mut GateReport, engine: &str) -> anyhow::Result<()> {
-    let norm = engine.to_ascii_lowercase().replace('_', "-");
-    let target = parse_static_engine(&norm).or_else(|| parse_verification_engine(&norm));
-    let target = target.ok_or_else(|| anyhow::anyhow!("Unknown report engine `{engine}`"))?;
-    retain_static_violations(report, target);
-    retain_verification_violations(report, target);
+    if let Some(top) = opts.top {
+        filter_by_top(report, top);
+    }
     Ok(())
-}
-
-fn retain_static_violations(report: &mut GateReport, target: FilterEngine) {
-    if target != FilterEngine::Complexity {
-        report.complexity_violations.clear();
-    }
-    if target != FilterEngine::Budget {
-        report.budget_violations.clear();
-    }
-    if target != FilterEngine::Suppression {
-        report.suppression_violations.clear();
-    }
-    if target != FilterEngine::Invariant {
-        report.invariant_violations.clear();
-    }
-    if target != FilterEngine::Clone {
-        report.clone_violations.clear();
-    }
-}
-
-fn retain_verification_violations(report: &mut GateReport, target: FilterEngine) {
-    if target != FilterEngine::Specialist {
-        report.tool_diagnostics.clear();
-    }
-    if target != FilterEngine::Coverage {
-        report.coverage_violations.clear();
-    }
-    if target != FilterEngine::Mutation {
-        report.mutation_violations.clear();
-    }
-
-    if target != FilterEngine::Orchestration {
-        report.orchestration_violations.clear();
-    }
 }
 
 fn filter_by_metric(report: &mut GateReport, metric: &str) {

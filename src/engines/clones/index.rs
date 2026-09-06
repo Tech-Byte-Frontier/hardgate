@@ -1,5 +1,5 @@
 use super::repository_relative_path;
-use super::tokenizer::{Token, TokenInterner, tokenize};
+use super::tokenizer::{Token, TokenInterner};
 use globset::GlobSet;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -134,7 +134,11 @@ pub(super) fn build_index(options: CloneIndexOptions<'_>) -> Result<CloneIndex, 
     let mut interner = TokenInterner::default();
     let token_streams = inputs
         .into_iter()
-        .map(|(path, content)| (path, tokenize(content, &mut interner)))
+        .flat_map(|(path, content)| {
+            super::syntax::streams(&path, content, &mut interner)
+                .into_iter()
+                .map(move |tokens| (path.clone(), tokens))
+        })
         .collect::<Vec<_>>();
     let mut window_map = HashMap::new();
     let mut raw_matches = Vec::new();

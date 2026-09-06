@@ -1,14 +1,18 @@
 mod agent;
+mod agent_details;
 mod compact;
 pub mod display;
+mod display_order;
 pub mod execution;
 pub(crate) mod execution_observations;
+pub mod filter;
 mod machine;
 mod review;
 pub use review::FunctionReview;
 pub mod rules;
 mod summary;
 mod terminal;
+mod triage_context;
 
 use crate::engines::{
     BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, InvariantViolation,
@@ -34,6 +38,14 @@ pub struct GateReport {
     pub display: display::DisplayOptions,
     #[serde(skip)]
     pub(crate) source_text: std::collections::BTreeMap<std::path::PathBuf, std::sync::Arc<str>>,
+    #[serde(skip)]
+    pub(crate) saved_excerpts: Vec<display::SourceExcerpt>,
+    #[serde(skip)]
+    pub(crate) saved_failures: Vec<rules::RuleDiagnostic>,
+    #[serde(skip)]
+    pub(crate) saved_summary: Option<GateSummary>,
+    #[serde(skip)]
+    pub(crate) saved_outcome: Option<crate::commands::CommandOutcome>,
     pub gate_name: String,
     pub files_scanned: usize,
     pub functions_analyzed: usize,
@@ -125,6 +137,22 @@ impl GateReport {
                 finding.column
             ));
         }
+    }
+
+    pub(crate) fn failure_diagnostics(&self) -> Vec<rules::RuleDiagnostic> {
+        let mut failures = rules::diagnostics(self)
+            .into_iter()
+            .filter(|finding| {
+                finding.category == "orchestration"
+                    || finding.rule_id.starts_with("HG-COVERAGE-MISSING-")
+            })
+            .collect::<Vec<_>>();
+        for failure in &self.saved_failures {
+            if !failures.contains(failure) {
+                failures.push(failure.clone());
+            }
+        }
+        failures
     }
 
     /// Count of analysis blockers and tool/evidence failures (orchestration / report failures).

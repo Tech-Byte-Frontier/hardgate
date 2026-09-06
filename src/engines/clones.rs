@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 mod fingerprint;
 mod index;
+mod syntax;
 mod tokenizer;
 use fingerprint::clone_fingerprint;
 pub use index::CloneIndexError;
@@ -265,8 +266,12 @@ fn coalesce_matches(
         .collect()
 }
 fn ranges_overlap(left: &RawCloneMatch, right: &RawCloneMatch) -> bool {
-    let overlap_a = right.start_idx_a <= left.end_idx_a && right.end_idx_a >= left.start_idx_a;
-    let overlap_b = right.start_idx_b <= left.end_idx_b && right.end_idx_b >= left.start_idx_b;
+    let overlap_a = left.stream_idx_a == right.stream_idx_a
+        && right.start_idx_a <= left.end_idx_a
+        && right.end_idx_a >= left.start_idx_a;
+    let overlap_b = left.stream_idx_b == right.stream_idx_b
+        && right.start_idx_b <= left.end_idx_b
+        && right.end_idx_b >= left.start_idx_b;
     overlap_a || overlap_b
 }
 fn matches_can_merge(

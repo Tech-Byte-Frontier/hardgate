@@ -71,10 +71,15 @@ function affinityCount() {
   }, 0);
 }
 
+export function resourceLimits() {
+  const memory = memoryLimit();
+  return { quota: Math.min(200, affinityCount() * 50), memory, high: Math.floor(memory / 5) * 4 };
+}
+
 function main(args) {
   if (args.length === 1 && args[0] === "--limits") {
-    const memory = memoryLimit();
-    console.log(`${Math.min(200, affinityCount() * 50)} ${memory} ${Math.floor(memory / 5) * 4}`);
+    const { quota, memory, high } = resourceLimits();
+    console.log(`${quota} ${memory} ${high}`);
     return;
   }
   const directory = boundary();

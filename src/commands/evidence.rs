@@ -41,7 +41,7 @@ pub(crate) fn record_evidence_failure(
 fn remediation(step: &str) -> &'static str {
     match step {
         "coverage-report" | "coverage-diff" | "coverage-source-classification" => {
-            "Generate current line/function/branch LCOV for the selected source and configure coverage.report (or --coverage-report); preserve missing-source failures."
+            "Run `hardgate evidence vitest` for JS/TS or `hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>` for Rust; set coverage.report to .hardgate/evidence/coverage.lcov (or use --coverage-report). Coverage written by check commands is disposable and cannot issue a producer receipt."
         }
         "mutation-report" => {
             "Run `hardgate evidence cargo-mutants` or `hardgate evidence stryker` against current source; set mutation.reports (or check --mutation-report)."

@@ -3,7 +3,7 @@ pub use check::{
     output_report, output_report_with_opts, print_empty_discovery,
 };
 pub mod check;
-mod check_selection;
+pub mod check_selection;
 pub use check_selection::CheckKind;
 mod evidence;
 mod execution_failure;

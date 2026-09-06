@@ -319,16 +319,8 @@ fn test_gate_report_advisories_rendering() {
     assert!(term.contains("pass"));
 
     let agent = report.render_agent();
-    assert!(
-        agent.contains(
-            "> ⚠️ **Advisory**: 25 files excluded from clone detection via hardgate.toml."
-        )
-    );
-    assert!(
-        agent.contains(
-            "> ⚠️ **Advisory**: 1 file excluded from file budget checks via hardgate.toml."
-        )
-    );
+    assert!(agent.contains("Advisory: 25 files excluded from clone detection via hardgate.toml."));
+    assert!(agent.contains("Advisory: 1 file excluded from file budget checks via hardgate.toml."));
     assert!(agent.contains("✅ **Hardgate Passed**"));
 
     let json_str = report.render_json().unwrap();
