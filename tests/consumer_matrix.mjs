@@ -80,7 +80,7 @@ function writeFakeBinary(dir, mode = "check", requireDiff = false) {
   const binary = path.join(dir, `fake-${mode}`);
   const gateReports = {
     check: emptyReport(),
-    supabase: emptyReport({ passed: false, advisories: ["Classified 2 generated file(s); inventoried without handwritten complexity or clone debt.", "generated-freshness evidence: `node supabase/check-generated.mjs` completed successfully."], files_scanned: 10, functions_analyzed: 2, orchestration_violations: [orchestrationRecord("unsupported-source", "supabase/migrations/001_init.sql", "File is classified as Migration, but no AST engine supports its extension."), orchestrationRecord("unsupported-source", "supabase/seed.sql", "File is classified as Migration, but no AST engine supports its extension.")] }),
+    supabase: emptyReport({ partial: true, passed: false, advisories: ["Classified 2 generated file(s); inventoried without handwritten complexity or clone debt.", "generated-freshness evidence: `node supabase/check-generated.mjs` completed successfully."], files_scanned: 10, functions_analyzed: 2, orchestration_violations: [orchestrationRecord("unsupported-source", "supabase/migrations/001_init.sql", "File is classified as Migration, but no AST engine supports its extension."), orchestrationRecord("unsupported-source", "supabase/seed.sql", "File is classified as Migration, but no AST engine supports its extension.")] }),
     failure: emptyReport({ passed: false, orchestration_violations: [coverageMissing] }),
     "coverage-malformed": emptyReport({ passed: false, orchestration_violations: [coverageMalformed] }),
     "generated-stale": emptyReport({ passed: false, orchestration_violations: [generatedStale] }),
@@ -88,6 +88,7 @@ function writeFakeBinary(dir, mode = "check", requireDiff = false) {
     "legacy-missing": emptyReport({ passed: false, complexity_violations: [legacyViolation] }),
     "legacy-malformed": emptyReport({ passed: false, advisories: ["legacy ratchet: malformed"] , complexity_violations: [legacyViolation] }),
   };
+  gateReports.supabase.execution.engines = ["format_check", "lint"].map((id) => ({ id, enabled: true, selected: false, required_evidence: [], state: "skipped", reason: "not requested by this command" }));
   const script = `#!/usr/bin/env node
 const mode = process.env.FAKE_MODE || ${JSON.stringify(mode)};
 const requireDiff = ${JSON.stringify(requireDiff)};
@@ -174,6 +175,13 @@ function assertEvidenceFailures(temp, cwd) {
   assert.equal(legacyMalformed.reasonCode, "evidence-mismatch");
 }
 
+function assertSelectionFailures(temp, cwd) {
+  const missingPartial = runCheck(writeFakeBinary(temp), cwd, { checks: "policy", expectedPartial: true, expectPass: true, expectedExit: 0 });
+  assert.equal(missingPartial.reasonCode, "evidence-mismatch", "a passing report cannot hide omitted specialist checks");
+  const wrongSelection = runCheck(writeFakeBinary(temp, "supabase"), cwd, { expectedPartial: false, expectPass: false, expectedExit: 2 });
+  assert.equal(wrongSelection.reasonCode, "evidence-mismatch", "skipped tools cannot establish a full check contract");
+}
+
 function assertTempCleanup(temp) {
   const supabase = CONSUMER_CASES.find((item) => item.id === "supabase-roles");
   const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("hardgate-consumer-")));
@@ -201,6 +209,7 @@ function runAdversarialChecks() {
     assertProcessFailures(temp, cwd);
     assertReportFailures();
     assertEvidenceFailures(temp, cwd);
+    assertSelectionFailures(temp, cwd);
     assertTempCleanup(temp);
     assertSetupFailureCleanup(temp);
   } finally {

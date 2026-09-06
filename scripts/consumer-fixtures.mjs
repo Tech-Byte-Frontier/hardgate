@@ -1,7 +1,7 @@
 "use strict";
 
-// Offline public check/report contracts. Real specialist mutation execution is
-// verified separately; these fixtures do not emulate mutation test runners.
+// Offline public policy/report contracts. Explicit partial results must never
+// claim specialist acceptance; real installed-tool trials are verified separately.
 const CHECK_CASES = [
   ["vite-react-vitest", "vite-react-vitest", "React/TSX source and test classification"],
   ["next-monorepo-package-local", "next-monorepo", "Next workspace source inventory"],
@@ -9,7 +9,7 @@ const CHECK_CASES = [
   ["package-manager-npm", "package-managers/npm", "npm project inventory"],
   ["package-manager-pnpm", "package-managers/pnpm", "pnpm project inventory"],
 ].map(([id, fixture, requirement, minFiles]) => ({
-  id, fixture, check: { expectPass: true, expectedExit: 0, requirement, ...(minFiles ? { minFiles } : {}) },
+  id, fixture, check: { checks: "policy", expectedPartial: true, expectPass: true, expectedExit: 0, requirement, ...(minFiles ? { minFiles } : {}) },
 }));
 
 function orchestration(step, command, output) {
@@ -22,6 +22,8 @@ export const CONSUMER_CASES = [
     id: "supabase-roles",
     fixture: "supabase",
     check: {
+      checks: "policy",
+      expectedPartial: true,
       expectPass: false,
       expectedExit: 2,
       expectedViolationCount: 2,
@@ -43,11 +45,13 @@ export const CONSUMER_CASES = [
     fixture: "greenfield-strict",
     initialize: "strict-agent",
     check: {
+      expectedPartial: false,
       expectPass: false,
       expectedExit: 2,
-      expectedViolationCount: 2,
+      expectedViolationCount: 4,
       expectedOrchestration: [
-        orchestration("coverage-report", "coverage/lcov.info", "Required coverage report was not found."),
+        ...["format_check", "lint"].map((step) => orchestration(step, "<project-root>", `Required ${step} command could not be resolved. Run ` + "`hardgate init --preview` for tool-specific setup, or configure [orchestration].")),
+        orchestration("coverage-report", ".hardgate/evidence/coverage.lcov", "Required coverage report was not found."),
         orchestration("mutation-report", "<not-configured>", "Mutation is enabled, but no report path was provided."),
       ],
       requirement: "strict init must fail closed until coverage and mutation evidence exist",
@@ -58,6 +62,8 @@ export const CONSUMER_CASES = [
     fixture: "legacy-reference",
     legacy: true,
     check: {
+      checks: "policy",
+      expectedPartial: true,
       expectPass: false,
       expectedExit: 1,
       expectedViolationCount: 1,

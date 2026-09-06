@@ -30,8 +30,9 @@ HARDGATE_BINARY="$BINARY" scripts/coverage.sh
 "$BINARY" check --format agent
 
 # Rust producer evidence covers Rust source/build scripts. The complete check
-# above includes repository policy and configured tools; consumer verification
-# below exercises the separately packaged npm launcher.
+# above includes repository policy and configured tools. The offline matrix
+# below verifies CLI policy/partial/failure contracts; npm archive installation
+# and real specialist consumer trials are separate acceptance checks.
 "$BINARY" check --checks policy \
   --mutation-report "$HARDGATE_MUTATION_REPORT" \
   --coverage-report .hardgate/evidence/coverage.lcov --format agent src build.rs

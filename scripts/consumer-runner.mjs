@@ -38,6 +38,7 @@ function earlyCheckFailure(processError, result) {
 
 export function runCheck(binary, root, expectation, diff = false) {
   const args = ["check", "--format", "json"];
+  if (expectation.checks) args.push("--checks", expectation.checks);
   if (diff) args.push("--diff");
   const result = runProcess({ binary, args, cwd: root, timeout: expectation.timeout ?? 30_000 });
   const expectedExit = expectation.expectedExit ?? (expectation.expectPass ? 0 : 1);
@@ -79,7 +80,7 @@ function checkCountEvidence(report, expectation) {
 
 function checkOrchestrationEvidence(report, expectation) {
   return (expectation.expectedOrchestration ?? []).flatMap((expected) => {
-    const found = report.orchestration_violations.some((item) => item.step === expected.step && item.command === expected.command && item.output === expected.output);
+    const found = report.orchestration_violations.some((item) => item.step === expected.step && item.command === expected.command.replace("<project-root>", report.execution.config.root) && item.output === expected.output);
     return found ? [] : [`missing exact orchestration evidence ${expected.step} ${expected.command}`];
   });
 }
@@ -98,11 +99,23 @@ function checkComplexityEvidence(report, expectation) {
 function checkEvidence(report, expectation) {
   const failures = [
     ...checkCountEvidence(report, expectation),
+    ...checkSelectionEvidence(report, expectation),
     ...checkOrchestrationEvidence(report, expectation),
     ...checkAdvisoryEvidence(report, expectation),
     ...checkComplexityEvidence(report, expectation),
   ];
   if (expectation.legacySummary) checkLegacySummary(report, expectation.legacySummary, failures);
+  return failures;
+}
+
+function checkSelectionEvidence(report, expectation) {
+  if (expectation.expectedPartial === undefined) return [];
+  const failures = report.partial === expectation.expectedPartial ? [] : ["partial verdict does not match the requested check scope"];
+  const expectedState = expectation.expectedPartial ? "skipped" : "incomplete";
+  for (const id of ["format_check", "lint"]) {
+    const engine = report.execution.engines.find((item) => item.id === id);
+    if (!engine?.enabled || engine.state !== expectedState || engine.selected === expectation.expectedPartial) failures.push(`incorrect ${id} selection/state for this consumer contract`);
+  }
   return failures;
 }
 
