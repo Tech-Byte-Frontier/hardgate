@@ -69,3 +69,42 @@ fn effective_config_applies_fallback_timeout_and_all_overrides() {
     );
     assert_eq!(config.orchestration.lint.as_deref(), Some("custom lint"));
 }
+
+#[test]
+fn concise_config_preserves_each_independent_orchestration_setting() {
+    let detection = Detection {
+        ecosystem: super::super::detect::Ecosystem::Unknown,
+        orchestration: OrchestrationConfig::default(),
+        missing_setup: Vec::new(),
+        notes: Vec::new(),
+    };
+    for setting in [
+        "format = 'format'",
+        "lint = 'lint'",
+        "test_cmd = 'test'",
+        "additional_tests = ['integration']",
+        "typecheck = 'typecheck'",
+        "feature_checks = ['feature-a']",
+        "timeout_secs = 42",
+    ] {
+        let orchestration: OrchestrationConfig = toml::from_str(setting).unwrap();
+        let config = HardgateConfig {
+            orchestration,
+            ..Default::default()
+        };
+        let rendered = render(RenderInput {
+            config: &config,
+            preset: Preset::Balanced,
+            detection: &detection,
+            missing_setup: &[],
+            reference_status: ReferenceStatus::NotApplicable,
+            full: false,
+        });
+        let parsed: HardgateConfig = toml::from_str(&rendered).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed.orchestration).unwrap(),
+            serde_json::to_value(config.orchestration).unwrap(),
+            "{setting}: {rendered}"
+        );
+    }
+}
