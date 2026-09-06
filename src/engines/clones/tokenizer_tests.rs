@@ -114,3 +114,42 @@ fn javascript_dynamic_imports_remain_executable_clone_tokens() {
         );
     }
 }
+
+#[test]
+fn dynamic_import_comments_and_underscore_identifiers_preserve_executable_tokens() {
+    for source in [
+        "import // comment\n('module');",
+        "import /* comment */ ('module');",
+        "import /* unterminated",
+        "import // unterminated",
+    ] {
+        let tokens = words(source);
+        if source.contains("unterminated") {
+            assert!(!tokens.iter().any(|(word, _)| word == "_STR_"));
+        } else {
+            assert!(
+                tokens.iter().any(|(word, _)| word == "import"),
+                "{tokens:?}"
+            );
+            assert!(tokens.iter().any(|(word, _)| word == "_STR_"), "{tokens:?}");
+        }
+    }
+    assert_eq!(words("_private"), vec![("_private".into(), 1)]);
+}
+
+#[test]
+fn nested_multiline_alias_delimiters_do_not_hide_following_executable_code() {
+    for alias in [
+        "type Alias = (\nnumber\n);",
+        "type Alias = [\nnumber\n];",
+        "export SomeName from 'module';",
+        "type Alias = { text: '`'; other: \"`\" };",
+    ] {
+        let source = format!("{alias}\nexecute");
+        assert_eq!(
+            words(&source),
+            vec![("execute".into(), alias.lines().count() + 1)],
+            "{alias}"
+        );
+    }
+}

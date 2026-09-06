@@ -97,3 +97,26 @@ fn overlapping_summary_lines_keep_unattributed_counts_without_test_hit_credit() 
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn monomorphized_functions_require_consistent_grouped_totals_for_test_projection() {
+    let root = fs_tests::tempdir("coverage-function-groups");
+    std::fs::write(
+        root.join("lib.rs"),
+        "pub fn production<T>() {}\n#[cfg(test)]\nfn helper() {}\n",
+    )
+    .unwrap();
+    let path = root.join("report.lcov");
+    let config = HardgateConfig::default();
+    for (found, hit, accepted) in [(2, 2, true), (2, 1, false), (3, 3, false)] {
+        std::fs::write(&path, format!("SF:lib.rs\nFN:1,production_u8\nFN:1,production_u16\nFN:3,helper\nFNDA:1,production_u8\nFNDA:0,production_u16\nFNDA:1,helper\nFNF:{found}\nFNH:{hit}\nDA:1,1\nDA:3,1\nLF:2\nLH:2\nBRF:0\nBRH:0\nend_of_record\n")).unwrap();
+        let result =
+            CoverageScorer::new(&config.coverage).parse_lcov_for_project(&path, &root, &config);
+        assert_eq!(result.is_ok(), accepted, "{found}/{hit}: {result:?}");
+        if let Ok(map) = result {
+            let record = &map[Path::new("lib.rs")];
+            assert_eq!((record.functions_found, record.functions_hit), (1, 1));
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

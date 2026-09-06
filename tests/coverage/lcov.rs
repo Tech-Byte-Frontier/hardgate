@@ -375,3 +375,25 @@ fn lcov_parser_rejects_missing_detail_delimiters() {
         assert_invalid_lcov(&config, &detail_report(details, ""));
     }
 }
+
+#[test]
+fn optional_function_and_branch_metrics_still_require_aggregates_for_present_details() {
+    for config in [
+        detail_config(None, Some(1.0)),
+        detail_config(Some(1.0), None),
+    ] {
+        let details = if config.min_function_percent.is_none() {
+            "FN:1,answer\nFNDA:1,answer\nBRF:0\nBRH:0\n"
+        } else {
+            "FNF:0\nFNH:0\nBRDA:1,0,0,1\n"
+        };
+        assert_invalid_lcov(&config, &detail_report(details, ""));
+    }
+    let config = detail_config(None, Some(1.0));
+    for branch in ["0\0", "case,-,next", "case,,next"] {
+        assert_invalid_lcov(
+            &config,
+            &detail_report(&format!("BRDA:1,0,{branch},1\n"), "BRF:1\nBRH:1"),
+        );
+    }
+}

@@ -34,3 +34,30 @@ fn cargo_mutants_test_only_paths_and_inline_spans_are_not_production_evidence() 
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn mutation_scope_rejects_non_ast_and_disabled_roles_and_handles_crlf_coordinates() {
+    let root = fs_tests::tempdir("mutation-role-scope");
+    std::fs::write(root.join("data.toml"), "value=1\n").unwrap();
+    std::fs::write(root.join("lib.rs"), "pub fn value() {}\r\n").unwrap();
+    let inputs = Snapshot::capture(&root).unwrap();
+    let mut config = crate::config::HardgateConfig::default();
+    let value = serde_json::json!({"files":{"data.toml":{}}});
+    let context = EvidenceInputs {
+        snapshot: &inputs,
+        config: &config,
+        root: &root,
+    };
+    assert!(validate(&value, Producer::Stryker, &context).is_err());
+    config.roles.source.mutation_target = Some(false);
+    let value = serde_json::json!({"files":{"lib.rs":{}}});
+    let context = EvidenceInputs {
+        snapshot: &inputs,
+        config: &config,
+        root: &root,
+    };
+    assert!(validate(&value, Producer::Stryker, &context).is_err());
+    let point = serde_json::json!({"line":2,"column":1});
+    assert_eq!(position("pub fn value() {}\r\n", &point).unwrap(), 19);
+    std::fs::remove_dir_all(root).unwrap();
+}

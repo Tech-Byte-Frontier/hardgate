@@ -66,6 +66,12 @@ fn published_receipt_identity_and_report_bytes_are_verified_independently() {
         ("producer", json!("vitest")),
         ("producer_version", json!("")),
         ("command", json!([])),
+        ("command", json!([["cargo", "test", "--workspace"]])),
+        (
+            "command",
+            json!([["cargo", "check", "--workspace"], ["cargo", "mutants"]]),
+        ),
+        ("command", json!([["cargo", "test"], ["cargo", "mutants"]])),
         ("runner_exit", json!(9)),
         ("report_sha256", json!("wrong")),
         ("inputs", json!({})),
@@ -156,4 +162,26 @@ fn producer_temp_location_and_artifact_symlinks_cannot_redirect_evidence() {
     std::os::unix::fs::symlink(&original, project.report("coverage")).unwrap();
     assert_exit(&project.produce("vitest", lcov(), ("pass", 0)), 2);
     assert_eq!(std::fs::read_to_string(original).unwrap(), SOURCE);
+}
+
+#[test]
+fn invalid_stryker_setup_and_unremovable_receipts_fail_before_execution() {
+    let project = Project::new();
+    if project.nested_mutation_is_rejected("stryker") {
+        return;
+    }
+    std::fs::remove_file(project.0.join("stryker.config.json")).unwrap();
+    let output = project.produce("stryker", "{}", ("pass", 0));
+    assert_exit(&output, 2);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("exactly one"));
+    let output = project
+        .producer_command("stryker", "{}", ("pass", 0))
+        .args(["--toolchain", "stable"])
+        .output()
+        .unwrap();
+    assert_exit(&output, 2);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("configure Stryker scope"));
+    std::fs::create_dir(project.receipt("coverage")).unwrap();
+    assert_exit(&project.produce("vitest", lcov(), ("pass", 0)), 2);
+    assert!(!project.report("coverage").exists());
 }
