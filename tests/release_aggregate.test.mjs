@@ -1,29 +1,19 @@
-// Evaluate the actual aggregate rejection condition over every prerequisite.
+// All six ordered checkpoints must succeed before completion is reachable.
 "use strict";
 import assert from "node:assert/strict";
-import { release } from "./release_contract.sources.mjs";
-
-const aggregate = release.slice(release.indexOf("  release-complete:"));
-const dependencies = aggregate.match(/needs: \[([^\]]+)\]/)[1].split(",").map((value) => value.trim());
-const condition = aggregate.match(/if: \$\{\{ (contains[^\n]+) \}\}/)[1];
-const statuses = ["success", "failure", "cancelled", "skipped"];
-
-function rejected(results) {
-  const clauses = condition.split(" || ");
-  return clauses.some((clause) => {
-    const status = clause.match(/^contains\(needs\.\*\.result, '([^']+)'\)$/)?.[1];
-    assert.ok(status, "unrecognized aggregate expression requires an updated evaluator");
-    return results.includes(status);
-  });
+import { release, releaseJob } from "./release_contract.sources.mjs";
+const names = [...release.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1]).filter((name) => !["push", "workflow_dispatch"].includes(name));
+assert.deepEqual(names, ["version-check", "package", "publish", "verify-exact", "promote-channels", "verify-channels"]);
+const dependencies = Object.fromEntries(names.map((name) => [name, (releaseJob(name).match(/needs: \[([^\]]+)\]/)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean)]));
+function completes(failed, state) {
+  const result = {};
+  for (const name of names) result[name] = dependencies[name].every((need) => result[need] === "success") ? (name === failed ? state : "success") : "skipped";
+  return result["verify-channels"] === "success";
 }
-
-assert.deepEqual(new Set(dependencies), new Set(["version-check", "package", "attest", "publication-preflight", "receipt-init", "github-release", "publish-crates", "publish-npm", "verify-native-exact", "promote-channels", "verify-native-default", "verify-channels"]), "every staging, promotion, and consumer checkpoint must be required");
-assert.equal(rejected(dependencies.map(() => "success")), false);
-for (const prerequisite of dependencies) {
-  for (const status of statuses.slice(1)) {
-    const results = dependencies.map((job) => job === prerequisite ? status : "success");
-    assert.equal(rejected(results), true, `${prerequisite}=${status} cannot produce green completion`);
-  }
+assert.equal(completes(null, null), true);
+for (const name of names) {
+  assert.doesNotMatch(releaseJob(name).split("    steps:\n")[0], /if:|continue-on-error/, "checkpoint success must use normal dependency semantics");
+  for (const state of ["failure", "cancelled", "skipped"]) assert.equal(completes(name, state), false, `${name}=${state} cannot complete`);
 }
-assert.equal(rejected(dependencies.map((job) => job === "version-check" ? "success" : "skipped")), true, "historical green-but-unpublished recovery must fail");
-console.log("release_aggregate.test: OK");
+assert.match(releaseJob("verify-channels"), /release-receipt-cli\.mjs assert --receipt receipt\/release\.json --require-complete/);
+console.log("release_aggregate.test: six checkpoint dependency and receipt completion contracts verified");

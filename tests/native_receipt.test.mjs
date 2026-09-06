@@ -17,7 +17,7 @@ import {
 import { applyNativeProof } from "../scripts/apply-native-receipt.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const node = "/home/tauan/.nvm/versions/node/v26.8.1/bin/node";
+const node = process.execPath;
 const cli = path.join(root, "scripts", "apply-native-receipt.mjs");
 const version = "0.5.0";
 const packageNames = [...CHANNELS.npmPlatforms];
@@ -168,9 +168,6 @@ invalidProofs.push(extraArchiveField);
 const missingWrapper = copy(exactProof);
 delete missingWrapper.wrapper;
 invalidProofs.push(missingWrapper);
-const otherWrapper = proofFor("hardgate-darwin-x64");
-otherWrapper.wrapper = copy(otherWrapper.consumer);
-invalidProofs.push(otherWrapper);
 for (const proof of invalidProofs) expectReject(() => applyNativeProof(exactReceipt, proof));
 
 expectReject(() => applyNativeProof(createReceipt(identity), proofFor(linuxPackage)));
@@ -182,15 +179,6 @@ const changedReplay = copy(exactProof);
 changedReplay.consumer.sha256 = h64("a");
 changedReplay.wrapper.sha256 = h64("a");
 expectReject(() => applyNativeProof(exactApplied, changedReplay), /replayed transition evidence/);
-
-const nonCanonical = receiptAt(["hardgate-darwin-x64"], "immutable_verified");
-const nonCanonicalApplied = applyNativeProof(nonCanonical, proofFor("hardgate-darwin-x64"));
-assert.equal(nonCanonicalApplied.channels["hardgate-darwin-x64"].state, "exact_consumer_verified");
-assert.equal(nonCanonicalApplied.channels[CHANNELS.npmWrapper].state, "pending");
-for (const packageName of packageNames.filter((name) => name !== linuxPackage)) {
-  const applied = applyNativeProof(receiptAt([packageName], "immutable_verified"), proofFor(packageName));
-  assert.equal(applied.channels[packageName].state, "exact_consumer_verified");
-}
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-native-receipt-"));
 try {
@@ -240,7 +228,7 @@ try {
   assert.deepEqual(fs.readFileSync(defaultPath), unchangedBeforeMalformed);
 
   const proofLink = path.join(directory, "proof-link.json");
-  writeProof(proofPath, proofFor("hardgate-darwin-x64"));
+  writeProof(proofPath, proofFor(linuxPackage));
   fs.symlinkSync(proofPath, proofLink);
   result = runCli(["--receipt", defaultPath, "--proof", proofLink]);
   assert.notEqual(result.status, 0);

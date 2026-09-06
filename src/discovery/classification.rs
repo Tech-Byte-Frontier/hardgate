@@ -25,7 +25,7 @@ pub enum FileRole {
 }
 
 impl FileRole {
-    /// Production code is the only default target for native mutation.
+    /// Production code is the only default source for mutation evidence.
     pub fn is_mutation_target(self) -> bool {
         self == Self::Source
     }
@@ -169,15 +169,13 @@ impl PreparedClassifier {
 }
 
 /// Extensions with a Tree-sitter parser in Hardgate.
-pub const AST_EXTENSIONS: &[&str] = &[
-    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "go",
-];
+pub const AST_EXTENSIONS: &[&str] = &["rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"];
 
 /// Text formats intentionally inventoried even when no AST engine supports
 /// them. This prevents Markdown/SQL/data files from disappearing silently.
 pub const INVENTORY_EXTENSIONS: &[&str] = &[
-    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "go", "css", "mdx", "sql",
-    "json", "jsonc", "graphql", "gql", "snap", "toml", "yaml", "yml", "lock", "lockb",
+    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "css", "mdx", "sql", "json",
+    "jsonc", "graphql", "gql", "snap", "toml", "yaml", "yml", "lock", "lockb",
 ];
 
 pub fn is_inventory_file(path: &Path) -> bool {
@@ -192,6 +190,22 @@ pub fn ast_supported(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
         .is_some_and(|ext| AST_EXTENSIONS.contains(&ext.as_str()))
+}
+
+/// Retired source types remain visible only to reject unsupported analysis.
+/// They have no parser, language rules, or tool adapters.
+pub fn is_retired_source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|ext| {
+            ["py", "go"]
+                .iter()
+                .any(|removed| ext.eq_ignore_ascii_case(removed))
+        })
+}
+
+pub(crate) fn is_discoverable_file(path: &Path) -> bool {
+    is_inventory_file(path) || is_retired_source(path)
 }
 
 /// Classify a path with custom ordered rules. The first matching rule wins.
@@ -234,8 +248,15 @@ fn classify_builtin_parts(path: &str, file_name: &str) -> (FileRole, &'static st
     if is_documentation(file_name) {
         return (FileRole::Documentation, "documentation extension");
     }
+    classify_source(path)
+}
+
+fn classify_source(path: &str) -> (FileRole, &'static str) {
     if is_inventory_file(Path::new(path)) {
         return (FileRole::Source, "handwritten source extension");
+    }
+    if is_retired_source(Path::new(path)) {
+        return (FileRole::Source, "unsupported source extension");
     }
     (FileRole::Unknown, "no built-in classification rule")
 }
@@ -245,11 +266,8 @@ const LOCKFILES: &[&str] = &[
     "package-lock.json",
     "yarn.lock",
     "cargo.lock",
-    "poetry.lock",
-    "pipfile.lock",
     "bun.lock",
     "bun.lockb",
-    "composer.lock",
 ];
 
 pub fn is_lockfile(file_name: &str) -> bool {

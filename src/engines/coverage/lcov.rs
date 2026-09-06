@@ -1,5 +1,8 @@
+#[path = "lcov/counters.rs"]
+mod counters;
 use super::lcov_details::{DetailValidation, RecordDetails, lexical_record_key};
 use anyhow::{Context, Result, bail};
+use counters::{require_counts, validate_branch_counts, validate_function_counts};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,13 +48,24 @@ pub(crate) fn parse_report(
     require_functions: bool,
     require_branches: bool,
 ) -> Result<HashMap<PathBuf, FileCoverage>> {
+    parse_report_filtered(report_path, require_functions, require_branches, None)
+}
+
+pub(crate) type TestLineFilter<'a> = dyn Fn(&Path, usize) -> Result<bool> + 'a;
+
+pub(crate) fn parse_report_filtered(
+    report_path: &Path,
+    require_functions: bool,
+    require_branches: bool,
+    test_line: Option<&TestLineFilter<'_>>,
+) -> Result<HashMap<PathBuf, FileCoverage>> {
     let content = fs::read_to_string(report_path)
         .with_context(|| format!("Unable to read LCOV report `{}`", report_path.display()))?;
     if content.trim().is_empty() {
         bail!("LCOV report is empty");
     }
 
-    let mut records = LcovRecords::new(require_functions, require_branches);
+    let mut records = LcovRecords::new(require_functions, require_branches, test_line);
     for (line_number, line) in content.lines().enumerate() {
         let current_source = records
             .current
@@ -65,7 +79,7 @@ pub(crate) fn parse_report(
                     None => String::new(),
                 };
                 format!(
-                    "Invalid LCOV record at line {}{source_info}; supported producer formats include Coverage.py, cargo-llvm-cov, and lcov",
+                    "Invalid LCOV record at line {}{source_info}; supported producer formats include cargo-llvm-cov and JavaScript/TypeScript LCOV producers",
                     line_number + 1
                 )
             })?;
@@ -74,7 +88,8 @@ pub(crate) fn parse_report(
 }
 
 #[derive(Default)]
-struct LcovRecords {
+struct LcovRecords<'a> {
+    test_line: Option<&'a TestLineFilter<'a>>,
     completed: HashMap<PathBuf, FileCoverage>,
     seen_paths: HashSet<String>,
     current: Option<RecordBuilder>,
@@ -82,11 +97,16 @@ struct LcovRecords {
     require_branches: bool,
 }
 
-impl LcovRecords {
-    fn new(require_functions: bool, require_branches: bool) -> Self {
+impl<'a> LcovRecords<'a> {
+    fn new(
+        require_functions: bool,
+        require_branches: bool,
+        test_line: Option<&'a TestLineFilter<'a>>,
+    ) -> Self {
         Self {
             require_functions,
             require_branches,
+            test_line,
             ..Default::default()
         }
     }
@@ -161,7 +181,11 @@ impl LcovRecords {
         let Some(current) = self.current.take() else {
             bail!("LCOV record ended without a matching source record");
         };
-        let coverage = current.finish(self.require_functions, self.require_branches)?;
+        let coverage = current.finish(
+            self.require_functions,
+            self.require_branches,
+            self.test_line,
+        )?;
         let path_key = lexical_record_key(&coverage.file_path);
         if self.completed.contains_key(&coverage.file_path) || !self.seen_paths.insert(path_key) {
             bail!(
@@ -281,7 +305,12 @@ impl RecordBuilder {
         Ok(())
     }
 
-    fn finish(self, require_functions: bool, require_branches: bool) -> Result<FileCoverage> {
+    fn finish(
+        mut self,
+        require_functions: bool,
+        require_branches: bool,
+        test_line: Option<&TestLineFilter<'_>>,
+    ) -> Result<FileCoverage> {
         let file_path = self.coverage.file_path.clone();
         validate_lines(&self)
             .and_then(|()| validate_function_counts(&self, require_functions))
@@ -297,10 +326,14 @@ impl RecordBuilder {
             })
             .with_context(|| {
                 format!(
-                    "Failed to validate LCOV record for source `{}`; supported producer formats include Coverage.py, cargo-llvm-cov, and lcov",
+                    "Failed to validate LCOV record for source `{}`; supported producer formats include cargo-llvm-cov and JavaScript/TypeScript LCOV producers",
                     file_path.display()
                 )
             })?;
+        if let Some(test_line) = test_line {
+            self.details
+                .retain_production(&mut self.coverage, |line| test_line(&file_path, line))?;
+        }
         Ok(self.coverage)
     }
 }
@@ -377,102 +410,6 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
         );
     }
     Ok(())
-}
-
-enum MetricCounterKind {
-    Function,
-    Branch,
-}
-
-fn validate_metric_counts(
-    builder: &RecordBuilder,
-    required: bool,
-    kind: MetricCounterKind,
-) -> Result<()> {
-    let pair = match kind {
-        MetricCounterKind::Function => CounterPair {
-            found_tag: "FNF",
-            hit_tag: "FNH",
-            label: "function counts",
-            required_label: "required FNF/FNH counts",
-            found: builder.coverage.functions_found,
-            hit: builder.coverage.functions_hit,
-            exceeds: "LCOV FNH exceeds FNF",
-        },
-        MetricCounterKind::Branch => CounterPair {
-            found_tag: "BRF",
-            hit_tag: "BRH",
-            label: "branch counts",
-            required_label: "required BRF/BRH counts",
-            found: builder.coverage.branches_found,
-            hit: builder.coverage.branches_hit,
-            exceeds: "LCOV BRH exceeds BRF",
-        },
-    };
-    validate_counter_pair(builder, required, pair)
-}
-
-fn validate_function_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
-    validate_metric_counts(builder, required, MetricCounterKind::Function)
-}
-
-fn validate_branch_counts(builder: &RecordBuilder, required: bool) -> Result<()> {
-    validate_metric_counts(builder, required, MetricCounterKind::Branch)
-}
-
-struct CounterPair {
-    found_tag: &'static str,
-    hit_tag: &'static str,
-    label: &'static str,
-    required_label: &'static str,
-    found: usize,
-    hit: usize,
-    exceeds: &'static str,
-}
-
-fn validate_counter_pair(builder: &RecordBuilder, required: bool, pair: CounterPair) -> Result<()> {
-    validate_pair(
-        &builder.seen_counts,
-        pair.found_tag,
-        pair.hit_tag,
-        pair.label,
-    )?;
-    if required {
-        require_counts(
-            &builder.seen_counts,
-            &[pair.found_tag, pair.hit_tag],
-            pair.required_label,
-        )?;
-    }
-    if pair.hit > pair.found {
-        bail!("{}", pair.exceeds);
-    }
-    Ok(())
-}
-
-fn validate_pair(
-    seen_counts: &HashSet<&'static str>,
-    first: &'static str,
-    second: &'static str,
-    label: &str,
-) -> Result<()> {
-    if seen_counts.contains(first) == seen_counts.contains(second) {
-        Ok(())
-    } else {
-        bail!("LCOV {first}/{second} {label} must be paired")
-    }
-}
-
-fn require_counts(
-    seen_counts: &HashSet<&'static str>,
-    tags: &[&'static str],
-    label: &str,
-) -> Result<()> {
-    if tags.iter().all(|tag| seen_counts.contains(tag)) {
-        Ok(())
-    } else {
-        bail!("LCOV source record is missing {label}")
-    }
 }
 
 fn metric_tag(line: &str) -> Option<&'static str> {

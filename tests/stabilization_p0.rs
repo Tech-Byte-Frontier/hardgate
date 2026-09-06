@@ -26,7 +26,6 @@ rs = 10000
 
 [budgets.functions]
 max_cyclomatic = 100
-max_cognitive = 100
 max_parameters = 20
 max_lines = 1000
 max_nesting_depth = 20
@@ -76,31 +75,6 @@ fn hardgate(root: &Path, args: &[&str]) -> Output {
         .expect("hardgate binary should run")
 }
 
-fn mutation_config(extra: &str) -> String {
-    BASE_CONFIG.replace(
-        "[mutation]\nenabled = false",
-        &format!("[mutation]\nenabled = true\nmin_score = 0.0\ntimeout_secs = 2\n{extra}"),
-    )
-}
-
-fn source_fixture(prefix: &str, config: &str, path: &str, content: &str) -> FixtureRoot {
-    let root = FixtureRoot::new(prefix);
-    write(&root, "hardgate.toml", config);
-    write(&root, path, content);
-    root
-}
-
-fn mutate(root: &Path, path: &str, test_cmd: &str, max_mutants: Option<&str>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hardgate"));
-    command
-        .args(["mutate", "--scoped", path, "--test-cmd", test_cmd])
-        .current_dir(root);
-    if let Some(maximum) = max_mutants {
-        command.args(["--max-mutants", maximum]);
-    }
-    command.output().expect("hardgate mutate should run")
-}
-
 fn assert_stdout_failure(output: &Output, expected: &[&str]) {
     assert!(!output.status.success(), "command unexpectedly passed");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -129,7 +103,10 @@ fn calculate_total(values: &[i32]) -> i32 {
     commit_baseline(&root, "baseline");
     write(&root, "src/copied.rs", copied);
 
-    let output = hardgate(&root, &["check", "--diff", "--format", "json"]);
+    let output = hardgate(
+        &root,
+        &["check", "--checks", "policy", "--diff", "--format", "json"],
+    );
     assert_stdout_failure(
         &output,
         &["clone_violations", "src/copied.rs", "src/original.rs"],
@@ -149,7 +126,7 @@ fn budget_exclusion_does_not_hide_other_engines() {
         "#[allow(dead_code)]\nuse forbidden::thing;\nfn bad() {}\n",
     );
 
-    let output = hardgate(&root, &["check", "--format", "json"]);
+    let output = hardgate(&root, &["check", "--checks", "policy", "--format", "json"]);
     assert_stdout_failure(
         &output,
         &[
@@ -172,7 +149,7 @@ fn disabled_evidence_engines_ignore_stale_reports() {
     write(&root, "stale.lcov", "not lcov\n");
     write(&root, "stale.json", "not json\n");
 
-    let output = hardgate(&root, &["verify", "--format", "json"]);
+    let output = hardgate(&root, &["check", "--checks", "policy", "--format", "json"]);
     assert!(
         output.status.success(),
         "{}",
@@ -184,112 +161,6 @@ fn disabled_evidence_engines_ignore_stale_reports() {
 }
 
 #[test]
-fn mutate_honors_disabled_engine_without_running_a_command() {
-    let root = source_fixture(
-        "p0-mutation-disabled",
-        BASE_CONFIG,
-        "src/lib.rs",
-        "pub fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    let output = mutate(
-        &root,
-        "src/lib.rs",
-        "hardgate-command-that-must-not-run",
-        None,
-    );
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("mutation testing is disabled"));
-}
-
-#[test]
-fn nonexistent_mutation_command_fails_during_baseline() {
-    let root = source_fixture(
-        "p0-mutation-missing-command",
-        &mutation_config(""),
-        "src/lib.rs",
-        "pub fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    let output = mutate(
-        &root,
-        "src/lib.rs",
-        "hardgate-command-that-does-not-exist",
-        Some("1"),
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unmutated baseline RunnerError"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("Failed to execute"), "{stderr}");
-}
-
-#[test]
-fn failing_baseline_stops_before_any_mutant_runs() {
-    let source = "pub fn accepts(value: bool) -> bool { value == true }\n";
-    let root = source_fixture(
-        "p0-mutation-baseline",
-        &mutation_config(""),
-        "src/lib.rs",
-        source,
-    );
-    let output = mutate(
-        &root,
-        "src/lib.rs",
-        &format!(
-            "sh -c 'printf x >> \"{}\"; exit 1'",
-            root.join("baseline-runs").display()
-        ),
-        Some("1"),
-    );
-    assert!(!output.status.success());
-    assert_eq!(
-        std::fs::read_to_string(root.join("baseline-runs")).unwrap(),
-        "x"
-    );
-    assert_eq!(
-        std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
-        source
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unmutated baseline Failed"), "{stderr}");
-}
-
-#[test]
-fn mutate_rejects_non_production_scopes_before_execution() {
-    let root = source_fixture(
-        "p0-mutation-role",
-        &mutation_config(""),
-        "tests/example.rs",
-        "fn accepts(value: bool) -> bool { value == true }\n",
-    );
-    let output = mutate(
-        &root,
-        "tests/example.rs",
-        "sh -c 'printf ran > mutation-command-ran'",
-        None,
-    );
-    assert!(!output.status.success());
-    assert!(!root.join("mutation-command-ran").exists());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("classified as Test"), "{stderr}");
-}
-
-#[test]
-fn zero_viable_mutants_is_not_a_green_run() {
-    let root = source_fixture(
-        "p0-mutation-zero-viable",
-        &mutation_config(""),
-        "src/lib.rs",
-        "pub fn answer() -> i32 { 42 }\n",
-    );
-    let output = mutate(&root, "src/lib.rs", "sh -c 'exit 0'", None);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no viable AST mutation points"), "{stderr}");
-}
-
-#[test]
 fn strict_missing_report_and_parser_error_fail() {
     let missing = FixtureRoot::new("p0-missing-report");
     let config = BASE_CONFIG.replace(
@@ -298,14 +169,20 @@ fn strict_missing_report_and_parser_error_fail() {
     );
     write(&missing, "hardgate.toml", &config);
     write(&missing, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    let output = hardgate(&missing, &["verify", "--format", "json"]);
+    let output = hardgate(
+        &missing,
+        &["check", "--checks", "policy", "--format", "json"],
+    );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("coverage-report"));
 
     let malformed = FixtureRoot::new("p0-parser-error");
     write(&malformed, "hardgate.toml", BASE_CONFIG);
     write(&malformed, "src/lib.rs", "pub fn broken( {\n");
-    let output = hardgate(&malformed, &["check", "--format", "json"]);
+    let output = hardgate(
+        &malformed,
+        &["check", "--checks", "policy", "--format", "json"],
+    );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("parse-source"));
 }
@@ -327,7 +204,7 @@ fn strict_unreadable_source_is_not_silently_dropped() {
         return;
     }
 
-    let output = hardgate(&root, &["check", "--format", "json"]);
+    let output = hardgate(&root, &["check", "--checks", "policy", "--format", "json"]);
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("read-source"));
@@ -338,7 +215,7 @@ fn diff_mode_fails_when_git_evidence_is_unavailable() {
     let root = FixtureRoot::new("p0-no-git");
     write(&root, "hardgate.toml", BASE_CONFIG);
     write(&root, "src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    let output = hardgate(&root, &["check", "--diff"]);
+    let output = hardgate(&root, &["check", "--checks", "policy", "--diff"]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("git status"), "{stderr}");

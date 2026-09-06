@@ -1,54 +1,38 @@
 #!/usr/bin/env sh
-# Run the complete configured gate plus one real native mutation sample.
-# Evidence enablement uses a disposable policy; the project policy is never edited.
+# Run the configured gate with coverage and required specialist mutation evidence.
+# Explicit report arguments require both fresh evidence engines without changing policy.
 set -eu
 
 # Environment hints alone do not cap a compiler or its descendants.
-if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
+if ! node scripts/check-resource-boundary.mjs >/dev/null 2>&1; then
   exec scripts/with-resource-limits.sh "$0" "$@"
 fi
+# Fresh private producer builds need headroom below the enforced memory ceiling.
+# Debug symbols are unnecessary for test behavior and LLVM coverage mappings.
+: "${CARGO_BUILD_JOBS:=1}"
+: "${CARGO_PROFILE_DEV_DEBUG:=0}"
+: "${CARGO_PROFILE_TEST_DEBUG:=0}"
+export CARGO_BUILD_JOBS CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
 . scripts/resource-worker-env.sh
 
 BINARY="${HARDGATE_BINARY:-target/release/hardgate}"
-scripts/coverage.sh
-TEMP_POLICY=$(mktemp "$PWD/.hardgate-self-gate.XXXXXX.toml")
-cleanup() {
-  rm -f "$TEMP_POLICY"
-}
-trap cleanup EXIT
-trap 'exit 130' HUP INT TERM
+if [ -z "${HARDGATE_MUTATION_REPORT:-}" ]; then
+  # Preserve the original single production budget-engine mutation sample.
+  # This semantic replacement removes all measured budget violations; it is
+  # explicit sampling, not a repository-wide mutation coverage claim.
+  "$BINARY" evidence cargo-mutants -- \
+    --file src/engines/budgets.rs \
+    --re 'replace check_measured_budgets -> Vec<BudgetViolation> with vec!\[\]$' \
+    --timeout 300
+  HARDGATE_MUTATION_REPORT=.hardgate/evidence/mutation.json
+fi
+HARDGATE_BINARY="$BINARY" scripts/coverage.sh
+"$BINARY" check --format agent
 
-"$BINARY" check --all --dead-code --format agent
-
-# `hardgate.toml` keeps both evidence engines disabled for ordinary local
-# checks. Enable coverage first and require its real Rust LCOV report for the
-# source/build-script scope; the full check above and consumer matrix below
-# cover the separately packaged npm wrapper. Then enable mutation for a
-# deterministic production-source sample. `mutate` runs the unmutated baseline
-# before generating a non-empty mutant set.
-awk '
-  /^\[/ { section = $0 }
-  section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
-  { print }
-' hardgate.toml > "$TEMP_POLICY"
-"$BINARY" --config "$TEMP_POLICY" verify --coverage-report coverage/lcov.info --format agent src build.rs
-
-awk '
-  /^\[/ { section = $0 }
-  section == "[mutation]" && /^enabled = false$/ { $0 = "enabled = true" }
-  section == "[coverage]" && /^enabled = false$/ { $0 = "enabled = true" }
-  { print }
-' hardgate.toml > "$TEMP_POLICY"
-# These integration targets exercise the production budget engine without
-# recursively starting mutation CLI tests inside an active mutation lease.
-# The complete Rust suite runs separately in CI. The bound includes a cold
-# stable build with the mutation runner's conservative worker limits.
-"$BINARY" --config "$TEMP_POLICY" mutate \
-  --scoped src/engines/budgets.rs \
-  --test-cmd "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked" \
-  --max-mutants 1 \
-  --timeout 300 \
-  --format agent
-
-rm -f "$TEMP_POLICY"
+# Rust producer evidence covers Rust source/build scripts. The complete check
+# above includes repository policy and configured tools; consumer verification
+# below exercises the separately packaged npm launcher.
+"$BINARY" check --checks policy \
+  --mutation-report "$HARDGATE_MUTATION_REPORT" \
+  --coverage-report .hardgate/evidence/coverage.lcov --format agent src build.rs
 HARDGATE_BINARY="$BINARY" node scripts/check-consumer-matrix.mjs

@@ -1,18 +1,19 @@
 # hardgate-linux-x64
 
-hardgate prebuilt binary: linux x64 (glibc).
-
-This is a platform-specific package. Install the main wrapper instead.
-The latest published main wrapper is `0.4.2`; npm `0.5.0` is not published.
+Hardgate's Linux x64 GNU prebuilt binary. Install the main wrapper with npm or
+pnpm; it selects this package through an exact optional dependency:
 
 ```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-npx hardgate check
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate
+npx --no-install hardgate check
 ```
 
-The main wrapper receives this binary through `optionalDependencies`; no
-postinstall download runs.
+The 0.6 baseline is Ubuntu 24.04 x64 with glibc 2.39+, cgroup v2 resource
+controllers, systemd 254+ with a user manager (or inherited verified limits),
+and Landlock ABI 3+ enabled. `--version` alone does not prove check support.
+No postinstall download runs. ARM64, musl, and macOS are deferred.
 
-Full docs: https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0
+[Runtime and installation guide](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/INSTALLATION.md)
+· [Releases](https://github.com/Tech-Byte-Frontier/hardgate/releases)
 
 License: MIT OR Apache-2.0.

@@ -16,7 +16,7 @@ const result = verifyRepositoryRules();
 assert.equal(result.aggregateName, "CI quality aggregate");
 assert.deepEqual(
   result.needs,
-  ["rust", "npm-wrapper", "npm-wrapper-minimum", "macos-process-restoration", "repository-rules", "hardgate-self", "release-contract"],
+  ["rust", "npm-wrapper", "npm-wrapper-minimum", "repository-rules", "hardgate-self", "release-contract"],
 );
 assert.equal(result.proposals.length, 2);
 
@@ -43,8 +43,8 @@ assert.throws(
   /must require CI quality aggregate/,
 );
 
-const missingPrerequisite = { ...result, needs: result.needs.filter((job) => job !== "macos-process-restoration") };
-assert.throws(() => validateWorkflowContract(missingPrerequisite), /macos-process-restoration is missing/);
+const missingPrerequisite = { ...result, needs: result.needs.filter((job) => job !== "hardgate-self") };
+assert.throws(() => validateWorkflowContract(missingPrerequisite), /hardgate-self is missing/);
 assert.throws(() => validateWorkflowContract({ ...result, aggregateName: "CI / wrong aggregate" }), /workflow aggregate name is not stable/);
 
 const enabled = clone(main);

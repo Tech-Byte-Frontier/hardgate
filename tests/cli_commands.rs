@@ -148,29 +148,40 @@ fn init_never_overwrites_an_existing_config() {
 }
 
 #[test]
-fn empty_check_and_verify_render_every_output_mode() {
+fn empty_policy_check_renders_every_output_mode() {
     let fixture = Fixture::new("cli-commands", "empty-gates", None);
     fixture.write("hardgate.toml", CUSTOM_CONFIG);
 
-    for command in ["check", "verify"] {
-        let json_output = run(fixture.as_ref(), &[command, "--format", "json"]);
-        assert_status(&json_output, true, &format!("{command} json"));
-        let report = json(&json_output);
-        assert_eq!(report["passed"], true);
-        assert!(report["advisories"].as_array().is_some());
+    let command = "check";
+    let json_output = run(
+        fixture.as_ref(),
+        &[command, "--checks", "policy", "--format", "json"],
+    );
+    assert_status(&json_output, true, &format!("{command} json"));
+    let report = json(&json_output);
+    assert_eq!(report["passed"], true);
+    assert!(report["advisories"].as_array().is_some());
 
-        let agent = run(fixture.as_ref(), &[command, "--format", "agent"]);
-        assert_status(&agent, true, &format!("{command} agent"));
-        assert!(output_text(&agent).contains("Hardgate Passed"));
+    let agent = run(
+        fixture.as_ref(),
+        &[command, "--checks", "policy", "--format", "agent"],
+    );
+    assert_status(&agent, true, &format!("{command} agent"));
+    assert!(output_text(&agent).contains("Hardgate Passed"));
 
-        let compact = run(fixture.as_ref(), &[command, "--format", "compact"]);
-        assert_status(&compact, true, &format!("{command} compact"));
-        assert!(output_text(&compact).contains("result: pass"));
+    let compact = run(
+        fixture.as_ref(),
+        &[command, "--checks", "policy", "--format", "compact"],
+    );
+    assert_status(&compact, true, &format!("{command} compact"));
+    assert!(output_text(&compact).contains("result: pass"));
 
-        let summary = run(fixture.as_ref(), &[command, "--format", "summary"]);
-        assert_status(&summary, true, &format!("{command} summary"));
-        assert!(output_text(&summary).contains("Summary: 0 errors"));
-    }
+    let summary = run(
+        fixture.as_ref(),
+        &[command, "--checks", "policy", "--format", "summary"],
+    );
+    assert_status(&summary, true, &format!("{command} summary"));
+    assert!(output_text(&summary).contains("Summary: 0 errors"));
 }
 
 #[test]

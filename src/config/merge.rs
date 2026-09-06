@@ -1,7 +1,7 @@
 use super::{
-    AntiGamingConfig, ClassificationConfig, CloneConfig, CoverageConfig, DeadCodeConfig,
-    FileBudgets, FunctionBudgets, GateConfig, GeneratedConfig, HardgateConfig, InvariantsConfig,
-    LegacyConfig, MutationConfig, OrchestrationConfig, RolePoliciesConfig,
+    AntiGamingConfig, ClassificationConfig, CloneConfig, CoverageConfig, FileBudgets,
+    FunctionBudgets, GateConfig, GeneratedConfig, HardgateConfig, InvariantsConfig, LegacyConfig,
+    MutationConfig, OrchestrationConfig, RolePoliciesConfig,
 };
 
 macro_rules! set {
@@ -100,7 +100,6 @@ fn merge_coverage(base: &mut CoverageConfig, user: &CoverageConfig, raw: &toml::
         set!(table, min_line_percent, base, user);
         set!(table, min_function_percent, base, user);
         set!(table, min_branch_percent, base, user);
-        set!(table, max_crap_score, base, user);
         set!(table, critical_paths, base, user);
         set!(table, enabled, base, user);
     });
@@ -110,24 +109,12 @@ fn merge_mutation(base: &mut MutationConfig, user: &MutationConfig, raw: &toml::
     with_section(raw, &["mutation"], |table| {
         set!(table, min_score, base, user);
         set!(table, reports, base, user);
-        set!(table, test_cmd, base, user);
-        set!(table, timeout_secs, base, user);
-        set!(table, max_mutants, base, user);
         set!(table, enabled, base, user);
     });
 }
 
 fn merge_tooling_overrides(base: &mut HardgateConfig, user: &HardgateConfig, raw: &toml::Table) {
     merge_orchestration(&mut base.orchestration, &user.orchestration, raw);
-    merge_dead_code(&mut base.analysis.dead_code, &user.analysis.dead_code, raw);
-}
-
-fn merge_dead_code(base: &mut DeadCodeConfig, user: &DeadCodeConfig, raw: &toml::Table) {
-    with_section(raw, &["analysis", "dead_code"], |table| {
-        set!(table, entry_points, base, user);
-        set!(table, exclude, base, user);
-        set!(table, enabled, base, user);
-    });
 }
 
 fn merge_orchestration(
@@ -140,6 +127,9 @@ fn merge_orchestration(
         set!(table, format, base, user);
         set!(table, lint, base, user);
         set!(table, test_cmd, base, user);
+        set!(table, additional_tests, base, user);
+        set!(table, typecheck, base, user);
+        set!(table, feature_checks, base, user);
         set!(table, timeout_secs, base, user);
     });
 }
@@ -211,18 +201,8 @@ fn merge_file_budgets(base: &mut FileBudgets, user: FileBudgets, raw: &toml::Tab
 fn merge_func_budgets(base: &mut FunctionBudgets, user: FunctionBudgets, _raw: &toml::Table) {
     // All fields are `Option`: omitted keys deserialize to `None`, so
     // `is_some` alone distinguishes explicit user values from absent ones.
-    // This also adds the previously missing `max_abc` / `max_statements`.
     if user.max_cyclomatic.is_some() {
         base.max_cyclomatic = user.max_cyclomatic;
-    }
-    if user.max_cognitive.is_some() {
-        base.max_cognitive = user.max_cognitive;
-    }
-    if user.max_halstead_difficulty.is_some() {
-        base.max_halstead_difficulty = user.max_halstead_difficulty;
-    }
-    if user.max_abc.is_some() {
-        base.max_abc = user.max_abc;
     }
     if user.max_parameters.is_some() {
         base.max_parameters = user.max_parameters;

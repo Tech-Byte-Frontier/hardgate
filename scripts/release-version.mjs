@@ -3,19 +3,14 @@
 // Usage: node scripts/release-version.mjs --tag vX.Y.Z
 "use strict";
 
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const platformPackages = [
-  "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
-];
+const platformPackages = PLATFORM_NAMES;
 const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 function argument(name) {

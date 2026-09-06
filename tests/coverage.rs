@@ -22,7 +22,6 @@ fn strict_scorer() -> CoverageScorer {
         min_line_percent: Some(90.0),
         min_function_percent: None,
         min_branch_percent: None,
-        max_crap_score: Some(25.0),
         critical_paths: Some(vec!["src/calc.rs".to_string()]),
     })
 }
@@ -53,7 +52,6 @@ fn source_scope_config(min_line_percent: f64) -> CoverageConfig {
         min_line_percent: Some(min_line_percent),
         min_function_percent: None,
         min_branch_percent: None,
-        max_crap_score: None,
         critical_paths: None,
     }
 }
@@ -82,7 +80,6 @@ fn verify_config() -> HardgateConfig {
             min_line_percent: Some(90.0),
             min_function_percent: None,
             min_branch_percent: None,
-            max_crap_score: None,
             critical_paths: None,
         },
         ..HardgateConfig::default()

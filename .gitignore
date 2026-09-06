@@ -36,3 +36,6 @@ npm/*/bin/hardgate
 npm/*/bin/hardgate.exe
 npm/*/node_modules/
 dist/
+
+# Source-bound coverage and mutation artifacts
+/.hardgate/evidence/

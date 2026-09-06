@@ -1,6 +1,6 @@
 use crate::config::OrchestrationConfig;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 pub(crate) enum Ecosystem {
     Rust,
     JavaScript,
-    Python,
-    Go,
     Ambiguous,
     Unknown,
 }
@@ -19,8 +17,6 @@ impl Ecosystem {
         match self {
             Self::Rust => "Rust",
             Self::JavaScript => "JavaScript/TypeScript",
-            Self::Python => "Python",
-            Self::Go => "Go",
             Self::Ambiguous => "multiple ecosystems",
             Self::Unknown => "unknown ecosystem",
         }
@@ -79,13 +75,11 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
     match ecosystem {
         Ecosystem::Rust => detect_root_rust(root, &inventory, &mut detection),
         Ecosystem::JavaScript => detect_javascript(root, &inventory, &mut detection),
-        Ecosystem::Python => detect_root_python(root, &inventory, &mut detection),
-        Ecosystem::Go => detect_root_go(root, &inventory, &mut detection),
         Ecosystem::Ambiguous => {
-            super::mixed::detect_ambiguous_ecosystems(root, &inventory, &mut detection);
+            detection.add_missing("multiple supported ecosystems were detected; configure [orchestration] commands explicitly");
         }
         Ecosystem::Unknown => detection.add_missing(
-            "no supported manifest or configured formatter was detected; configure [orchestration] commands explicitly",
+            "no supported manifest or configured formatter was detected; Hardgate supports only Rust and JavaScript/TypeScript",
         ),
     }
     add_unconfigured_commands(&mut detection);
@@ -97,26 +91,6 @@ fn detect_root_rust(root: &Path, inventory: &ManifestInventory, detection: &mut 
         detect_rust(detection);
     } else {
         add_nested_manifest_missing(detection, "Cargo.toml");
-    }
-}
-
-pub(super) fn detect_root_python(
-    root: &Path,
-    inventory: &ManifestInventory,
-    detection: &mut Detection,
-) {
-    if root_python_manifest(root, inventory).is_some() || inventory.python_config {
-        detect_python(root, detection);
-    } else {
-        add_nested_manifest_missing(detection, "Python");
-    }
-}
-
-fn detect_root_go(root: &Path, inventory: &ManifestInventory, detection: &mut Detection) {
-    if root_manifest(root, &inventory.go).is_some() {
-        detect_go(detection);
-    } else {
-        add_nested_manifest_missing(detection, "go.mod");
     }
 }
 
@@ -133,11 +107,6 @@ fn classify(inventory: &ManifestInventory) -> Ecosystem {
             !inventory.packages.is_empty() || inventory.js_config,
             Ecosystem::JavaScript,
         ),
-        (
-            !inventory.python.is_empty() || inventory.python_config,
-            Ecosystem::Python,
-        ),
-        (!inventory.go.is_empty(), Ecosystem::Go),
     ]
     .into_iter()
     .filter_map(|(present, kind)| present.then_some(kind))
@@ -155,24 +124,12 @@ fn detect_rust(detection: &mut Detection) {
         [
             "cargo fmt --all -- --check",
             "cargo fmt --all",
-            "cargo clippy --all-targets --all-features -- -D warnings",
-            "cargo test --all-targets",
+            "cargo clippy --workspace --all-targets --all-features --message-format=json -- -D warnings",
+            "cargo test --workspace --all-targets --locked",
         ],
     );
-    detection.add_note("Cargo.toml detected; using Cargo's read-only check and test commands");
-}
-
-fn detect_go(detection: &mut Detection) {
-    set_detected_commands(
-        detection,
-        [
-            "sh -c 'files=$(gofmt -l .) || exit $?; test -z \"$files\"'",
-            "gofmt -w .",
-            "go vet ./...",
-            "go test ./...",
-        ],
-    );
-    detection.add_note("go.mod detected; using gofmt, go vet, and go test");
+    detection.orchestration.additional_tests = vec!["cargo test --workspace --doc --locked".into()];
+    detection.add_note("Cargo: all workspace members/targets and doctests; Clippy enables all features. Declare additional feature checks in orchestration.feature_checks or additional_tests.");
 }
 
 fn set_detected_commands(detection: &mut Detection, commands: [&str; 4]) {
@@ -182,6 +139,7 @@ fn set_detected_commands(detection: &mut Detection, commands: [&str; 4]) {
         lint: Some(commands[2].to_string()),
         test_cmd: Some(commands[3].to_string()),
         timeout_secs: Some(300),
+        ..OrchestrationConfig::default()
     };
 }
 
@@ -200,21 +158,54 @@ pub(super) fn detect_javascript(
         );
         return;
     };
-    if let Some(manager) = package_manager_for(manifest, root, &package, detection) {
-        set_script_commands(&mut detection.orchestration, &package.scripts, manager);
-    }
+    let manager = package_manager_for(manifest, root, &package, detection);
     let missing = super::tooling::set_javascript_config_commands(
         manifest.parent().unwrap_or(root),
         &mut detection.orchestration,
     );
-    for message in missing {
-        detection.add_missing(message);
+    if let Some(manager) = manager.clone() {
+        for message in set_script_commands(&mut detection.orchestration, &package.scripts, manager)
+        {
+            detection.add_missing(message);
+        }
+    }
+    record_tool_setup(manifest.parent().unwrap_or(root), missing, detection);
+    if let Some(script) = first_script(
+        &package.scripts,
+        &["typecheck", "type-check", "check:types"],
+    ) && let Some(manager) = manager
+    {
+        detection.orchestration.typecheck = Some(format!("{manager} run {script}"));
+    } else if root.join("tsconfig.json").is_file() {
+        detection.orchestration.typecheck = Some("./node_modules/.bin/tsc --noEmit".into());
     }
     detection.orchestration.timeout_secs = Some(300);
     if !package.scripts.is_empty() {
-        detection.add_note(
-            "package scripts are referenced by package-manager command, without embedding script bodies",
-        );
+        detection.add_note("recognized formatter/linter scripts use direct verification commands; custom script semantics require an explicit override");
+    }
+}
+
+fn tool_resolved(message: &str, orchestration: &crate::config::OrchestrationConfig) -> bool {
+    (message.starts_with("formatter:") && orchestration.format_check.is_some())
+        || (message.starts_with("linter:") && orchestration.lint.is_some())
+}
+
+fn record_tool_setup(root: &Path, missing: Vec<String>, detection: &mut Detection) {
+    for message in missing {
+        if !tool_resolved(&message, &detection.orchestration) {
+            detection.add_missing(message);
+        }
+    }
+    for (role, command) in [
+        ("formatter", detection.orchestration.format_check.clone()),
+        ("linter", detection.orchestration.lint.clone()),
+    ] {
+        if let Some(command) = command
+            && let Some(tool) = command.split_whitespace().next()
+            && super::tooling::local_executable(root, tool).is_none()
+        {
+            detection.add_missing(format!("{role}: repository-local `{tool}` is unavailable; install declared dependencies before running the generated command"));
+        }
     }
 }
 
@@ -259,41 +250,11 @@ fn package_manager_for(
     manager
 }
 
-fn detect_python(root: &Path, detection: &mut Detection) {
-    let pyproject = root.join("pyproject.toml");
-    let content = fs::read_to_string(&pyproject).unwrap_or_default();
-    let ruff =
-        has_toml_table(&content, &["tool", "ruff"]) || has_any(root, &["ruff.toml", ".ruff.toml"]);
-    let black = has_toml_table(&content, &["tool", "black"]);
-    if ruff {
-        detection.orchestration.format_check = Some("ruff format --check .".to_string());
-        detection.orchestration.format = Some("ruff format .".to_string());
-        detection.orchestration.lint = Some("ruff check .".to_string());
-    } else if black {
-        detection.orchestration.format_check = Some("black --check .".to_string());
-        detection.orchestration.format = Some("black .".to_string());
-    }
-    if has_toml_table(&content, &["tool", "pytest"]) || has_any(root, &["pytest.ini", "tox.ini"]) {
-        detection.orchestration.test_cmd = Some("pytest".to_string());
-    }
-    detection.orchestration.timeout_secs = Some(300);
-    if ruff || black {
-        detection.add_note("Python formatter/linter configuration detected in project files");
-    }
-}
-
 pub(super) fn root_manifest<'a>(root: &Path, manifests: &'a [PathBuf]) -> Option<&'a Path> {
     manifests
         .iter()
         .find(|path| path.parent().is_some_and(|parent| parent == root))
         .map(PathBuf::as_path)
-}
-
-pub(super) fn root_python_manifest<'a>(
-    root: &Path,
-    inventory: &'a ManifestInventory,
-) -> Option<&'a Path> {
-    root_manifest(root, &inventory.python)
 }
 
 fn add_nested_manifest_missing(detection: &mut Detection, manifest: &str) {
@@ -306,7 +267,7 @@ fn add_nested_manifest_missing(detection: &mut Detection, manifest: &str) {
 struct PackageInfo {
     manager: Option<String>,
     manager_invalid: bool,
-    scripts: BTreeSet<String>,
+    scripts: BTreeMap<String, String>,
 }
 
 fn read_package(manifest: &Path) -> Option<PackageInfo> {
@@ -329,7 +290,7 @@ fn read_package(manifest: &Path) -> Option<PackageInfo> {
                     value
                         .as_str()
                         .filter(|command| !command.trim().is_empty())
-                        .map(|_| name.clone())
+                        .map(|command| (name.clone(), command.to_string()))
                 })
                 .collect()
         })
@@ -367,39 +328,44 @@ fn package_manager(root: &Path) -> Option<String> {
 
 fn set_script_commands(
     orchestration: &mut OrchestrationConfig,
-    scripts: &BTreeSet<String>,
+    scripts: &BTreeMap<String, String>,
     manager: String,
-) {
-    if let Some(script) = first_script(scripts, &["format:check", "fmt:check", "check:format"]) {
-        orchestration.format_check = Some(format!("{manager} run {script}"));
-    }
-    if let Some(script) = first_script(scripts, &["format", "fmt"]) {
-        orchestration.format = Some(format!("{manager} run {script}"));
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    if let Some(script) = first_script(
+        scripts,
+        &["format:check", "fmt:check", "check:format", "format", "fmt"],
+    ) {
+        match super::tooling::script_commands(&scripts[script], true) {
+            Some((check, fix)) => {
+                orchestration.format_check = Some(check.into());
+                orchestration.format = fix.map(str::to_owned);
+            }
+            None => {
+                orchestration.format_check = None;
+                orchestration.format = None;
+                missing.push(format!("formatter: script `{script}` has custom or ambiguous semantics; set orchestration.format_check explicitly to a read-only command"));
+            }
+        }
     }
     if let Some(script) = first_script(scripts, &["lint", "check:lint"]) {
-        orchestration.lint = Some(format!("{manager} run {script}"));
+        orchestration.lint = super::tooling::script_commands(&scripts[script], false)
+            .map(|(check, _)| check.to_string());
+        if orchestration.lint.is_none() {
+            missing.push(format!("linter: script `{script}` has custom or ambiguous semantics; set orchestration.lint explicitly to a read-only command"));
+        }
     }
     if let Some(script) = first_script(scripts, &["test"]) {
         orchestration.test_cmd = Some(format!("{manager} run {script}"));
     }
+    missing
 }
 
-fn first_script<'a>(scripts: &BTreeSet<String>, names: &[&'a str]) -> Option<&'a str> {
-    names.iter().find(|name| scripts.contains(**name)).copied()
-}
-
-fn has_toml_table(content: &str, path: &[&str]) -> bool {
-    let Ok(value) = toml::from_str::<toml::Value>(content) else {
-        return false;
-    };
-    let mut current = &value;
-    for key in path {
-        let Some(next) = current.get(*key) else {
-            return false;
-        };
-        current = next;
-    }
-    current.is_table()
+fn first_script<'a>(scripts: &BTreeMap<String, String>, names: &[&'a str]) -> Option<&'a str> {
+    names
+        .iter()
+        .find(|name| scripts.contains_key(**name))
+        .copied()
 }
 
 fn add_unconfigured_commands(detection: &mut Detection) {
@@ -418,6 +384,3 @@ fn add_unconfigured_commands(detection: &mut Detection) {
 #[cfg(test)]
 #[path = "detect_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-use super::mixed::combine_commands;

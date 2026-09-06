@@ -48,5 +48,9 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=HARDGATE_BUILD_GIT_SHA={sha}");
     let target = env::var("TARGET").expect("Cargo must provide TARGET to build.rs");
+    assert_eq!(
+        target, "x86_64-unknown-linux-gnu",
+        "Hardgate 0.6 supports only Linux x64 GNU; ARM64, musl, macOS, and Windows are deferred"
+    );
     println!("cargo:rustc-env=HARDGATE_BUILD_TARGET={target}");
 }

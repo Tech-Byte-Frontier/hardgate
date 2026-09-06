@@ -73,8 +73,8 @@ enum FilterEngine {
     Clone,
     Coverage,
     Mutation,
-    DeadCode,
     Orchestration,
+    Specialist,
 }
 
 fn parse_static_engine(norm: &str) -> Option<FilterEngine> {
@@ -92,8 +92,8 @@ fn parse_verification_engine(norm: &str) -> Option<FilterEngine> {
     match norm {
         "coverage" => Some(FilterEngine::Coverage),
         "mutation" | "mutation-report" => Some(FilterEngine::Mutation),
-        "dead-code" => Some(FilterEngine::DeadCode),
         "orchestration" | "tool" => Some(FilterEngine::Orchestration),
+        "specialist" | "clippy" | "rustc" => Some(FilterEngine::Specialist),
         _ => None,
     }
 }
@@ -126,15 +126,16 @@ fn retain_static_violations(report: &mut GateReport, target: FilterEngine) {
 }
 
 fn retain_verification_violations(report: &mut GateReport, target: FilterEngine) {
+    if target != FilterEngine::Specialist {
+        report.tool_diagnostics.clear();
+    }
     if target != FilterEngine::Coverage {
         report.coverage_violations.clear();
     }
     if target != FilterEngine::Mutation {
         report.mutation_violations.clear();
     }
-    if target != FilterEngine::DeadCode {
-        report.dead_code_violations.clear();
-    }
+
     if target != FilterEngine::Orchestration {
         report.orchestration_violations.clear();
     }
@@ -142,6 +143,9 @@ fn retain_verification_violations(report: &mut GateReport, target: FilterEngine)
 
 fn filter_by_metric(report: &mut GateReport, metric: &str) {
     let lower = metric.to_ascii_lowercase();
+    report
+        .tool_diagnostics
+        .retain(|finding| finding.rule.to_ascii_lowercase().contains(&lower));
     report
         .complexity_violations
         .retain(|v| v.metric.to_string().to_ascii_lowercase().contains(&lower));
@@ -154,9 +158,6 @@ fn filter_by_metric(report: &mut GateReport, metric: &str) {
     report
         .mutation_violations
         .retain(|v| v.metric.to_ascii_lowercase().contains(&lower));
-    report
-        .dead_code_violations
-        .retain(|v| v.violation_type.to_ascii_lowercase().contains(&lower));
     report.suppression_violations.clear();
     report.invariant_violations.clear();
     report.clone_violations.clear();
@@ -168,6 +169,9 @@ fn filter_by_top(report: &mut GateReport, top: usize) {
     // verdict still retains their failure status when selecting top files.
     report.orchestration_violations.clear();
     let mut file_counts: HashMap<PathBuf, usize> = HashMap::new();
+    for finding in &report.tool_diagnostics {
+        *file_counts.entry(finding.file.clone()).or_insert(0) += 1;
+    }
     for v in &report.budget_violations {
         *file_counts.entry(v.file.clone()).or_insert(0) += 1;
     }
@@ -190,13 +194,13 @@ fn filter_by_top(report: &mut GateReport, top: usize) {
     for v in &report.mutation_violations {
         *file_counts.entry(v.report_file.clone()).or_insert(0) += 1;
     }
-    for v in &report.dead_code_violations {
-        *file_counts.entry(v.file.clone()).or_insert(0) += 1;
-    }
 
     let mut ranked: Vec<(PathBuf, usize)> = file_counts.into_iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let top_files: HashSet<PathBuf> = ranked.into_iter().take(top).map(|(p, _)| p).collect();
+    report
+        .tool_diagnostics
+        .retain(|finding| top_files.contains(&finding.file));
 
     report
         .budget_violations
@@ -219,7 +223,4 @@ fn filter_by_top(report: &mut GateReport, top: usize) {
     report
         .mutation_violations
         .retain(|v| top_files.contains(&v.report_file));
-    report
-        .dead_code_violations
-        .retain(|v| top_files.contains(&v.file));
 }

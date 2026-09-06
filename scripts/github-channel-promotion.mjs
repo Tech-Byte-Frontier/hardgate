@@ -35,7 +35,7 @@ function stateAtLeast(receipt, channel, minimum) {
 
 function assertReceiptGate(receipt) {
   if (REQUIRED_CHANNELS.some((channel) => !stateAtLeast(receipt, channel, EXACT_STATE))) {
-    fail("all nine channels must reach exact_consumer_verified before GitHub promotion");
+    fail("all required channels must reach exact_consumer_verified before GitHub promotion");
   }
   const npmChannels = [...CHANNELS.npmPlatforms, CHANNELS.npmWrapper];
   if (npmChannels.some((channel) => !stateAtLeast(receipt, channel, PROMOTED_STATE))) {

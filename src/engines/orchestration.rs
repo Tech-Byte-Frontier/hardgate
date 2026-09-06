@@ -31,6 +31,7 @@ pub struct OrchestrationEngine {
     config: OrchestrationConfig,
 }
 
+#[derive(Clone, Copy)]
 pub struct OrchestrationStep<'a> {
     pub step: &'a str,
     pub command: &'a str,
@@ -49,6 +50,9 @@ impl OrchestrationEngine {
             || self.config.format.is_some()
             || self.config.lint.is_some()
             || self.config.test_cmd.is_some()
+            || !self.config.additional_tests.is_empty()
+            || self.config.typecheck.is_some()
+            || !self.config.feature_checks.is_empty()
     }
 
     /// Run one bounded external command with the configured timeout policy.
@@ -60,6 +64,44 @@ impl OrchestrationEngine {
         root: &Path,
     ) -> Result<OrchestrationResult, OrchestrationViolation> {
         self.execute_step(spec, root)
+    }
+
+    /// Share a disposable Cargo target and dependency copy across one check.
+    pub(crate) fn run_sequence(
+        &self,
+        specs: &[OrchestrationStep<'_>],
+        root: &Path,
+    ) -> Vec<Result<OrchestrationResult, OrchestrationViolation>> {
+        if specs.is_empty() {
+            return Vec::new();
+        }
+        let session = match crate::evidence::read_only::Session::create(root) {
+            Ok(session) => session,
+            Err(error) => {
+                return specs
+                    .iter()
+                    .map(|spec| {
+                        Err(runner_violation(
+                            *spec,
+                            format!("read-only project check failed: {error:#}"),
+                            String::new(),
+                        ))
+                    })
+                    .collect();
+            }
+        };
+        let mut results = specs
+            .iter()
+            .map(|spec| self.execute_in_session(*spec, root, Some(&session)))
+            .collect::<Vec<_>>();
+        if let Err(error) = session.close() {
+            results.push(Err(runner_violation(
+                specs[0],
+                format!("check workspace cleanup failed: {error:#}"),
+                String::new(),
+            )));
+        }
+        results
     }
 
     pub fn run_format_check(
@@ -139,6 +181,32 @@ impl OrchestrationEngine {
         self.collect_step(self.run_format_check(root), &mut results, &mut violations);
         self.collect_step(self.run_lint(root), &mut results, &mut violations);
         self.collect_step(self.run_tests(root), &mut results, &mut violations);
+        for (step, command) in self
+            .config
+            .additional_tests
+            .iter()
+            .map(|command| ("test", command))
+            .chain(
+                self.config
+                    .typecheck
+                    .iter()
+                    .chain(&self.config.feature_checks)
+                    .map(|command| ("typecheck", command)),
+            )
+        {
+            self.collect_step(
+                Some(self.execute_step(
+                    OrchestrationStep {
+                        step,
+                        command,
+                        recommendation: "Resolve the failing configured project check.",
+                    },
+                    root,
+                )),
+                &mut results,
+                &mut violations,
+            );
+        }
         (results, violations)
     }
 
@@ -160,18 +228,35 @@ impl OrchestrationEngine {
         spec: OrchestrationStep,
         root: &Path,
     ) -> Result<OrchestrationResult, OrchestrationViolation> {
+        self.execute_in_session(spec, root, None)
+    }
+
+    fn execute_in_session(
+        &self,
+        spec: OrchestrationStep,
+        root: &Path,
+        session: Option<&crate::evidence::read_only::Session>,
+    ) -> Result<OrchestrationResult, OrchestrationViolation> {
         let start = Instant::now();
-        let tokens = shell_words_split(spec.command);
+        let mut tokens = shell_words_split(spec.command);
+        super::cargo_diagnostics::structured_tokens(&mut tokens);
         if tokens.is_empty() {
             return Err(empty_command_violation(&spec));
         }
         let timeout_secs = self.timeout_secs();
-        let outcome = run_command(
-            &tokens,
-            root,
-            Duration::from_secs(timeout_secs),
-            "orchestration",
-        );
+        let timeout = Duration::from_secs(timeout_secs);
+        let outcome = if spec.step == "format" {
+            run_command(&tokens, root, timeout, "orchestration")
+        } else if let Some(session) = session {
+            session
+                .run(&tokens, timeout)
+                .unwrap_or_else(|error| ProcessOutcome::Failed {
+                    message: format!("read-only project check failed: {error:#}"),
+                    output: String::new(),
+                })
+        } else {
+            crate::evidence::read_only::run(&tokens, root, timeout)
+        };
         finish_outcome(outcome, spec, start, timeout_secs)
     }
 
@@ -250,7 +335,9 @@ fn runner_violation(
     message: String,
     output: String,
 ) -> OrchestrationViolation {
-    let recommendation = if message.contains("resource guard:") {
+    let recommendation = if message.contains("check command wrote") {
+        "Use a read-only verification command; run intentional fixes with hardgate fmt or the project tool explicitly.".to_string()
+    } else if message.contains("resource guard:") {
         "Reduce concurrent workloads or narrow the selected scope, then retry within the resource limits.".to_owned()
     } else {
         format!(

@@ -2,6 +2,8 @@
 // registry mutation, not package publication or an OIDC provenance exchange.
 "use strict";
 
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
+
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,10 +13,7 @@ import { promoteVerifiedChannel } from "./channel-promotion.mjs";
 import { childTimeoutMs, remainingMs } from "./npm-verification-policy.mjs";
 import { runReleaseProcess } from "./release-process.mjs";
 
-const NPM_PLATFORM_CHANNELS = Object.freeze([
-  "hardgate-linux-x64", "hardgate-linux-x64-musl", "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl", "hardgate-darwin-x64", "hardgate-darwin-arm64",
-]);
+const NPM_PLATFORM_CHANNELS = PLATFORM_NAMES;
 const NPM_WRAPPER_CHANNEL = "@tech-byte-frontier/hardgate";
 export const NPM_CHANNELS = Object.freeze([...NPM_PLATFORM_CHANNELS, NPM_WRAPPER_CHANNEL]);
 export const NPM_REGISTRY = "https://registry.npmjs.org";

@@ -1,6 +1,8 @@
 // Strict schema and identity validation for release receipts.
 "use strict";
 
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
+
 import { isDeepStrictEqual } from "node:util";
 import { compareReleaseTags } from "./release-order.mjs";
 
@@ -14,14 +16,7 @@ export const RECEIPT_STATES = Object.freeze([
   "default_consumer_verified",
 ]);
 export const CHANNELS = Object.freeze({
-  npmPlatforms: Object.freeze([
-    "hardgate-linux-x64",
-    "hardgate-linux-x64-musl",
-    "hardgate-linux-arm64",
-    "hardgate-linux-arm64-musl",
-    "hardgate-darwin-x64",
-    "hardgate-darwin-arm64",
-  ]),
+  npmPlatforms: PLATFORM_NAMES,
   npmWrapper: "@tech-byte-frontier/hardgate",
   crate: "hardgate",
   githubAssets: "github-assets",

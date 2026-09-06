@@ -14,17 +14,16 @@ const root = repoRoot(import.meta.url);
 const launcherFile = path.join(root, "npm/hardgate/bin/hardgate.js");
 const launcher = loadLauncher(launcherFile);
 
-// G. Resolve every supported platform and libc combination, including the
-// Linux fallback package used when optional dependencies were omitted.
+// G. Resolve the supported platform and reject deferred platforms.
 {
   const cases = [
     { platform: "linux", arch: "x64", musl: false, expected: "hardgate-linux-x64" },
-    { platform: "linux", arch: "x64", musl: true, expected: "hardgate-linux-x64-musl" },
-    { platform: "linux", arch: "arm64", musl: false, expected: "hardgate-linux-arm64" },
-    { platform: "linux", arch: "arm64", musl: true, expected: "hardgate-linux-arm64-musl" },
-    { platform: "darwin", arch: "x64", musl: null, expected: "hardgate-darwin-x64" },
-    { platform: "darwin", arch: "x64", musl: false, expected: "hardgate-darwin-x64" },
-    { platform: "darwin", arch: "arm64", musl: null, expected: "hardgate-darwin-arm64" },
+    { platform: "linux", arch: "x64", musl: true, expected: null },
+    { platform: "linux", arch: "arm64", musl: false, expected: null },
+    { platform: "linux", arch: "arm64", musl: true, expected: null },
+    { platform: "darwin", arch: "x64", musl: null, expected: null },
+    { platform: "darwin", arch: "x64", musl: false, expected: null },
+    { platform: "darwin", arch: "arm64", musl: null, expected: null },
     { platform: "win32", arch: "x64", musl: null, expected: null },
     { platform: "win32", arch: "arm64", musl: null, expected: null },
     { platform: "linux", arch: "s390x", musl: false, expected: null },
@@ -38,20 +37,10 @@ const launcher = loadLauncher(launcherFile);
       `${platform}/${arch} musl=${musl}`,
     );
   }
-  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-x64"), [
-    "hardgate-linux-x64-musl",
-  ]);
-  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-x64-musl"), []);
-  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-arm64"), [
-    "hardgate-linux-arm64-musl",
-  ]);
-  assert.deepEqual(launcher.fallbackPackages("hardgate-linux-arm64-musl"), []);
-  assert.deepEqual(launcher.fallbackPackages("hardgate-darwin-arm64"), []);
-  console.log("G: platform matrix + musl fallbacks pinned -- OK");
+  console.log("G: supported and rejected platforms -- OK");
 }
 
-// H. A positive non-empty glibc report wins; otherwise generic Linux uses
-// the static musl package without relying on Alpine-specific marker files.
+// H. Require positive glibc evidence without Alpine-specific marker files.
 {
   const cases = [
     { platform: "linux", version: "2.39", expected: false },
@@ -75,7 +64,7 @@ const launcher = loadLauncher(launcherFile);
   console.log("H: musl-detection truth table -- OK");
 }
 
-// I. Only ELF and Mach-O magic bytes are accepted as machine binaries.
+// I. Only ELF magic bytes are accepted as supported machine binaries.
 {
   const dir = makeTempDir("hg-magic-");
   const files = [
@@ -86,8 +75,8 @@ const launcher = loadLauncher(launcherFile);
     ["elf-first-three", Buffer.from([0x7f, 0x45, 0x4c, 0x00]), false],
     ["pe", Buffer.from([0x4d, 0x5a, 0x90, 0x00]), false],
     ["pe-lookalike", Buffer.from([0x4d, 0x00, 0x00, 0x00]), false],
-    ["macho-le64", Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), true],
-    ["macho-fat", Buffer.from([0xca, 0xfe, 0xba, 0xbe]), true],
+    ["macho-le64", Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), false],
+    ["macho-fat", Buffer.from([0xca, 0xfe, 0xba, 0xbe]), false],
     ["shell", Buffer.from("#!/bin/sh\necho hi\n"), false],
     ["empty", Buffer.alloc(0), false],
     ["text", Buffer.from("not a binary"), false],

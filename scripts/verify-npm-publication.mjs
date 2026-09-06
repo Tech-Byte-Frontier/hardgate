@@ -5,6 +5,8 @@
 // Usage: node scripts/verify-npm-publication.mjs --version <version> --dist dist
 "use strict";
 
+import { PLATFORM_CONTRACT } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,14 +15,7 @@ import { packRegistryPackage } from "./npm-registry-pack.mjs";
 import { childTimeoutMs, remainingMs, verificationPolicy } from "./npm-verification-policy.mjs";
 import { archiveMemberMode, isExecutableMode, option, projectRoot as root, runCommand } from "./release-support.mjs";
 
-const packages = [
-  ["hardgate-linux-x64", ["linux"], ["x64"], ["glibc"]],
-  ["hardgate-linux-x64-musl", ["linux"], ["x64"], ["musl"]],
-  ["hardgate-linux-arm64", ["linux"], ["arm64"], ["glibc"]],
-  ["hardgate-linux-arm64-musl", ["linux"], ["arm64"], ["musl"]],
-  ["hardgate-darwin-x64", ["darwin"], ["x64"], undefined],
-  ["hardgate-darwin-arm64", ["darwin"], ["arm64"], undefined],
-];
+const packages = PLATFORM_CONTRACT.map(({ name, os, cpu, libc }) => [name, os, cpu, libc]);
 const packageNames = packages.map(([name]) => name).sort();
 
 function fail(message) {
@@ -126,7 +121,7 @@ if (!version) fail("--version is required");
 const policy = verificationPolicy(version);
 if (process.argv.includes("--package") && !selectedPackage) fail("--package requires a platform package name");
 if (selectedPackage && !packageNames.includes(selectedPackage)) {
-  fail(`--package must identify one of the six platform packages, got ${selectedPackage}`);
+  fail(`--package must identify the supported Linux x64 GNU package, got ${selectedPackage}`);
 }
 const platformsToVerify = selectedPackage
   ? packages.filter(([name]) => name === selectedPackage)
@@ -134,5 +129,5 @@ const platformsToVerify = selectedPackage
 for (const platform of platformsToVerify) await verifyPlatformPackage(version, dist, platform);
 if (!platformOnly) await verifyWrapper(version);
 remainingMs(policy);
-const platformLabel = selectedPackage ? selectedPackage : "all six platform packages";
+const platformLabel = selectedPackage ? selectedPackage : "the Linux x64 GNU platform package";
 console.log(`verify-npm-publication: ${platformLabel}${platformOnly ? "" : " and wrapper"} verified at ${version}`);

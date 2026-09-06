@@ -15,13 +15,16 @@ pub struct GateSummary {
     pub clones: usize,
     pub ast_violations: usize,
     pub complexity: usize,
+    #[serde(default)]
+    pub function_review_targets: usize,
     pub file_budgets: usize,
     pub suppressions: usize,
     pub architecture: usize,
     pub coverage: usize,
     pub mutation: usize,
-    pub dead_code: usize,
     pub tool: usize,
+    #[serde(default)]
+    pub specialist_findings: usize,
     pub files_scanned: usize,
     pub functions_analyzed: usize,
     pub files_with_violations: usize,
@@ -47,13 +50,14 @@ impl GateReport {
             clones: self.clone_violations.len(),
             ast_violations: self.complexity_violations.len(),
             complexity: self.complexity_violations.len(),
+            function_review_targets: self.function_reviews().len(),
             file_budgets: self.budget_violations.len(),
             suppressions: self.suppression_violations.len(),
             architecture: self.invariant_violations.len(),
             coverage: self.coverage_violations.len(),
             mutation: self.mutation_violations.len(),
-            dead_code: self.dead_code_violations.len(),
             tool: self.orchestration_violations.len(),
+            specialist_findings: self.tool_findings_count(),
             files_scanned: self.files_scanned,
             functions_analyzed: self.functions_analyzed,
             files_with_violations: self.files_with_violations(),
@@ -83,9 +87,14 @@ impl GateReport {
         for v in &self.coverage_violations {
             files.insert(v.file.to_string_lossy().to_string());
         }
-        for v in &self.dead_code_violations {
-            files.insert(v.file.to_string_lossy().to_string());
+        for finding in self
+            .tool_diagnostics
+            .iter()
+            .filter(|finding| finding.blocking)
+        {
+            files.insert(finding.file.to_string_lossy().to_string());
         }
+
         // Mutation + orchestration violations reference reports/tools rather
         // than source files, so they don't contribute to the file count.
         files.len()
@@ -128,7 +137,13 @@ impl GateReport {
             keys.push(v.file_b.to_string_lossy().to_string());
         }
         push_keys(&mut keys, self.coverage_violations.iter().map(|v| &v.file));
-        push_keys(&mut keys, self.dead_code_violations.iter().map(|v| &v.file));
+        push_keys(
+            &mut keys,
+            self.tool_diagnostics
+                .iter()
+                .filter(|finding| finding.blocking)
+                .map(|finding| &finding.file),
+        );
         keys
     }
 
@@ -151,7 +166,7 @@ impl GateReport {
             self.files_scanned, self.functions_analyzed, self.duration_ms
         ));
         out.push_str(&format!(
-            "Breakdown: code_findings={}, analysis_blockers={}, clones={}, complexity={}, file-budget={}, anti-gaming={}, architecture={}, coverage={}, mutation={}, dead-code={}, tool={}\n",
+            "Breakdown: code_findings={}, analysis_blockers={}, clones={}, complexity={}, file-budget={}, anti-gaming={}, architecture={}, coverage={}, mutation={}, tool={}\n",
             s.code_findings,
             s.analysis_blockers,
             s.clones,
@@ -161,9 +176,24 @@ impl GateReport {
             s.architecture,
             s.coverage,
             s.mutation,
-            s.dead_code,
             s.tool,
         ));
+        let reviews = self.function_reviews();
+        if !reviews.is_empty() {
+            out.push_str(&format!(
+                "Function review targets: {} ({} related metric findings)\n",
+                reviews.len(),
+                s.complexity
+            ));
+            for group in reviews.iter().take(5) {
+                out.push_str(&format!(
+                    "  - {} `{}` ({} metrics)\n",
+                    group.location(),
+                    group.function_name,
+                    group.metrics.len()
+                ));
+            }
+        }
         let top = self.top_files(10);
         if !top.is_empty() {
             out.push_str("Top files with violations:\n");
@@ -185,10 +215,12 @@ impl GateReport {
     /// Full machine-readable JSON: every violation plus `summary` and
     /// `top_files` for `jq`-friendly CI and agent consumption.
     pub fn render_json(&self) -> Result<String, serde_json::Error> {
+        let visible = super::display::report_for_display(self);
         serde_json::to_string_pretty(&FullJson {
             outcome: super::machine::MachineOutcome::from_report(self),
             display: super::display::diagnostics(self),
-            report: super::display::report_for_display(self),
+            report: &visible,
+            review_targets: visible.function_reviews(),
             summary: self.summary(),
             top_files: self.top_files(10),
         })
@@ -219,7 +251,8 @@ struct FullJson<'a> {
     #[serde(flatten)]
     outcome: super::machine::MachineOutcome<'a>,
     #[serde(flatten)]
-    report: std::borrow::Cow<'a, GateReport>,
+    report: &'a GateReport,
+    review_targets: Vec<super::FunctionReview<'a>>,
     summary: GateSummary,
     top_files: Vec<TopFileEntry>,
 }

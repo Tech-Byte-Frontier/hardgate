@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const API_PAYLOAD_KEYS = ["bypass_actors", "conditions", "enforcement", "name", "rules", "target"];
-const REQUIRED_NEEDS = ["rust", "npm-wrapper", "npm-wrapper-minimum", "macos-process-restoration", "repository-rules", "hardgate-self", "release-contract"];
+const REQUIRED_NEEDS = ["rust", "npm-wrapper", "npm-wrapper-minimum", "repository-rules", "hardgate-self", "release-contract"];
 const PROPOSAL_FILES = [
   { payload: "main-branch.review-only.json", review: "main-branch.review.json" },
   { payload: "version-tags.review-only.json", review: "version-tags.review.json" },

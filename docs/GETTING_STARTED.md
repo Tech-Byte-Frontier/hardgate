@@ -118,15 +118,7 @@ not prove that disabled engines ran, that a project command was executed, or
 that every quality property was checked. Missing, empty, unreadable, or
 malformed required evidence is a blocking result when its engine is enabled.
 
-When the policy is configured, `check --all` adds only its formatter, linter,
-and test commands:
-
-```sh
-hardgate check --all
-```
-
-Hardgate does not invent commands or install project tools. Review the
-configured commands with `hardgate config` before enabling orchestration.
+`hardgate check` includes formatting verification and linting. It also runs configured tests and type checks, and requires each enabled coverage/mutation report to have a current producer receipt. Missing tools block acceptance. Use `hardgate init --preview` to inspect conservative command detection; no tools are installed automatically. `--checks policy` requests an explicitly partial policy-only run.
 
 ## 3. See a pass, a diagnostic, and a refactor
 
@@ -189,8 +181,7 @@ Use the command that matches the question:
 | --- | --- |
 | What does the current policy evaluate? | `hardgate config --format toml` |
 | What changed in the worktree? | `hardgate check --diff` |
-| What does a full configured evidence run say? | `hardgate verify` |
-| What does native mutation find? | `hardgate mutate --scoped src/lib.rs --test-cmd 'cargo test'` |
+| What does a full configured evidence run say? | `hardgate check` |
 | What does one file's static report say? | `hardgate scan src/lib.rs` |
 
 `check --diff` selects changed or staged files for static analysis and
@@ -198,10 +189,7 @@ intersects coverage with changed executable lines. Clone matching still uses
 the eligible repository index. Explicit existing paths add to static and clone
 selection.
 
-`verify` evaluates the full static/dead-code scope plus configured evidence,
-freshness, and legacy-ratchet checks. It does not run formatter, linter, test,
-or native mutation commands. `mutate` is a separate native baseline-plus-
-mutants workflow; mutation-report ingestion is a different evidence engine.
+`check` evaluates policy, formatting, linting, configured tests/type checks, evidence, freshness and the legacy ratchet. Produce required mutation reports through `hardgate evidence cargo-mutants` or `hardgate evidence stryker`.
 
 If a report is incomplete, inspect the effective policy and its producer paths
 before changing thresholds:
@@ -221,7 +209,7 @@ metrics.
 ## 5. Continue with the references
 
 - [CLI reference and agent integration](../docs/CLI_AND_INTEGRATION.md) explains
-  command scope, exit status, MCP, JavaScript resolution, and native mutation.
+  command scope, exit status, MCP, and mutation evidence.
 - [Configuration specification](../docs/CONFIGURATION_SPEC.md) defines presets,
   roles, budgets, evidence, freshness, and classification.
 - [Architecture](../docs/ARCHITECTURE.md) describes execution boundaries and

@@ -48,20 +48,15 @@ publication used `trusted` mode. This is not a new secret and must not be
 silently substituted or omitted. Keep the promotion credential scoped to the
 promotion operation, and never print it or carry it into read-only verifiers.
 
-The seven npm channels are the six platform packages and
+The two npm channels are the Linux x64 GNU platform package and
 `@tech-byte-frontier/hardgate`:
 
 ```text
 hardgate-linux-x64
-hardgate-linux-x64-musl
-hardgate-linux-arm64
-hardgate-linux-arm64-musl
-hardgate-darwin-x64
-hardgate-darwin-arm64
 @tech-byte-frontier/hardgate
 ```
 
-The intended publisher sequence is all six platform packages first, then the
+The intended publisher sequence is the platform package first, then the
 wrapper. Each package is published at most once for the immutable version,
 verified independently, and promoted to `latest` at most once after all exact
 consumer evidence is merged. npm versions are immutable; an ambiguous result
@@ -89,7 +84,7 @@ Before enabling or changing a mode, an authorized maintainer must record:
    `release.yml`.
 2. The selected `token` or `trusted` mode, job-scoped permissions, and the
    absence of registry tokens in trusted publish environments.
-3. The seven npm package bindings, if trusted mode is selected, matching owner
+3. The two npm package bindings, if trusted mode is selected, matching owner
    `Tech-Byte-Frontier`, repository `hardgate`, workflow filename `release.yml`,
    and any explicitly named environment.
 4. The separate `NPM_TOKEN` promotion credential and its restricted use after

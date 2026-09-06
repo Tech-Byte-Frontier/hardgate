@@ -4,8 +4,7 @@ mod legacy_hunk;
 
 use crate::diagnostics::GateReport;
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
-    SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, InvariantViolation, SuppressionViolation,
 };
 use crate::git_evidence::ChangeSet;
 use legacy_hunk::LegacyFinding;
@@ -79,16 +78,6 @@ pub fn apply_legacy_ratchet(
             |violation: &CloneViolation| !violation.fingerprint.is_empty(),
         ),
     ));
-    advisories.extend(ratchet_multiset(
-        &mut current.dead_code_violations,
-        &baseline.dead_code_violations,
-        changes,
-        (
-            dead_code_key,
-            format_dead_code_advisory,
-            |_: &DeadCodeViolation| true,
-        ),
-    ));
 
     advisories.sort();
     current.advisories.extend(advisories.iter().cloned());
@@ -114,7 +103,6 @@ type ComplexityKey = (PathBuf, String, String);
 type SuppressionKey = (PathBuf, String, String);
 type InvariantKey = (PathBuf, String, String, String, String);
 type CloneKey = (PathBuf, PathBuf, String);
-type DeadCodeKey = (PathBuf, String, Option<String>);
 fn budget_key(
     violation: &BudgetViolation,
     lineage: &BTreeMap<PathBuf, PathBuf>,
@@ -250,16 +238,6 @@ fn clone_key(violation: &CloneViolation, lineage: &BTreeMap<PathBuf, PathBuf>) -
         (right, left, violation.fingerprint.clone())
     }
 }
-fn dead_code_key(
-    violation: &DeadCodeViolation,
-    lineage: &BTreeMap<PathBuf, PathBuf>,
-) -> DeadCodeKey {
-    (
-        canonical_path(&violation.file, lineage),
-        violation.violation_type.clone(),
-        violation.symbol.clone(),
-    )
-}
 fn canonical_path(path: &Path, lineage: &BTreeMap<PathBuf, PathBuf>) -> PathBuf {
     let mut current = path.to_path_buf();
     let mut visited = BTreeSet::new();
@@ -330,16 +308,6 @@ fn format_clone_advisory(violation: &CloneViolation, changes: &ChangeSet) -> Str
         changes.merge_base
     )
 }
-fn format_dead_code_advisory(violation: &DeadCodeViolation, changes: &ChangeSet) -> String {
-    let symbol = violation.symbol.as_deref().unwrap_or("<none>");
-    format!(
-        "legacy ratchet: grandfathered dead-code debt at `{}` (type={}, symbol={}; merge-base={})",
-        violation.file.display(),
-        violation.violation_type,
-        symbol,
-        changes.merge_base
-    )
-}
 fn format_number(value: f64) -> String {
     let rendered = format!("{value:.3}");
     rendered
@@ -398,13 +366,6 @@ fn annotate_retained(report: &mut GateReport, changes: &ChangeSet) {
             &mut violation.message,
             file_context(&violation.report_file, changes),
         );
-    }
-    for violation in &mut report.dead_code_violations {
-        let context = violation
-            .line_number
-            .and_then(|line| line_context(&violation.file, line, changes))
-            .or_else(|| file_context(&violation.file, changes));
-        append_context(&mut violation.message, context);
     }
 }
 fn append_context(message: &mut String, context: Option<String>) {

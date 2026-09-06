@@ -16,12 +16,20 @@ fn fixture(tag: &str) -> Fixture {
 #[test]
 fn every_format_keeps_the_complete_verdict_when_no_diagnostics_are_displayed() {
     let fixture = fixture("limits");
-    let full = json(&run(&fixture, &["check", "--json"]));
+    let full = json(&run(&fixture, &["check", "--checks", "policy", "--json"]));
     assert!(full["summary"]["total_errors"].as_u64().unwrap() >= 3);
     for format in ["terminal", "agent", "json", "compact", "summary"] {
         let output = run(
             &fixture,
-            &["check", "--format", format, "--max-diagnostics", "0"],
+            &[
+                "check",
+                "--checks",
+                "policy",
+                "--format",
+                format,
+                "--max-diagnostics",
+                "0",
+            ],
         );
         assert_eq!(
             output.status.code(),
@@ -53,7 +61,14 @@ fn display_limit_is_shared_across_categories_and_reports_stable_rule_ids() {
     let fixture = fixture("categories");
     let report = json(&run(
         &fixture,
-        &["check", "--json", "--max-diagnostics", "2"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--json",
+            "--max-diagnostics",
+            "2",
+        ],
     ));
     assert_eq!(report["shown"], 2);
     let diagnostics = report["diagnostics"].as_array().unwrap();
@@ -65,10 +80,14 @@ fn display_limit_is_shared_across_categories_and_reports_stable_rule_ids() {
 
 #[cfg(unix)]
 #[test]
-fn excerpts_use_analyzed_bytes_when_a_later_freshness_command_changes_source() {
+fn freshness_fixes_are_blocked_and_excerpts_retain_analyzed_bytes() {
     let fixture = fixture("snapshot");
+    let original = std::fs::read_to_string(fixture.join("src/first.ts")).unwrap();
     fixture.write("hardgate.toml", &format!("{POLICY}\n[generated]\nenabled=true\nfreshness_command=\"sh -c 'printf changed > src/first.ts'\"\n"));
-    let output = run(&fixture, &["check", "--json", "--snippets"]);
+    let output = run(
+        &fixture,
+        &["check", "--checks", "policy", "--json", "--snippets"],
+    );
     cli::assert_status(&output, false, "snapshot findings");
     let report = json(&output);
     let clone = report["diagnostics"]
@@ -88,7 +107,14 @@ fn excerpts_use_analyzed_bytes_when_a_later_freshness_command_changes_source() {
     }));
     assert_eq!(
         std::fs::read_to_string(fixture.join("src/first.ts")).unwrap(),
-        "changed"
+        original
+    );
+    assert!(
+        report["orchestration_violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["step"] == "generated-freshness")
     );
     assert!(cli::stderr(&output).is_empty());
 }
@@ -111,7 +137,14 @@ fn snippets_are_opt_in_and_conflicting_controls_fail_as_json() {
     assert!(snippet["snippet_bytes"].as_u64().unwrap() > 0);
     let conflict = run(
         &fixture,
-        &["check", "--json", "--snippets", "--no-snippets"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--json",
+            "--snippets",
+            "--no-snippets",
+        ],
     );
     assert_eq!(conflict.status.code(), Some(2));
     assert_eq!(json(&conflict)["stage"], "arguments");

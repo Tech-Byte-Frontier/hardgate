@@ -80,7 +80,7 @@ function validateWrapperOptionalDependencies(manifest, expectedVersion, wrapperN
   const optional = manifest.optionalDependencies ?? {};
   const expectedNames = [...platformPackages].sort();
   if (JSON.stringify(Object.keys(optional).sort()) !== JSON.stringify(expectedNames)) {
-    fail(`${wrapperName} optionalDependencies do not match the six supported platform packages`);
+    fail(`${wrapperName} optionalDependencies do not match the supported Linux x64 GNU platform package`);
   }
   for (const name of platformPackages) {
     if (optional[name] !== expectedVersion) fail(`${wrapperName} optionalDependencies[${name}] must be ${expectedVersion}`);
@@ -91,6 +91,9 @@ export function validateWrapper(wrapper, expectedVersion, wrapperName, platformP
   if (!wrapper) fail(`--packages-dir is missing ${wrapperName}@${expectedVersion}.tgz`);
   const launcherBytes = wrapper.entries.get("package/bin/hardgate.js");
   if (!launcherBytes) fail(`${wrapperName}@${expectedVersion}.tgz is missing package/bin/hardgate.js`);
+  for (const [field, expected] of Object.entries({ os: ["linux"], cpu: ["x64"], libc: ["glibc"] })) {
+    exactManifestArray(wrapper.manifest, field, expected, wrapperName);
+  }
   validateWrapperBin(wrapper.manifest, wrapperName);
   validateWrapperOptionalDependencies(wrapper.manifest, expectedVersion, wrapperName, platformPackages);
   return launcherBytes;

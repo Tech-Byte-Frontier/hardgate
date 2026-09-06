@@ -3,136 +3,196 @@ use crate::config::OrchestrationConfig;
 use std::fs;
 use std::path::Path;
 
+const FORMATTERS: &[Tool] = &[
+    Tool {
+        name: "Oxfmt",
+        executable: "oxfmt",
+        configs: &[
+            ".oxfmtrc.json",
+            ".oxfmtrc.jsonc",
+            "oxfmt.config.ts",
+            "oxfmt.config.mts",
+        ],
+        check: "oxfmt --check .",
+        fix: Some("oxfmt ."),
+    },
+    Tool {
+        name: "Prettier",
+        executable: "prettier",
+        configs: &[
+            "prettier.config.js",
+            "prettier.config.cjs",
+            "prettier.config.mjs",
+            "prettier.config.ts",
+            ".prettierrc",
+            ".prettierrc.json",
+            ".prettierrc.yaml",
+            ".prettierrc.yml",
+            ".prettierrc.toml",
+        ],
+        check: "prettier --check .",
+        fix: Some("prettier --write ."),
+    },
+    Tool {
+        name: "Biome",
+        executable: "biome",
+        configs: &["biome.json", "biome.jsonc"],
+        check: "biome ci --formatter-enabled=true --linter-enabled=false --assist-enabled=false .",
+        fix: Some("biome format --write ."),
+    },
+];
+const LINTERS: &[Tool] = &[
+    Tool {
+        name: "Oxlint",
+        executable: "oxlint",
+        configs: &[
+            ".oxlintrc.json",
+            ".oxlintrc.jsonc",
+            "oxlint.config.ts",
+            "oxlint.config.mts",
+            "oxlint.config.js",
+        ],
+        check: "oxlint .",
+        fix: None,
+    },
+    Tool {
+        name: "ESLint",
+        executable: "eslint",
+        configs: &[
+            "eslint.config.js",
+            "eslint.config.mjs",
+            "eslint.config.cjs",
+            "eslint.config.ts",
+            "eslint.config.mts",
+            "eslint.config.cts",
+            ".eslintrc",
+            ".eslintrc.json",
+            ".eslintrc.js",
+            ".eslintrc.cjs",
+            ".eslintrc.yml",
+            ".eslintrc.yaml",
+        ],
+        check: "eslint --no-fix .",
+        fix: None,
+    },
+    Tool {
+        name: "Biome",
+        executable: "biome",
+        configs: &["biome.json", "biome.jsonc"],
+        check: "biome ci --linter-enabled=true --formatter-enabled=false --assist-enabled=false .",
+        fix: None,
+    },
+];
+
+struct Tool {
+    name: &'static str,
+    executable: &'static str,
+    configs: &'static [&'static str],
+    check: &'static str,
+    fix: Option<&'static str>,
+}
+
 pub(crate) fn set_javascript_config_commands(
     root: &Path,
     orchestration: &mut OrchestrationConfig,
 ) -> Vec<String> {
     let mut missing = Vec::new();
-    set_pair_if_available(
-        root,
-        PairSpec {
-            names: &["biome.json", "biome.jsonc"],
-            commands: (
-                "biome ci --linter-enabled=false .",
-                "biome format --write .",
-            ),
-            tool: "Biome",
-        },
-        orchestration,
-        &mut missing,
-    );
-    set_single_if_available(
-        root,
-        SingleSpec {
-            names: &["biome.json", "biome.jsonc"],
-            command: "biome ci --formatter-enabled=false .",
-            tool: "Biome",
-        },
-        &mut orchestration.lint,
-        &mut missing,
-    );
-    set_single_if_available(
-        root,
-        SingleSpec {
-            names: &[
-                "eslint.config.js",
-                "eslint.config.mjs",
-                ".eslintrc",
-                ".eslintrc.json",
-                ".eslintrc.js",
-            ],
-            command: "eslint .",
-            tool: "ESLint",
-        },
-        &mut orchestration.lint,
-        &mut missing,
-    );
-    set_single_if_available(
-        root,
-        SingleSpec {
-            names: &["oxlint.config.js"],
-            command: "oxlint .",
-            tool: "Oxlint",
-        },
-        &mut orchestration.lint,
-        &mut missing,
-    );
-    set_pair_if_available(
-        root,
-        PairSpec {
-            names: &[
-                "prettier.config.js",
-                "prettier.config.cjs",
-                "prettier.config.mjs",
-                ".prettierrc",
-                ".prettierrc.json",
-            ],
-            commands: ("prettier --check .", "prettier --write ."),
-            tool: "Prettier",
-        },
-        orchestration,
-        &mut missing,
-    );
+    if orchestration.format_check.is_none()
+        && orchestration.format.is_none()
+        && let Some(tool) = select(root, FORMATTERS, "formatter", &mut missing)
+    {
+        orchestration.format_check = Some(tool.check.into());
+        orchestration.format = tool.fix.map(str::to_owned);
+    }
+    if orchestration.lint.is_none()
+        && let Some(tool) = select(root, LINTERS, "linter", &mut missing)
+    {
+        orchestration.lint = Some(tool.check.into());
+    }
     missing
 }
 
-struct PairSpec<'a> {
-    names: &'a [&'a str],
-    commands: (&'a str, &'a str),
-    tool: &'a str,
-}
-
-struct SingleSpec<'a> {
-    names: &'a [&'a str],
-    command: &'a str,
-    tool: &'a str,
-}
-
-fn set_pair_if_available(
+fn select<'a>(
     root: &Path,
-    spec: PairSpec<'_>,
-    orchestration: &mut OrchestrationConfig,
+    tools: &'a [Tool],
+    role: &str,
     missing: &mut Vec<String>,
-) {
-    if !has_any(root, spec.names) {
-        return;
+) -> Option<&'a Tool> {
+    let package = fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+    let mut configured: Vec<_> = tools
+        .iter()
+        .filter(|tool| has_any(root, tool.configs) || package_configuration(package.as_ref(), tool))
+        .collect();
+    if configured.is_empty() {
+        configured = tools
+            .iter()
+            .filter(|tool| declared_dependency(package.as_ref(), tool))
+            .collect();
     }
-    if orchestration.format_check.is_some() && orchestration.format.is_some() {
-        return;
+    let tool = match configured.as_slice() {
+        [] => &tools[0],
+        [tool] => *tool,
+        _ => {
+            missing.push(format!("{role}: multiple configurations detected ({}); set the corresponding [orchestration] command explicitly", configured.iter().map(|tool| tool.name).collect::<Vec<_>>().join(", ")));
+            return None;
+        }
+    };
+    if local_executable(root, tool.executable).is_none() {
+        missing.push(format!("{role}: {} requires a repository-local executable; install declared dependencies or set the corresponding [orchestration] command explicitly", tool.name));
+        return None;
     }
-    let executable = spec.tool.to_ascii_lowercase();
-    if local_executable(root, &executable).is_none() {
-        missing_tool(spec.tool, missing);
-        return;
-    }
-    set_if_missing(&mut orchestration.format_check, spec.commands.0);
-    set_if_missing(&mut orchestration.format, spec.commands.1);
+    Some(tool)
 }
 
-fn set_single_if_available(
-    root: &Path,
-    spec: SingleSpec<'_>,
-    command: &mut Option<String>,
-    missing: &mut Vec<String>,
-) {
-    if !has_any(root, spec.names) || command.is_some() {
-        return;
-    }
-    let executable = spec.tool.to_ascii_lowercase();
-    if local_executable(root, &executable).is_some() {
-        *command = Some(spec.command.to_string());
+fn package_configuration(package: Option<&serde_json::Value>, tool: &Tool) -> bool {
+    let key = match tool.executable {
+        "prettier" => "prettier",
+        "eslint" => "eslintConfig",
+        _ => return false,
+    };
+    package.is_some_and(|value| value.get(key).is_some())
+}
+
+fn declared_dependency(package: Option<&serde_json::Value>, tool: &Tool) -> bool {
+    let name = if tool.executable == "biome" {
+        "@biomejs/biome"
     } else {
-        missing_tool(spec.tool, missing);
+        tool.executable
+    };
+    package.is_some_and(|value| {
+        ["dependencies", "devDependencies"].iter().any(|key| {
+            value
+                .get(key)
+                .and_then(|dependencies| dependencies.get(name))
+                .is_some()
+        })
+    })
+}
+
+/// Only canonical whole-project scripts can be safely converted. Preserve custom
+/// paths/options by requiring an explicit command instead of guessing their scope.
+pub(super) fn script_commands(
+    command: &str,
+    formatter: bool,
+) -> Option<(&'static str, Option<&'static str>)> {
+    let tokens = crate::engines::orchestration::shell_words_split(command);
+    let executable = tokens.first()?;
+    let tools = if formatter { FORMATTERS } else { LINTERS };
+    let tool = tools.iter().find(|tool| executable == tool.executable)?;
+    if tokens.iter().skip(1).any(|token| {
+        !matches!(
+            token.as_str(),
+            "." | "--check" | "--write" | "--fix" | "--no-fix" | "format" | "lint" | "check" | "ci"
+        )
+    }) {
+        return None;
     }
+    Some((tool.check, tool.fix))
 }
 
-fn missing_tool(tool: &str, missing: &mut Vec<String>) {
-    missing.push(format!(
-        "{tool} configuration was detected, but the repository-local executable is unavailable; install declared dependencies or provide an explicit [orchestration] command"
-    ));
-}
-
-fn local_executable(root: &Path, tool: &str) -> Option<()> {
+pub(super) fn local_executable(root: &Path, tool: &str) -> Option<()> {
     let path = root.join("node_modules").join(".bin").join(tool);
     let metadata = fs::metadata(path).ok()?;
     if !metadata.is_file() {
@@ -143,12 +203,6 @@ fn local_executable(root: &Path, tool: &str) -> Option<()> {
         return None;
     }
     Some(())
-}
-
-fn set_if_missing(command: &mut Option<String>, value: &str) {
-    if command.is_none() {
-        *command = Some(value.to_string());
-    }
 }
 
 #[cfg(test)]

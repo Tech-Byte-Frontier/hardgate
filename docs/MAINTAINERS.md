@@ -1,112 +1,72 @@
 # Maintainer guide
 
-This document describes the current contribution, release-note, and recovery
-contract. It follows the checked-in workflows in
-.github/workflows/ci.yml and .github/workflows/release.yml.
+Work from the live checkout and preserve unrelated changes. Describe public
+behavior, focused validation, and material limitations in pull requests. Keep
+CLI/configuration migrations, package metadata, installation docs, and curated
+release notes aligned with the implementation.
 
-## Contribution and release notes
+## Validation
 
-Keep changes focused and source-backed. A pull request should state the
-behavior change, the exact focused checks that ran, and the complete CI or
-self-gate result when applicable. Reproductions should use the smallest
-deterministic fixture and include the expected and actual result.
+Use the stable toolchain in `rust-toolchain.toml` for formatting, Clippy,
+tests, and product builds. The coverage script pins a separate nightly for
+real LLVM branch coverage. Serialize Rust builds, tests, coverage, mutation,
+and installed Rust consumer checks under `scripts/with-resource-limits.sh`.
+Track disposable artifacts and verify input restoration.
 
-User-facing behavior changes belong in CHANGELOG.md under the release version.
-Include configuration, CLI, API, migration, installation, and supported
-platform implications when they apply. GitHub's generated notes are
-supplementary; they do not replace curated migration notes. Keep README,
-package metadata, and installer examples aligned with the channels that the
-release workflow actually verifies.
+PR CI always requires formatting, linting, all-target/all-feature tests,
+RustSec audit, report/integration contracts, and the self/evidence gate. The
+self-gate replaces native mutation with an explicit single budget-engine
+cargo-mutants sample; that sample is not repository-wide mutation coverage.
+Distribution-sensitive PR changes also run crate/package/ABI/SBOM and actual
+packed-install checks. Main CI always runs those distribution checks and builds
+the one shared Linux x64 GNU release binary. The stable `CI quality aggregate`
+rejects failed, cancelled, or skipped required jobs. Conditional packaging
+steps do not remove required jobs from the aggregate.
 
-## Release identity and readiness
+## Release preparation
 
-The release payload is the commit named by the signed annotated vX.Y.Z tag.
-version-check verifies the tag with .github/release-allowed-signers, checks
-that the tag commit is the checked-out source, validates every version source,
-and requires a successful CI quality aggregate run for that source commit.
-The first attempt must target the current origin/main tip.
+0.6 supports Linux x64 GNU, Cargo, direct downloads, npm, and pnpm. The wrapper
+and `hardgate-linux-x64` native package must match Cargo.toml, Cargo.lock, and
+the root package version. `scripts/release-platforms.mjs` defines the supported
+distribution map. Prebuilt artifacts must fit the glibc 2.39 baseline; actual
+checks also need the kernel and resource facilities in [Installation](INSTALLATION.md).
 
-On a recovery dispatch, the signed tag remains the payload identity.
-github.sha is the reviewed workflow/tooling commit used by the recovery
-helpers in release-tooling; it must not silently replace files from the
-tagged payload. The workflow binds recovery to a failed tag-triggered run,
-the same tag and source commit, an unexpired verified release-bundle, and a
-successful main CI run for the current main commit.
+A new signed annotated `vX.Y.Z` tag must identify the exact main tip with
+successful CI. Validate the tag using `.github/release-allowed-signers` and
+preserve immutable versions. Inspect public registries and GitHub assets before
+publication; an existing version requires byte verification and reuse, never
+overwriting or republishing.
 
-Before publication, confirm that the tag version matches Cargo.toml,
-Cargo.lock, package.json, the wrapper, and all six platform package
-manifests. The release workflow also checks that the six target packages are
-exactly the advertised Linux/macOS set. Do not create a second release for an
-unknown or partially observed state without first establishing which immutable
-artifacts and registry versions already exist.
+The release workflow has six stages: tag validation, packaging, publication,
+exact consumers, promotion, and default consumers/completion. Packaging reuses
+the exact main CI artifact by run ID, artifact ID, source SHA, and digest.
+It creates one reproducible archive, checksums, and SBOM and tests actual npm
+and pnpm installs. It never rebuilds the shared native binary. Publication
+attests the verified bundle, publishes only missing artifacts, and preserves
+partial receipts. Cargo installation necessarily builds from the verified
+crate; its installed `hardgate check` behavior is tested separately.
 
-## Publication stages
+All four receipt channels must reach exact-consumer verification before
+promotion, and default-consumer verification before completion. npm and pnpm
+project/global installs, Cargo, and direct downloads must exercise real
+`hardgate check` and test-failure propagation with unchanged inputs. No full
+repository gate is repeated during release after the exact-source CI gate.
 
-The workflow serializes release tags with the `hardgate-release` concurrency
-group. CI supplies the native Linux x64 binary; the release matrix builds the
-other five targets. Packaging verifies the six deterministic archives,
-checksums, metadata and SBOM, and installs the actual seven packed npm
-artifacts with their optional dependencies before retaining the bundle.
+## Recovery and external state
 
-A seeded receipt binds the signed source, CI-validated tooling, tag object,
-run/artifact identifiers and archive digests. GitHub stages public prerelease
-assets without changing Latest. The crate is published or independently
-verified against the local clean Cargo archive, then installed by exact
-version. npm establishes all six platform versions before publishing the
-wrapper, using the `hardgate-candidate` tag.
+Use **Re-run failed jobs** to retain the successful immutable bundle checkpoint.
+If the workflow needs repair, use its reviewed same-tag `resume_run_id` path.
+The signed payload and CI-validated recovery tooling are separate identities;
+launcher compatibility and all artifact bytes remain checked. Existing
+registry versions are accepted only after matching manifests, platform
+constraints, executable mode, and binary bytes are proven.
 
-Six native exact-version jobs verify package bytes and runnable identity;
-the canonical GNU x64 job also verifies the signed wrapper and shell installer.
-Promotion requires matching receipts proving all nine exact consumers. npm
-Latest changes use separate token authentication and independent readback.
-The crate default is verified without a registry mutation. GitHub then promotes
-the byte-verified release to stable and Latest.
+Bundles last 30 days; attempt-specific receipts last 90 days. Missing or
+expired evidence is not permission to rebuild different bytes or move a tag.
+See [Release recovery](RELEASE_RECOVERY.md) for exact state and retention rules,
+and [Publisher setup](PUBLISHER_SETUP.md) for scoped authentication.
 
-Six native default jobs and independent Cargo, npm, pnpm, Yarn, Bun, installer
-and global-command consumers verify the default selectors. The aggregate
-rejects every failed, cancelled or skipped prerequisite and requires a merged
-receipt with all nine channels at `default_consumer_verified`. Partial receipts
-and failure events are retained for recovery.
-
-These checkpoints do not make publication atomic across registries. npm exact
-versions and public GitHub prereleases remain accessible before promotion;
-crates.io cannot hide a published stable version behind the same staging
-mechanism. Existing immutable bytes must match before reuse. Ambiguous writes
-require independent reconciliation before any retry.
-
-See [release recovery](RELEASE_RECOVERY.md) for receipt states, reruns and
-retention, and [publisher setup](PUBLISHER_SETUP.md) for authentication and
-signer rotation. Checked-in workflow contracts are not evidence of an actual
-remote release or publisher activation.
-
-## Recovery
-
-For an ordinary failed run, use GitHub Actions' Re-run failed jobs so the same
-workflow and verified artifact checkpoint remain in use. If the workflow
-definition needs a reviewed repair, dispatch it with the original tag and that
-failed run's resume_run_id. The workflow will reject a run that is not the
-matching failed tag run, lacks exactly one unexpired release-bundle, lacks the
-required successful build/package checkpoints, or lacks successful CI for the
-current main commit.
-
-Resume reuses the verified bundle; it does not rebuild different bytes. Before
-resuming after an npm failure, inspect exact package endpoints and run the
-publication verifier for the packages already visible. Existing versions may
-be accepted only when their manifests, platform constraints, executable mode,
-and binary bytes match the bundle. Stop for maintainer review when a version is
-present with different bytes, a registry response remains ambiguous after reconciliation, the release
-state cannot be determined, or the 30-day bundle has expired. A new release
-must go through the normal signed-source and CI path.
-
-## External activation and retention limits
-
-The checked-in repository-rule files are review-only proposals. Apply repository
-protections, configure trusted publishers, rotate credentials/signers, or publish
-only within the authorized scope and after exact-commit CI evidence. No local
-helper test proves that external settings have been enabled.
-
-Bundles expire after 30 days; receipts and native proofs expire after 90 days.
-The automated `resume_run_id` path requires an unexpired bundle. Recovery after
-expiry needs retained same-tag assets and independent identity, digest and
-provenance evidence under the [recovery runbook](RELEASE_RECOVERY.md); it is not
-an automatic rebuild path.
+Repository-rule proposals remain review-only. Local workflow tests do not
+prove remote deployment, publisher configuration, signing availability, or a
+successful public release. External activation and publication must remain
+within the authorized task scope.

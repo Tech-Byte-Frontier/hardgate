@@ -27,7 +27,7 @@ function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-npm-promotion-test-"));
   const dist = path.join(directory, "dist");
   fs.mkdirSync(dist);
-  const names = ["hardgate-linux-x64.tar.gz", "hardgate-linux-x64-musl.tar.gz", "hardgate-linux-arm64.tar.gz", "hardgate-linux-arm64-musl.tar.gz", "hardgate-darwin-x64.tar.gz", "hardgate-darwin-arm64.tar.gz", "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
+  const names = ["hardgate-linux-x64.tar.gz", "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
   const archives = names.map((name, index) => {
     const bytes = Buffer.from(`release archive ${index} ${name}\n`);
     fs.writeFileSync(path.join(dist, name), bytes);
@@ -123,8 +123,8 @@ async function testHappyPath() {
     const env = { PATH: "/safe/bin", NODE_AUTH_TOKEN: "promotion-secret", NPM_TOKEN: "unrelated-secret", GITHUB_TOKEN: "github-secret", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret", ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example.invalid/token" };
     const result = await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env, policy: policy(), runProcess: runner(states, events), probeLatest: probe(states, events) });
     assert.deepEqual(result.results.map((item) => item.channel), NPM_CHANNELS);
-    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
-    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, 7);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, NPM_CHANNELS.length);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, NPM_CHANNELS.length);
     const mutation = events.find((item) => item.type === "run" && item.command === "npm");
     assert.deepEqual(mutation.args.slice(0, 4), ["dist-tag", "add", "hardgate-linux-x64@1.2.3", "latest"]);
     assert.equal(mutation.options.env.NODE_AUTH_TOKEN, "promotion-secret");
@@ -171,7 +171,7 @@ async function testToolingVerifierAuthority() {
       return baseRunner(command, args, options);
     };
     await run(["--receipt", receiptPath, "--dist", dist], { sourceCwd: directory, env: { NODE_AUTH_TOKEN: "promotion-secret" }, policy: policy(), runProcess, probeLatest: probe(states, events) });
-    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, 7);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === process.execPath).length, NPM_CHANNELS.length);
   });
 }
 
@@ -252,14 +252,14 @@ async function testTransientAndAmbiguous() {
     const events = [];
     const scripted = new Map([[NPM_CHANNELS[0], [Object.assign(new Error("transient secret"), { retryable: true }), "1.2.2"]]]);
     await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: runner(states, events), probeLatest: probe(states, events, scripted) });
-    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, NPM_CHANNELS.length);
     assert.equal(JSON.stringify(readReceipt(receiptPath)).includes("transient secret"), false);
   });
   await withFixture(async ({ dist, receiptPath }) => {
     const states = Object.fromEntries(NPM_CHANNELS.map((name) => [name, "missing"]));
     const events = [];
     await promoteNpmChannels({ receiptPath, distDir: dist, sourceCwd, env: { NODE_AUTH_TOKEN: "secret" }, policy: policy(), runProcess: runner(states, events, { failMutation: true }), probeLatest: probe(states, events) });
-    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, 7);
+    assert.equal(events.filter((item) => item.type === "run" && item.command === "npm").length, NPM_CHANNELS.length);
     assert.equal(JSON.stringify(readReceipt(receiptPath)).includes("SHOULD_NOT_PRINT"), false);
   });
 }

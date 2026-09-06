@@ -8,6 +8,9 @@ pub(super) struct MachineOutcome<'a> {
     command: &'a str,
     status: &'static str,
     exit_code: u8,
+    partial: bool,
+    accepted: bool,
+    omitted_requirements: Vec<super::execution::EngineId>,
 }
 
 impl<'a> MachineOutcome<'a> {
@@ -21,6 +24,27 @@ impl<'a> MachineOutcome<'a> {
                 .map_or("analysis", |plan| &plan.command),
             status: outcome.status(),
             exit_code: outcome.exit_code(),
+            partial: report
+                .execution
+                .as_ref()
+                .is_none_or(|plan| plan.is_partial()),
+            accepted: report.passed
+                && report.execution.as_ref().is_some_and(|plan| {
+                    !plan.is_partial()
+                        && plan.engines.iter().all(|engine| {
+                            !engine.selected
+                                || matches!(
+                                    engine.state,
+                                    super::execution::EngineState::Completed
+                                        | super::execution::EngineState::Cached
+                                )
+                        })
+                }),
+            omitted_requirements: report
+                .execution
+                .as_ref()
+                .map(|plan| plan.omitted_requirements())
+                .unwrap_or_default(),
         }
     }
 }

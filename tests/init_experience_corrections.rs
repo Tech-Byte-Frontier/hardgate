@@ -38,30 +38,8 @@ fn nested_manifests_are_initialized_at_the_package_root() {
         [
             "cargo fmt --all -- --check",
             "cargo fmt --all",
-            "cargo clippy --all-targets --all-features -- -D warnings",
-            "cargo test --all-targets",
-        ],
-    );
-    assert_nested_case(
-        "nested-python",
-        "pyproject.toml",
-        "[project]\nname = \"nested\"\n\n[tool.ruff]\nline-length = 88\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
-        [
-            "ruff format --check .",
-            "ruff format .",
-            "ruff check .",
-            "pytest",
-        ],
-    );
-    assert_nested_case(
-        "nested-go",
-        "go.mod",
-        "module nested.test\n\ngo 1.23\n",
-        [
-            "sh -c 'files=$(gofmt -l .) || exit $?; test -z \"$files\"'",
-            "gofmt -w .",
-            "go vet ./...",
-            "go test ./...",
+            "cargo clippy --workspace --all-targets --all-features --message-format=json -- -D warnings",
+            "cargo test --workspace --all-targets --locked",
         ],
     );
 }
@@ -73,7 +51,7 @@ fn nested_javascript_scripts_are_initialized_at_the_package_root() {
         fs::create_dir_all(&nested).unwrap();
         fs::write(
             nested.join("package.json"),
-            r#"{"packageManager":"npm@10","scripts":{"format":"format","lint":"lint","test":"test"}}"#,
+            r#"{"packageManager":"npm@10","scripts":{"format":"prettier --write .","lint":"eslint --fix .","test":"test"}}"#,
         )
         .unwrap();
         cmd_init_with_options(options("balanced")).unwrap();
@@ -85,9 +63,12 @@ fn nested_javascript_scripts_are_initialized_at_the_package_root() {
         let config = load_written(&nested);
         assert_eq!(
             config.orchestration.format.as_deref(),
-            Some("npm run format")
+            Some("prettier --write .")
         );
-        assert_eq!(config.orchestration.lint.as_deref(), Some("npm run lint"));
+        assert_eq!(
+            config.orchestration.lint.as_deref(),
+            Some("eslint --no-fix .")
+        );
         assert_eq!(
             config.orchestration.test_cmd.as_deref(),
             Some("npm run test")
@@ -104,7 +85,7 @@ fn javascript_config_requires_a_repository_local_executable() {
         let config = load_written(root);
         let content = fs::read_to_string(root.join("hardgate.toml")).unwrap();
         assert!(config.orchestration.format_check.is_none());
-        assert!(content.contains("Prettier configuration was detected"));
+        assert!(content.contains("Prettier requires"));
     });
 
     #[cfg(unix)]
@@ -172,10 +153,7 @@ fn javascript_scripts_require_nonempty_values_and_one_manager() {
         fs::write(root.join("bun.lock"), "lockfileVersion: 1\n").unwrap();
         fs::write(root.join("bun.lockb"), "legacy\n").unwrap();
         cmd_init_with_options(options("balanced")).unwrap();
-        assert_eq!(
-            load_written(root).orchestration.format.as_deref(),
-            Some("bun run format")
-        );
+        assert!(load_written(root).orchestration.format.is_none());
     });
 }
 
@@ -200,43 +178,5 @@ fn preview_stdout_is_toml_and_summary_is_stderr() {
         assert!(stderr.contains("next: hardgate config."));
         assert!(stderr.contains("strict evidence: hardgate check also requires"));
         assert!(!root.join("hardgate.toml").exists());
-    });
-}
-
-#[cfg(unix)]
-#[test]
-fn go_format_check_fails_for_dirty_files_and_gofmt_errors() {
-    use std::os::unix::fs::PermissionsExt;
-
-    with_root("go-format-check", |root| {
-        fs::write(root.join("go.mod"), "module example.test\n\ngo 1.23\n").unwrap();
-        cmd_init_with_options(options("balanced")).unwrap();
-        let command = load_written(root).orchestration.format_check.unwrap();
-        let bin = root.join("fake-bin");
-        fs::create_dir_all(&bin).unwrap();
-        let fake = bin.join("gofmt");
-        fs::write(
-            &fake,
-            "#!/bin/sh\nif [ \"$FAKE_GOFMT_MODE\" = error ]; then exit 17; fi\nprintf '%s\\n' dirty.go\n",
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&fake).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&fake, permissions).unwrap();
-        let mut path = bin.into_os_string();
-        path.push(":");
-        path.push(std::env::var_os("PATH").unwrap_or_default());
-        let run = |mode| {
-            Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(root)
-                .env("PATH", &path)
-                .env("FAKE_GOFMT_MODE", mode)
-                .output()
-                .unwrap()
-        };
-        assert!(!run("dirty").status.success());
-        assert_eq!(run("error").status.code(), Some(17));
     });
 }

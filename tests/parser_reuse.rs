@@ -25,16 +25,6 @@ fn boolean_metrics_count_direct_grammar_operators_only() {
             2,
         ),
         (
-            "value.go",
-            "package value\nfunc value(a bool, b bool) bool { return (a && b) == true }",
-            2,
-        ),
-        (
-            "value.py",
-            "def value(a, b):\n    return (a and b) == True\n",
-            2,
-        ),
-        (
             "words.ts",
             "function words(and, or) { return and + or + '&&'; }",
             1,
@@ -83,32 +73,6 @@ fn parser_reuse_preserves_errors_language_switches_and_independent_trees() {
 }
 
 #[test]
-fn test_python_parameter_separators_and_comments() {
-    let mut analyzer = ComplexityAnalyzer::new();
-    let root = Path::new(".");
-    let code = r#"def total(*, a, b, c, d):
-    return a + b + c + d
-
-def positional(x, y, /, z):
-    return x + y + z
-"#;
-    let functions = analyzer
-        .analyze_file_checked(Path::new("parameters.py"), code, root)
-        .unwrap();
-    assert_eq!(functions.len(), 2);
-    assert_eq!(functions[0].name, "total");
-    assert_eq!(
-        functions[0].parameters, 4,
-        "bare * should not count as parameter"
-    );
-    assert_eq!(functions[1].name, "positional");
-    assert_eq!(
-        functions[1].parameters, 3,
-        "bare / should not count as parameter"
-    );
-}
-
-#[test]
 fn test_tsx_jsx_attribute_ampersand_compatibility() {
     let mut analyzer = ComplexityAnalyzer::new();
     let root = Path::new(".");
@@ -136,5 +100,30 @@ fn jsx_attribute_ampersands_do_not_hide_invalid_expressions() {
                 "accepted invalid JSX: {code}"
             );
         }
+    }
+}
+
+#[test]
+fn else_if_chains_preserve_decisions_without_inflating_nesting() {
+    let cases = [
+        (
+            "value.rs",
+            "fn value(a: bool, b: bool, c: bool) { if a {} else if b {} else { if c {} } }",
+        ),
+        (
+            "value.js",
+            "function value(a, b, c) { if (a) {} else if (b) {} else { if (c) {} } }",
+        ),
+        (
+            "value.ts",
+            "function value(a: boolean, b: boolean, c: boolean) { if (a) {} else if (b) {} else { if (c) {} } }",
+        ),
+    ];
+    for (name, content) in cases {
+        let functions = ComplexityAnalyzer::new()
+            .analyze_file_checked(Path::new(name), content, Path::new("."))
+            .unwrap();
+        assert_eq!(functions[0].cyclomatic, 4, "{name}");
+        assert_eq!(functions[0].max_nesting_depth, 2, "{name}");
     }
 }

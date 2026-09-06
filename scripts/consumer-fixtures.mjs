@@ -1,81 +1,23 @@
 "use strict";
 
-/**
- * Offline consumer contracts.
- *
- * Every fixture is a small, dependency-free project. The runner installs one
- * package-local executable in the copied project and that executable invokes
- * the fixture assertion harness. The harness checks the source bytes and the
- * selected test before returning, so an exit-0 shim can never make a mutant
- * look killed (or make a failed mutation run look green).
- */
-
-function checkSpec(extra = {}) {
-  return {
-    expectPass: true,
-    expectedExit: 0,
-    ...extra,
-  };
-}
-
-function behavior(functionName, args, expected, testNeedle) {
-  return { functionName, args, expected, testNeedle };
-}
-
-function mutationSpec({
-  scope,
-  sourcePath,
-  testPath,
-  manager,
-  packageRoot = ".",
-  workspaceRoot = ".",
-  argv,
-  sourceMarker,
-  framework,
-  behavior,
-  requirement,
-}) {
-  return {
-    scope,
-    sourcePath,
-    testPath,
-    manager,
-    packageRoot,
-    workspaceRoot,
-    argv,
-    sourceMarker,
-    framework,
-    behavior,
-    requirement,
-  };
-}
-
-function commandCase(id, fixture, mutation, check = {}) {
-  return { id, fixture, check: checkSpec(check), mutation };
-}
+// Offline public check/report contracts. Real specialist mutation execution is
+// verified separately; these fixtures do not emulate mutation test runners.
+const CHECK_CASES = [
+  ["vite-react-vitest", "vite-react-vitest", "React/TSX source and test classification"],
+  ["next-monorepo-package-local", "next-monorepo", "Next workspace source inventory"],
+  ["jest-fixtures-snapshots", "jest-playwright/jest", "Jest fixtures and snapshots remain visible", 8],
+  ["package-manager-npm", "package-managers/npm", "npm project inventory"],
+  ["package-manager-pnpm", "package-managers/pnpm", "pnpm project inventory"],
+].map(([id, fixture, requirement, minFiles]) => ({
+  id, fixture, check: { expectPass: true, expectedExit: 0, requirement, ...(minFiles ? { minFiles } : {}) },
+}));
 
 function orchestration(step, command, output) {
   return { step, command, output };
 }
 
-const COMMAND_DEFINITIONS = [
-  ["vite-react-vitest", "vite-react-vitest", "src", "src/App.tsx", "src/App.test.tsx", "pnpm", ".", ".", ["test", "--", "src/App.test.tsx"], "value + 1", "vitest", "Vitest framework fallback and React/TSX classification", behavior("increment", [1], 2, "increment(1)).toBe(2)")],
-  ["next-monorepo-package-local", "next-monorepo", "apps/web/app/page.tsx", "apps/web/app/page.tsx", "apps/web/app/page.test.tsx", "pnpm", "apps/web", ".", ["test", "--", "app/page.test.tsx"], '"Next:" + name', "vitest", "nearest package root and package-local Next workspace tool", behavior("pageTitle", ["fixture"], "Next:fixture", 'pageTitle("fixture")).toBe("Next:fixture")')],
-  ["jest-fixtures-snapshots", "jest-playwright/jest", "src/sum.ts", "src/sum.ts", "tests/sum.test.ts", "npm", ".", ".", ["test", "--", "tests/sum.test.ts"], "left + right", "jest", "Jest test selection while fixture and snapshot files stay visible", behavior("sum", [2, 3], 5, "sum(2, 3)).toBe(5)"), { minFiles: 8 }],
-  ["playwright-suite", "jest-playwright/playwright", "src/home.ts", "src/home.ts", "tests/home.spec.ts", "yarn", ".", ".", ["test", "--", "tests/home.spec.ts"], '"Home" + ":"', "playwright", "Playwright test selection from a Yarn workspace", behavior("homeTitle", ["fixture"], "Home: fixture", 'homeTitle("fixture")).toBe("Home: fixture")')],
-  ["package-manager-npm", "package-managers/npm", "src/compute.ts", "src/compute.ts", "tests/compute.test.ts", "npm", ".", ".", ["test", "--", "tests/compute.test.ts"], "value + 1", "jest", "npm package-lock manager detection", behavior("compute", [1], 2, "compute(1)).toBe(2)")],
-  ["package-manager-pnpm", "package-managers/pnpm", "src/inspect.ts", "src/inspect.ts", "tests/inspect.test.ts", "pnpm", ".", ".", ["test", "--", "tests/inspect.test.ts"], 'value.trim() + ""', "vitest", "pnpm packageManager and lockfile detection", behavior("inspect", [" value "], "value", 'inspect(" value ")).toBe("value")')],
-  ["package-manager-yarn", "package-managers/yarn", "src/format.ts", "src/format.ts", "tests/format.test.ts", "yarn", ".", ".", ["test", "--", "tests/format.test.ts"], 'value.toUpperCase() + ""', "jest", "Yarn lockfile manager detection", behavior("format", ["ok"], "OK", 'format("ok")).toBe("OK")')],
-  ["package-manager-bun", "package-managers/bun", "src/scale.ts", "src/scale.ts", "tests/scale.test.ts", "bun", ".", ".", ["test", "tests/scale.test.ts"], "value * 2", "bun", "Bun lockb manager detection", behavior("scale", [2], 4, "scale(2)).toBe(4)")],
-];
-
-const COMMAND_CASES = COMMAND_DEFINITIONS.map((definition) => {
-  const [id, fixture, scope, sourcePath, testPath, manager, packageRoot, workspaceRoot, argv, sourceMarker, framework, requirement, behaviorSpec, check] = definition;
-  return commandCase(id, fixture, mutationSpec({ scope, sourcePath, testPath, manager, packageRoot, workspaceRoot, argv, sourceMarker, framework, behavior: behaviorSpec, requirement }), check);
-});
-
 export const CONSUMER_CASES = [
-  ...COMMAND_CASES,
+  ...CHECK_CASES,
   {
     id: "supabase-roles",
     fixture: "supabase",

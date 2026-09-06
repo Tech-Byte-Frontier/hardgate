@@ -12,7 +12,9 @@ fn make_complexity(file: &str, func: &str, metric: &str) -> ComplexityViolation 
         file: PathBuf::from(file),
         function_name: func.to_string(),
         line_number: 10,
+        column_number: 0,
         end_line: 30,
+        size: None,
         metric: metric.to_string(),
         actual: 25.0,
         limit: 15.0,
@@ -33,7 +35,7 @@ fn make_test_report() -> GateReport {
     report.complexity_violations.push(make_complexity(
         "src/alpha.rs",
         "handle_req",
-        "Cognitive Complexity",
+        "Statement Count",
     ));
     report.complexity_violations.push(make_complexity(
         "src/beta.rs",
@@ -74,11 +76,11 @@ fn test_report_inspect_filter_by_engine() {
 
 #[test]
 fn test_report_inspect_filter_by_metric() {
-    let parsed = run_inspect_json("filter-metric", &["--metric", "Cognitive Complexity"]);
+    let parsed = run_inspect_json("filter-metric", &["--metric", "Statement Count"]);
     assert_eq!(parsed["complexity_violations"].as_array().unwrap().len(), 1);
     assert_eq!(
         parsed["complexity_violations"][0]["metric"],
-        "Cognitive Complexity"
+        "Statement Count"
     );
     assert_eq!(parsed["budget_violations"].as_array().unwrap().len(), 0);
 }
@@ -179,80 +181,6 @@ fn test_atomic_output_file_writing() {
 }
 
 #[test]
-fn test_mutate_summary_and_atomic_output() {
-    let fixture = Fixture::new("report", "mutate-summary", None);
-    let dirty = "// current uncommitted input\npub fn compute(value: i32) -> i32 { value + 1 }\n";
-    fixture.write("sample.rs", dirty);
-    fixture.write("untracked.txt", dirty);
-    fixture.write(
-        "hardgate.toml",
-        "[gate]\npreset = 'custom'\n[mutation]\nenabled = true\nmin_score = 85.0\n",
-    );
-    let script =
-        "if cmp -s sample.rs untracked.txt; then exit 0; fi\necho 'assertion failed'; exit 1\n";
-    fixture.write("test.sh", script);
-
-    let out_json = fixture.as_ref().join("nested/mutate-summary.json");
-    let output = run(
-        fixture.as_ref(),
-        &[
-            "mutate",
-            "--scoped",
-            "sample.rs",
-            "--test-cmd",
-            "sh test.sh",
-            "--max-mutants",
-            "1",
-            "--timeout",
-            "1",
-            "--json",
-            "--summary",
-            "--output",
-            out_json.to_str().unwrap(),
-        ],
-    );
-    assert!(output.status.success());
-    assert!(out_json.exists());
-    let json_content = std::fs::read_to_string(&out_json).unwrap();
-    let parsed: Value = serde_json::from_str(&json_content).unwrap();
-    assert_eq!(parsed["command"], "mutate");
-    assert_eq!(parsed["status"], "passed");
-    assert_eq!(parsed["all_sources_restored"], true);
-    assert!(parsed["survivors"].is_array());
-    assert_eq!(parsed["execution"]["command"], "mutate");
-    let output = run(
-        fixture.as_ref(),
-        &[
-            "mutate",
-            "--scoped",
-            "sample.rs",
-            "--test-cmd",
-            "sh test.sh",
-            "--max-mutants",
-            "1",
-            "--timeout",
-            "1",
-            "--format",
-            "summary",
-            "--output",
-            "terminal-summary.txt",
-        ],
-    );
-    assert_status(&output, true, "terminal mutation summary");
-    let text = stdout(&output);
-    assert!(text.contains("restoration:"));
-    assert!(!text.contains("generating AST mutations"));
-    assert_eq!(
-        std::fs::read_to_string(fixture.as_ref().join("terminal-summary.txt")).unwrap(),
-        text
-    );
-    assert_eq!(
-        std::fs::read_to_string(fixture.as_ref().join("sample.rs")).unwrap(),
-        dirty
-    );
-}
-
-#[test]
 fn test_check_progress_jsonl() {
     let fixture = Fixture::new("report", "progress-jsonl", None);
     let config = "[gate]\npreset = 'custom'\nstrict = false\n[budgets.files]\nmax_lines = { default = 500 }\n";
@@ -261,7 +189,15 @@ fn test_check_progress_jsonl() {
 
     let output = run(
         fixture.as_ref(),
-        &["check", "--progress", "jsonl", "--format", "json"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--progress",
+            "jsonl",
+            "--format",
+            "json",
+        ],
     );
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     assert!(stderr_str.contains("\"stage\":\"static_analysis\""));

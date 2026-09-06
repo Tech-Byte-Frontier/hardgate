@@ -19,6 +19,12 @@ pub(super) fn read_report(path: &Path) -> Result<SavedReport> {
         value.get("schema_version").is_none_or(|v| v == 1),
         "Unsupported report schema version"
     );
+    ensure!(
+        value
+            .get("dead_code_violations")
+            .is_none_or(|findings| { findings.as_array().is_some_and(Vec::is_empty) }),
+        "This report contains removed dead-code findings; inspect it with the producing Hardgate version"
+    );
     let report: GateReport = serde_json::from_value(value.clone())
         .with_context(|| format!("Expected a full gate report in `{}`", path.display()))?;
     ensure!(

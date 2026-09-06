@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// Promote the seven npm latest channels from a verified release receipt.
+// Promote the two npm latest channels from a verified release receipt.
 //
 // This command only moves npm dist-tags. It does not publish package bytes,
 // perform an OIDC exchange, or mark a receipt's default-consumer state. The
 // receipt remains the durable source of version, source identity, and archive
 // digests.
 "use strict";
+
+import { PLATFORM_ASSETS as RELEASE_ASSETS } from "./release-platforms.mjs";
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -32,10 +34,7 @@ import {
 
 const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 const REQUIRED_NPM_RECEIPT_STATE = "exact_consumer_verified";
-const PLATFORM_ASSETS = Object.freeze([
-  "hardgate-linux-x64.tar.gz", "hardgate-linux-x64-musl.tar.gz", "hardgate-linux-arm64.tar.gz",
-  "hardgate-linux-arm64-musl.tar.gz", "hardgate-darwin-x64.tar.gz", "hardgate-darwin-arm64.tar.gz",
-]);
+const PLATFORM_ASSETS = RELEASE_ASSETS;
 
 const HASH_CHUNK_BYTES = 64 * 1024;
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);

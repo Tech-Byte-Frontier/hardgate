@@ -101,6 +101,18 @@ fn extract_static_findings(report: &GateReport, findings: &mut BTreeSet<FindingR
 }
 
 fn extract_evidence_findings(report: &GateReport, findings: &mut BTreeSet<FindingRecord>) {
+    for finding in report
+        .tool_diagnostics
+        .iter()
+        .filter(|finding| finding.blocking)
+    {
+        findings.insert(FindingRecord {
+            engine: "specialist",
+            file: finding.file.display().to_string(),
+            line: Some(finding.line),
+            identity: finding.rule.clone(),
+        });
+    }
     for v in &report.coverage_violations {
         findings.insert(FindingRecord {
             engine: "coverage",
@@ -121,18 +133,7 @@ fn extract_evidence_findings(report: &GateReport, findings: &mut BTreeSet<Findin
             identity: v.metric.clone(),
         });
     }
-    for v in &report.dead_code_violations {
-        findings.insert(FindingRecord {
-            engine: "dead-code",
-            file: v.file.display().to_string(),
-            line: v.line_number,
-            identity: format!(
-                "{}:{}",
-                v.violation_type,
-                v.symbol.as_deref().unwrap_or_default()
-            ),
-        });
-    }
+
     for v in &report.orchestration_violations {
         findings.insert(FindingRecord {
             engine: "orchestration",

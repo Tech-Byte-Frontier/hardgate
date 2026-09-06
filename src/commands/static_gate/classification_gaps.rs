@@ -32,6 +32,19 @@ fn record_classification_gap(
     report: &mut GateReport,
 ) {
     let rel = file.path.strip_prefix(root).unwrap_or(&file.path);
+    if crate::discovery::classification::is_retired_source(&file.path)
+        && matches!(
+            file.role,
+            FileRole::Source | FileRole::Test | FileRole::Migration | FileRole::Unknown
+        )
+    {
+        record_evidence_failure(report, true, EvidenceFailure {
+            step: "unsupported-source",
+            target: rel,
+            message: "Unsupported analysis request; only Rust and JavaScript/TypeScript are supported.".to_string(),
+        });
+        return;
+    }
     if file.role == FileRole::Unknown && config.gate.enforce_classified_sources {
         record_evidence_failure(
             report,

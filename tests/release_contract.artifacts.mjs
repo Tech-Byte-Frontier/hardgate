@@ -12,8 +12,6 @@ import {
   ci,
   coverageScript,
   includesAll,
-  installer,
-  installerRuntime,
   nodeVersion,
   npmPackRetry,
   npmPlatformDirectories,
@@ -23,6 +21,8 @@ import {
   packageScript,
   platformPackages,
   release,
+  releaseJob,
+  directConsumer,
   releaseAbi,
   rustToolchain,
   sbomScript,
@@ -56,6 +56,7 @@ assert.deepEqual(
     "/LICENSE-APACHE",
     "/docs/INSTALLATION.md",
     "/docs/GETTING_STARTED.md",
+    "/docs/TRIALS_0_6.md",
     "/docs/MUTATION_RESOURCES.md",
     "/docs/ARCHITECTURE.md",
     "/docs/CLI_AND_INTEGRATION.md",
@@ -68,7 +69,7 @@ assert.deepEqual(
   "Cargo package allowlist must exclude workspace, generated, release, and private local artifacts",
 );
 includesAll(verifier, ["MAX_BINARY_BYTES", "verifyEmbeddedIdentity", "verifyExecutableMember", "tar", "-tvzf", "fs.chmodSync(binaryPath, 0o755)", "Buffer.from(`${version} (${commit})`", "hardgate-target:", "expected Cargo target marker", "expectedOutput", "result.stdout.trim() !== expectedOutput", "verifyBinaryAbi", "readelf", "-l", "-sW", "-n", "classifyBinaryAbi"], "archive verifier");
-includesAll(releaseAbi, ["classifyBinaryAbi", "ld-musl", "__init_libc", "GLIBC_", "gnu_get_libc_version", "_dl_relocate_static_pie", "NT_GNU_ABI_TAG", "staticBinary", "exact Cargo target marker", "targetMarkerValid"], "ABI evidence classifier");
+includesAll(releaseAbi, ["classifyBinaryAbi", "no positive ELF/glibc ABI evidence", "ld-musl", "GLIBC_", "2.39 baseline", 'abi !== "gnu"'], "GNU ABI evidence classifier");
 includesAll(npmPublication, ["--platform-only", "--package", "optionalDependencies", "byte-match", "path.join(packageDirectory, \"bin/hardgate\")", "tar", "-tvzf", "npm/hardgate/bin/hardgate.js"], "npm publication verifier");
 includesAll(npmRegistryPack, ["npm pack", "--loglevel=error", "isRetryableNpmPackError", "failed without retry", "exactVersionObserved", "childTimeoutMs"], "npm registry retrieval");
 includesAll(npmVerificationPolicy, ["NPM_VERIFY_ATTEMPTS", "NPM_VERIFY_TIMEOUT_SECONDS", "NPM_VERIFY_CHILD_TIMEOUT_SECONDS", "remainingMs"], "npm verification deadlines");
@@ -95,10 +96,10 @@ assert.match(sbomScript, /id: licenseText/, "CycloneDX may encode a single SPDX 
 includesAll(sbomScript, ["$schema", "serialNumber", "uuidV5(JSON.stringify(bom))", "rootComponent.type = \"application\"", "components.filter", "codepointCompare", "Buffer.from(left, \"utf8\").compare"], "CycloneDX structure");
 assert.doesNotMatch(sbomScript, /id:\s*pkg\.license/, "raw package SPDX expressions must not be emitted as license ids");
 includesAll(sbomVerifier, ["CycloneDX", "1.5", "serialNumber", "RFC 4122 UUIDv5 URN", "uuidV5(JSON.stringify(withoutSerial))", "metadata.component", "application", "must not be duplicated", "license.expression", "$schema"], "CycloneDX verifier");
-includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "COV_TOOLCHAIN=\"${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}\"", "0.9.0", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-llvm-cov", "cargo install cargo-llvm-cov --version \"=$COV_VERSION\"", "cargo \"+$COV_TOOLCHAIN\" llvm-cov --version", "--all-targets", "--all-features", "--branch", "--include-build-script", "--lcov", "coverage/lcov.info"], "coverage helper");
+includesAll(coverageScript, ["CARGO_LLVM_COV_VERSION", "COV_TOOLCHAIN=\"${RUST_COVERAGE_TOOLCHAIN:-nightly-2026-09-04}\"", "0.9.0", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-llvm-cov", "cargo install cargo-llvm-cov --version \"=$COV_VERSION\"", "cargo \"+$COV_TOOLCHAIN\" llvm-cov --version", "evidence cargo-llvm-cov", "--toolchain", "--all-features", ".hardgate/evidence/coverage.lcov", "coverage.lcov.hardgate.json"], "coverage helper");
 includesAll(auditScript, ["CARGO_AUDIT_VERSION", "0.22.2", "HARDGATE_REQUIRE_PREINSTALLED_CARGO_TOOLS", "expected preinstalled cargo-audit", "cargo install cargo-audit --version \"=$AUDIT_VERSION\"", "cargo audit"], "audit helper");
-includesAll(selfGate, ["check --all --dead-code --format agent", "verify --coverage-report coverage/lcov.info --format agent", "mutate", "--max-mutants 1", "--timeout 300", "cargo test --test static_snapshot --test config_adoption_edges --all-features --locked", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
-assert.doesNotMatch(selfGate, /verify --format agent\b/, "self gate must not claim complete evidence after disabling evidence engines");
+includesAll(selfGate, ["check --format agent", "check --checks policy", "--coverage-report .hardgate/evidence/coverage.lcov --format agent", "evidence cargo-mutants", "--file src/engines/budgets.rs", "replace check_measured_budgets", "--mutation-report \"$HARDGATE_MUTATION_REPORT\"", "HARDGATE_BINARY=\"$BINARY\" node scripts/check-consumer-matrix.mjs"], "self gate");
+assert.doesNotMatch(selfGate, /TEMP_POLICY|enabled = false/, "self gate must require source-bound evidence without rewriting its policy");
 
 for (const target of targets) assert.ok(release.includes(target), `release must build ${target}`);
 for (const packageName of platformPackages) {
@@ -106,33 +107,19 @@ for (const packageName of platformPackages) {
 }
 assert.deepEqual(npmPlatformDirectories, [...platformPackages].sort(), "npm directories must match the supported platform set");
 assert.deepEqual(Object.keys(wrapperManifest.optionalDependencies ?? {}).sort(), [...platformPackages].sort(), "wrapper optionalDependencies must match the supported platform set");
-includesAll(installer, ["linux-x86_64", "linux-aarch64|linux-arm64", "darwin-x86_64", "darwin-aarch64|darwin-arm64", "libc_suffix", "gnu|glibc)", "musl)", "HARDGATE_LIBC must be gnu, glibc, or musl", "ldd --version", "ld-musl-*.so.1"], "installer platform map");
-assert.equal((release.match(/^\s+target:/gm) ?? []).length, targets.length - 1, "release matrix must contain only the five non-native targets");
-assert.match(release, /native-linux-x64-attempt-/, "release must promote the native Linux x64 artifact from exact successful CI");
+assert.doesNotMatch(release, /matrix:|hardgate-linux-x64-musl|hardgate-linux-arm64|hardgate-darwin/);
+assert.match(release, /native-linux-x64-attempt-/, "release must reuse the exact successful CI artifact");
+const packageJob = releaseJob("package");
+const publishJob = releaseJob("publish");
+assert.doesNotMatch(packageJob, /actions\/attest@|id-token: write|attestations: write/, "verified packaging must remain reusable if attestation fails");
+assert.match(packageJob.trimEnd(), /retention-days: 30$/, "bundle upload must remain the final packaging checkpoint");
+includesAll(packageJob, ["needs.version-check.outputs.ci_native_artifact_id", "needs.version-check.outputs.ci_run_id", "build-binaries/binary-x86_64-unknown-linux-gnu", "resume_artifact_id", "github-token: ${{ github.token }}", "run-id: ${{ inputs.resume_run_id }}", "digest-mismatch: error"], "CI and resume artifact identities");
+includesAll(publishJob, ["subject-checksums", "sbom-path", "attestations: write", "artifact-metadata: write", "id-token: write"], "checksum and SBOM provenance");
+assert.equal((publishJob.match(/actions\/attest@/g) ?? []).length, 2);
+assert.ok(publishJob.indexOf("actions/attest@") < publishJob.indexOf("scripts/stage-github-release.mjs"));
+assert.doesNotMatch(publishJob, /continue-on-error/);
+includesAll(directConsumer, ['cmp -- "dist/$asset"', "sha256sum --check --strict", "installed-check.mjs", "--consumer"], "direct downloaded bytes and runtime acceptance");
 
-assert.match(release, /build:[\s\S]*needs:\s*\[version-check\]/, "cross-platform builds must wait for the exact CI receipt");
-assert.match(release, /package:[\s\S]*needs:\s*\[version-check, build\]/, "packaging must wait for all non-native builds");
-assert.match(release, /attest:[\s\S]*needs:\s*\[version-check, package\]/, "attestation must consume the completed package checkpoint");
-assert.match(release, /github-release:[\s\S]*needs:\s*\[version-check, package, attest, publication-preflight, receipt-init\]/, "GitHub publication must wait for packaging, attestation, and registry preflight");
-assert.match(release, /publish-npm:[\s\S]*needs:\s*\[version-check, package, github-release, publish-crates\]/, "npm publication must wait for crate publication");
-assert.match(release, /verify-channels:[\s\S]*needs:\s*\[version-check, package, promote-channels, verify-native-default\]/, "final channel verification must wait for every publication");
-const platformPublish = release.indexOf("Publish and verify each platform package in order");
-const wrapperPublish = release.indexOf("Publish wrapper only after all platforms are verified");
-assert.ok(platformPublish >= 0 && wrapperPublish > platformPublish, "wrapper publication must follow platform publication");
-assert.doesNotMatch(release, /deliberately tolerant|continu(?:e|ing) with remaining|main wrapper above was still attempted/i);
-
-const packageJob = release.slice(release.indexOf("  package:"), release.indexOf("  attest:"));
-const attestJob = release.slice(release.indexOf("  attest:"), release.indexOf("  publication-preflight:"));
-assert.doesNotMatch(packageJob, /actions\/attest@/, "successful packaging must remain reusable when attestation fails");
-assert.doesNotMatch(packageJob, /id-token: write|attestations: write|artifact-metadata: write/, "packaging must not have attestation credentials");
-assert.match(packageJob.trimEnd(), /retention-days: 30$/, "verified bundle upload must be the package job's final checkpoint for the full rerun window");
-includesAll(packageJob, ["pattern: binary-*", "needs.version-check.outputs.ci_native_artifact_id", "needs.version-check.outputs.ci_run_id", "build-binaries/binary-x86_64-unknown-linux-gnu", "chmod 755", "resume_artifact_id", "github-token: ${{ github.token }}", "run-id: ${{ inputs.resume_run_id }}", "digest-mismatch: error"], "CI-promoted and verified-resume bundle inputs");
-includesAll(attestJob, ["artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}", "digest-mismatch: error", "release-verify.mjs", "release-sbom-verify.mjs", "sha256sum --check --strict", "actions: read", "id-token: write", "attestations: write", "artifact-metadata: write", "verify-tag", "subject-checksums", "sbom-path"], "resumable attestation checkpoint");
-assert.equal((attestJob.match(/actions\/attest@/g) ?? []).length, 2, "attestation checkpoint must sign checksums and the SBOM exactly once each");
-assert.doesNotMatch(attestJob, /continue-on-error/, "attestation failures must block publication");
-
-assert.doesNotMatch(installer, /win32|windows|\.exe|powershell/i, "installer must advertise Unix targets only");
-assert.doesNotMatch(release, /win32|windows|homebrew|brew/i, "release must not advertise removed channels");
 assert.doesNotMatch(cargo, /homebrew|tap\s*=/i, "Cargo metadata must not advertise an unmaintained channel");
 assert.doesNotMatch(cargo, /\[package\.metadata\.dist\]/, "hand-authored release workflow is authoritative");
 assert.match(cargo, /rust-version\s*=\s*"1\.98\.1"/);
@@ -145,43 +132,10 @@ assert.equal(nodeVersion, "26.8.1", "repository Node pin must match the release 
 assert.match(ci, new RegExp(`NODE_VERSION: ${nodeVersion.replaceAll(".", "\\.")}`));
 assert.match(release, new RegExp(`NODE_VERSION: ${nodeVersion.replaceAll(".", "\\.")}`));
 
-includesAll(installer, [
-  "HARDGATE_VERSION",
-  "HOME is required unless HARDGATE_INSTALL_DIR is set",
-  "vX.Y.Z",
-  "SHA256SUMS",
-  "sha256sum \"$tmp/$archive_name\"",
-  "latest/download",
-  "releases/download",
-  "archive metadata has no full source commit identity",
-  "archive metadata has no valid release version",
-  "metadata_package",
-  "metadata_target",
-  "archive members do not exactly match",
-  "expected_members",
-  "installed_name_version",
-  "hardgate ${metadata_version} (${metadata_commit})",
-  "mktemp -d \"$INSTALL_DIR/.hardgate.XXXXXX\"",
-], "installer");
-assert.doesNotMatch(installer, /sha256sum --check|sha256sum --status/, "installer checksum verification must work with BusyBox");
-includesAll(installer, [
-  "HARDGATE_CURL_CONNECT_TIMEOUT",
-  "HARDGATE_CURL_MAX_TIME",
-  "--connect-timeout \"$CURL_CONNECT_TIMEOUT\"",
-  "--max-time \"$CURL_MAX_TIME\"",
-  "destination=\"$INSTALL_DIR/hardgate\"",
-  "destination ${destination} is a directory",
-], "installer safety and bounded downloads");
-const installerCurlInvocations = installer.match(/\bcurl\s+--/g) ?? [];
-assert.ok(installerCurlInvocations.length >= 2, "installer must have checksum and archive downloads");
-assert.equal((installer.match(/--connect-timeout/g) ?? []).length, installerCurlInvocations.length, "every installer curl must set connect timeout");
-assert.equal((installer.match(/--max-time/g) ?? []).length, installerCurlInvocations.length, "every installer curl must set max time");
 const releaseCurlInvocations = release.match(/\bcurl\s+--/g) ?? [];
 assert.ok(releaseCurlInvocations.length > 0, "release must probe registries with curl");
 assert.equal((release.match(/--connect-timeout/g) ?? []).length, releaseCurlInvocations.length, "every release curl must set connect timeout");
 assert.equal((release.match(/--max-time/g) ?? []).length, releaseCurlInvocations.length, "every release curl must set max time");
-includesAll(installerRuntime, ["regular-file replacement", "existing destination directory", "symlink-to-directory", "is a directory", "BusyBox"], "installer destination regression");
-includesAll(installerRuntime, ["BusyBox", "sha256sum", "HARDGATE_FIXTURE", "ldd", "EXTRA.txt", "hardgate-linux-x64-musl", "release_contract.install.test"], "installer runtime contract");
 includesAll(build, [
   "HARDGATE_BUILD_GIT_SHA",
   "HARDGATE_BUILD_TARGET",

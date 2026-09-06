@@ -9,8 +9,7 @@ pub(crate) struct GateSelection<'a> {
     pub command: &'a str,
     pub paths: &'a [PathBuf],
     pub diff: bool,
-    pub dead_code: bool,
-    pub all: bool,
+    pub checks: &'a [super::CheckKind],
     pub coverage_report: Option<&'a str>,
     pub mutation_report: Option<&'a str>,
 }
@@ -31,16 +30,9 @@ pub(crate) fn gate_plan(
         ),
         (EngineId::Invariants, config.invariants.enforce),
         (EngineId::Clones, clones_enabled(config)),
-        (
-            EngineId::DeadCode,
-            selection.dead_code || config.analysis.dead_code.enabled,
-        ),
     ] {
-        let static_requested = selection.command != "mutate";
-        let mcp_dead_code = selection.command == "mcp_check" && id == EngineId::DeadCode;
-        let selected = static_requested
-            && !mcp_dead_code
-            && (!scan || !matches!(id, EngineId::Clones | EngineId::DeadCode));
+        let selected = selection.selects(super::CheckKind::Policy)
+            && (!scan || !matches!(id, EngineId::Clones));
         engines.push(engine(
             id,
             enabled,
@@ -49,7 +41,7 @@ pub(crate) fn gate_plan(
         ));
     }
     add_evidence_engines(&mut engines, context, &selection);
-    add_commands(&mut engines, context, selection.all && !scan);
+    add_commands(&mut engines, context, &selection);
     Ok(ExecutionPlan {
         command: selection.command.to_string(),
         scope: ExecutionScope {
@@ -88,7 +80,7 @@ fn add_evidence_engines(
     selection: &GateSelection<'_>,
 ) {
     let config = &context.config;
-    let selected = matches!(selection.command, "check" | "verify");
+    let selected = selection.command == "check" && selection.selects(super::CheckKind::Policy);
     let coverage = selection
         .coverage_report
         .or(config.coverage.report.as_deref());
@@ -113,12 +105,6 @@ fn add_evidence_engines(
         mutation,
     ));
     engines.push(engine(
-        EngineId::MutationExecution,
-        config.mutation.enabled,
-        selection.command == "mutate",
-        vec!["a successful baseline and non-empty isolated mutation run (hardgate mutate)".into()],
-    ));
-    engines.push(engine(
         EngineId::GeneratedFreshness,
         config.generated.enabled,
         selected,
@@ -138,18 +124,59 @@ fn add_evidence_engines(
     ));
 }
 
-fn add_commands(engines: &mut Vec<EngineExecution>, context: &ConfigContext, selected: bool) {
+impl GateSelection<'_> {
+    fn selects(&self, kind: super::CheckKind) -> bool {
+        self.checks.is_empty() || self.checks.contains(&kind)
+    }
+}
+
+fn add_commands(
+    engines: &mut Vec<EngineExecution>,
+    context: &ConfigContext,
+    selection: &GateSelection<'_>,
+) {
     let config = &context.config.orchestration;
-    for (id, command) in [
-        (EngineId::FormatCheck, &config.format_check),
-        (EngineId::Lint, &config.lint),
-        (EngineId::Tests, &config.test_cmd),
+    for (id, kind, commands, required) in [
+        (
+            EngineId::FormatCheck,
+            super::CheckKind::Format,
+            config.format_check.iter().cloned().collect::<Vec<_>>(),
+            true,
+        ),
+        (
+            EngineId::Lint,
+            super::CheckKind::Lint,
+            config.lint.iter().cloned().collect(),
+            true,
+        ),
+        (
+            EngineId::Tests,
+            super::CheckKind::Tests,
+            config
+                .test_cmd
+                .iter()
+                .chain(&config.additional_tests)
+                .cloned()
+                .collect(),
+            false,
+        ),
+        (
+            EngineId::Typecheck,
+            super::CheckKind::Typecheck,
+            config
+                .typecheck
+                .iter()
+                .chain(&config.feature_checks)
+                .cloned()
+                .collect(),
+            false,
+        ),
     ] {
         engines.push(engine(
             id,
-            command.is_some(),
-            selected,
-            command.iter().cloned().collect(),
+            required || !commands.is_empty(),
+            selection.command == "check" && selection.selects(kind),
+            commands,
         ));
     }
 }

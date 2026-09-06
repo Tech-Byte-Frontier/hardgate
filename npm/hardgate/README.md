@@ -1,203 +1,52 @@
 # @tech-byte-frontier/hardgate
 
-[![License](https://img.shields.io/crates/l/hardgate.svg)](https://github.com/Tech-Byte-Frontier/hardgate#license)
-[![GitHub Release](https://img.shields.io/github/v/release/Tech-Byte-Frontier/hardgate)](https://github.com/Tech-Byte-Frontier/hardgate/releases)
+A thin npm launcher for the Hardgate Rust CLI. Hardgate checks Rust and
+JavaScript/TypeScript structural policy, formatting, linting, configured tests,
+type checks, and required source-bound coverage or mutation evidence.
 
-The npm wrapper launches a prebuilt Hardgate Rust binary. The latest published
-npm wrapper is `0.4.2`; npm `0.5.0` has not been published. The current source
-checkout contains newer wrapper and initialization changes, so use that
-checkout when you need source-only behavior. Install the published wrapper as
-a development dependency and invoke it with the package manager used by the
-project:
+## Install
+
+Use npm or pnpm with optional dependencies enabled:
 
 ```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-npx hardgate check
+npm install --save-dev --save-exact @tech-byte-frontier/hardgate
+npx --no-install hardgate init
+npx --no-install hardgate check
 
-pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-pnpm exec hardgate check --diff
-
-yarn add --dev --exact @tech-byte-frontier/hardgate@0.4.2
-yarn exec hardgate verify
-
-bun add --dev --exact @tech-byte-frontier/hardgate@0.4.2
-bunx --no-install hardgate scan src/index.ts
+pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate
+pnpm exec hardgate check
 ```
 
-The npm wrapper requires Node.js 18 or newer.
+This source README describes 0.6; a source manifest version does not establish
+registry availability. Select a published version and commit your lockfile.
 
-## Global CLI use
+## Supported runtime
 
-Global npm and pnpm installs expose the same `hardgate` binary from any
-project:
+Linux x64 GNU only. The prebuilt baseline is Ubuntu 24.04 with glibc 2.39+.
+Node.js 18+ runs the launcher. Workload commands require cgroup-v2 CPU/memory/swap
+and task limits, systemd 254+ with an accessible user manager (or inherited
+verified limits), and enabled Landlock ABI 3+ for read-only child checks.
+Install the project's configured tools separately. `--version` does not prove
+that the host can run `check`.
 
-```sh
-npm install --global @tech-byte-frontier/hardgate@0.4.2
-# or
-pnpm add --global @tech-byte-frontier/hardgate@0.4.2
+ARM64, musl/Alpine, macOS, and Windows are unsupported in 0.6. npm and pnpm are
+the tested package managers. Previously published artifacts retain their own
+release contracts.
 
-hardgate --version
-```
+The matching `hardgate-linux-x64` optional dependency supplies the binary.
+There are no postinstall or runtime downloads. The launcher first resolves the
+installed native package, then a local Rust workspace binary or a real binary
+on PATH. It rejects launcher scripts to prevent recursion.
+`HARDGATE_BINARY=/absolute/path/to/hardgate` explicitly overrides resolution on
+a supported host. Exit status, arguments, and signals pass through to the CLI.
 
-For npm, `npm prefix --global` prints the global prefix; its `bin` directory
-must be on `PATH`. If pnpm has no global bin directory yet, run `pnpm setup`
-once and open a new shell so `PNPM_HOME` is on `PATH`. For reproducible CI and
-team use, prefer the exact project-local installation and commit its lockfile.
+For global use, install with npm or pnpm's `--global` option and verify
+`command -v hardgate`; `pnpm bin --global` identifies pnpm's executable directory.
+Cargo and direct release downloads are also supported. There is no separate
+shell installer in 0.6.
 
-## Platform packages and fallback
+[Installation and runtime setup](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/INSTALLATION.md)
+· [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md)
+· [Releases](https://github.com/Tech-Byte-Frontier/hardgate/releases)
 
-The current source wrapper and the v0.5.0 release archives support exactly six
-Linux/macOS optional dependencies (Linux x64/arm64 glibc and musl, macOS
-x64/arm64):
-
-This is the current source/release-archive contract; it does not imply that an
-npm wrapper `0.5.0` is published. The installable npm wrapper remains `0.4.2`.
-
-- `hardgate-linux-x64` (glibc)
-- `hardgate-linux-x64-musl`
-- `hardgate-linux-arm64` (glibc)
-- `hardgate-linux-arm64-musl`
-- `hardgate-darwin-x64`
-- `hardgate-darwin-arm64`
-
-In the current source wrapper, if `HARDGATE_BINARY` is set, the launcher uses
-that binary first. Otherwise it resolves the package for the current
-OS/architecture and Linux libc. On glibc Linux, the musl package is a fallback
-when the glibc optional package is unavailable; a glibc binary is never selected
-on a musl host. It then permits a development Cargo binary or a real
-`hardgate` executable on `PATH`. It checks candidate file types so wrapper
-scripts do not recurse, and it never downloads a binary at runtime. Normal
-installs on unsupported platforms fail closed.
-
-Use `HARDGATE_BINARY=/absolute/path/to/hardgate` when the project supplies its own binary. Optional dependencies must not be omitted when the prebuilt package is expected; if they are omitted, use the explicit or Cargo/PATH fallback.
-
-## Command scope
-
-The wrapper forwards arguments to the Rust CLI. The examples below describe the
-current source CLI; the published npm `0.4.2` wrapper predates the current
-`init`/`config` flow. Use the source checkout for those newer affordances:
-
-```sh
-npx hardgate check                 # static engines + enabled reports/freshness
-npx hardgate check --diff          # Git-changed/staged + explicit paths; diff LCOV
-npx hardgate check --all           # add configured formatter/linter/test commands
-npx hardgate verify                # full static + enabled evidence/ratchet
-npx hardgate mutate --diff        # native baseline + AST mutants when enabled
-npx hardgate init --preset strict-agent
-```
-
-`verify` path arguments only narrow current static/dead-code inventory and
-coverage source matching; mutation reports and generated freshness remain
-configured/full checks. The ratchet still loads and validates the full
-configured reference snapshot, then compares it only to selected current
-static/dead-code findings without widening explicit paths.
-
-In the current source CLI, no-config execution and `init --preset strict-agent`
-use the same preset object, including enabled coverage and mutation report
-policies. A generated strict template therefore needs valid report inputs.
-Balanced disables coverage/mutation reports; legacy-migration disables those
-reports and enables static reference/merge-base adoption. Missing, empty,
-unreadable, or malformed enabled evidence fails closed. Native `mutate` is
-separate from mutation-report evaluation. If `[mutation].enabled = false`, it
-prints a disabled-policy note and succeeds without target discovery, baseline
-execution, or mutants; target/no-target rules apply only when enabled.
-
-Inventory is broader than AST parser support. Under the preset role severities,
-parser-unsupported files that remain source or migration (for example CSS,
-GraphQL, or SQL) block as `unsupported-source`; accepting one requires an
-explicit, truthful classification or role-policy decision rather than false
-function metrics.
-
-Native `mutate` is compiled for Linux and macOS targets, including all six
-prebuilt/npm binaries above. Source builds targeting another operating system
-fail closed before baseline or source writes because robust process-group
-cleanup and atomic source restoration are unavailable there. Static `check`
-and `scan` remain separate commands.
-
-After an explicit scope is validated, a `mutate --diff` run (including
-`--scoped`) with no changed production source is a successful no-op. Missing,
-invalid, unsupported, or non-source explicit scopes fail closed; only a non-diff
-unrestricted or scoped run with no eligible source target fails.
-
-For JavaScript/TypeScript mutation targets, Hardgate validates encountered
-package manifests, recognizes only declared workspaces (lockfiles are manager
-hints), and resolves npm, pnpm, Yarn, or Bun. A child `test` script wins; one
-unambiguous `test:*` script is allowed, and a reliable child-local manifest,
-framework-config, or script signal wins over a validated enclosing
-workspace-root script. Framework selection uses only those manifest, config,
-and unambiguous script signals; it does not scan dependency packages.
-That root script is used only with no local script or reliable local manifest/config/script signal;
-malformed manifests or ambiguous scripts fail closed. It infers
-Jest, Vitest, or Playwright only when selector behavior is unambiguous, selects
-a matching test where possible, and otherwise runs the full suite.
-`--test-cmd` overrides resolution. See the current repository [CLI reference](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/CLI_AND_INTEGRATION.md) for the resolution order and command forms.
-
-## MCP
-
-The `hardgate mcp` command is a stdio MCP server. Its static-only check tool is `hardgate_check(paths?, diff?)`; companion tools are `hardgate_scan_file(path)` and `hardgate_get_metrics(path, symbol)`. `diff` selects Git-changed/staged inventory by default, while explicit existing paths add to static/clone selection and clone matching uses the full repository index. MCP never runs coverage or other reports, freshness, orchestration, dead code, or native mutation. Invalid arguments/configuration, missing paths, empty scopes/discovery, and Git failures are outer tool errors. Read/parse failures remain report-level Hardgate `Failed` findings whose effective role severity makes them errors, advisories, or omitted findings (`error`, `warning`, or `ignore`). For `hardgate_scan_file`, a read failure is an outer tool error while parse/static findings remain in its per-file report; `hardgate_get_metrics` reports read or missing-symbol errors explicitly.
-
-## Release identity
-
-The v0.5.0 shell-installer and release-archive contract supports exactly the
-six Linux/macOS artifacts listed above (Linux x64/arm64 glibc and musl, macOS
-x64/arm64). On Linux, `HARDGATE_LIBC=gnu|glibc|musl` explicitly selects
-the libc and takes precedence over automatic detection. Archives are listed in `SHA256SUMS`;
-`BUILD-METADATA.json` records target, package, version, and full source commit.
-Installation verifies the unique checksum entry before extraction and
-requires the binary's exact `hardgate VERSION (COMMIT)` identity. The binary
-also embeds `hardgate-target:<target>`, which release verification checks.
-`HARDGATE_VERSION` accepts `latest`, `vX.Y.Z`, or `X.Y.Z`;
-`HARDGATE_INSTALL_DIR` chooses the destination. Windows and Homebrew are not
-supported by this package contract.
-
-## Upgrading from 0.4.2
-
-Pinned installs and lockfiles do not auto-update. The released Cargo and shell
-channels provide `0.5.0`; the npm wrapper has no published `0.5.0` yet. Keep
-the exact npm `0.4.2` package or use the current source checkout for newer npm
-wrapper changes:
-
-```sh
-cargo install hardgate --version 0.5.0 --locked --force
-curl -fsSL https://raw.githubusercontent.com/Tech-Byte-Frontier/hardgate/v0.5.0/scripts/install.sh | \
-  HARDGATE_VERSION=v0.5.0 sh
-```
-
-For the published npm wrapper, retain or reinstall the exact available version:
-
-```sh
-npm install --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate@0.4.2
-yarn up --exact @tech-byte-frontier/hardgate@0.4.2
-bun add --dev --exact @tech-byte-frontier/hardgate@0.4.2
-npm install --global @tech-byte-frontier/hardgate@0.4.2
-pnpm add --global @tech-byte-frontier/hardgate@0.4.2
-```
-
-The exact flags pin the manifest entry; a committed lockfile pins the resolved
-artifact. Review the [v0.5.0 migration notes](https://github.com/Tech-Byte-Frontier/hardgate/blob/v0.5.0/CHANGELOG.md#050) for policy and Rust API changes.
-
-## Uninstall
-
-Use the command matching the installation channel:
-
-```sh
-npm uninstall --save-dev @tech-byte-frontier/hardgate
-pnpm remove --save-dev @tech-byte-frontier/hardgate
-yarn remove @tech-byte-frontier/hardgate
-bun remove @tech-byte-frontier/hardgate
-npm uninstall --global @tech-byte-frontier/hardgate
-pnpm remove --global @tech-byte-frontier/hardgate
-cargo uninstall hardgate
-```
-
-For a shell installation only, remove the exact destination selected during
-installation (by default `$HOME/.cargo/bin/hardgate`) after confirming no other
-installation channel owns it.
-
-```sh
-# Only after confirming this exact file came from scripts/install.sh:
-rm -- "$HOME/.cargo/bin/hardgate"
-```
-
-Current source documentation lives in the repository's [README](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/README.md) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/main/docs). Released v0.5.0 documentation is available from the [tagged README](https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0) and [docs](https://github.com/Tech-Byte-Frontier/hardgate/tree/v0.5.0/docs).
+License: MIT OR Apache-2.0.

@@ -33,11 +33,6 @@ const identity = {
   build_run_id: "33926961536",
   artifact_id: "987654321",
   archives: [
-    { name: "hardgate-darwin-arm64.tar.gz", sha256: h64("d") },
-    { name: "hardgate-darwin-x64.tar.gz", sha256: h64("e") },
-    { name: "hardgate-linux-arm64-musl.tar.gz", sha256: h64("f") },
-    { name: "hardgate-linux-arm64.tar.gz", sha256: h64("0") },
-    { name: "hardgate-linux-x64-musl.tar.gz", sha256: h64("1") },
     { name: "hardgate-linux-x64.tar.gz", sha256: h64("2") },
     { name: "hardgate-wrapper.tgz", sha256: h64("3") },
   ],
@@ -72,13 +67,8 @@ function assertReceiptRejects(value, expected = undefined) {
 
 assert.deepEqual(CHANNELS.npmPlatforms, [
   "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
 ]);
-assert.equal(REQUIRED_CHANNELS.length, 9);
+assert.equal(REQUIRED_CHANNELS.length, 4);
 
 const pending = createReceipt(identity, REQUIRED_CHANNELS);
 assert.equal(pending.schema_version, 1);
@@ -105,7 +95,7 @@ try {
   }
   assert.equal(receiptComplete(receipt), true);
   assert.equal(receipt.complete, true);
-  assert.deepEqual(readReceipt(path.join(directory, "checkpoint-8-default_consumer_verified.json"), identity), receipt);
+  assert.deepEqual(readReceipt(path.join(directory, `checkpoint-${REQUIRED_CHANNELS.length - 1}-default_consumer_verified.json`), identity), receipt);
 } finally {
   fs.rmSync(directory, { recursive: true, force: true });
 }

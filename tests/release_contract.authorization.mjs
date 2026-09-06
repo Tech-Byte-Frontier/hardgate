@@ -22,16 +22,7 @@ assert.match(
   /concurrency:\n(?:  #[^\n]*\n)*  group: hardgate-release\n  cancel-in-progress: false/,
   "an in-flight publication must never be cancelled by another tag",
 );
-assert.match(release, /attest:[\s\S]*?permissions:[\s\S]*?attestations: write/, "only the resumable attestation job may attest artifacts");
-assert.match(release, /github-release:[\s\S]*?permissions:[\s\S]*?contents: write/, "GitHub staging needs scoped contents write permission");
-assert.match(release, /publish-npm:[\s\S]*?permissions:[\s\S]*?id-token: write/, "npm provenance publication requires scoped OIDC access");
-
-const githubReleaseJob = releaseJob("github-release");
-const publishCratesJob = releaseJob("publish-crates");
-const publishNpmJob = releaseJob("publish-npm");
-const attestJob = releaseJob("attest");
-const verifyChannelsJob = releaseJob("verify-channels");
-const releaseCompleteJob = releaseJob("release-complete");
+const publishJob = releaseJob("publish");
 const versionCheckJob = releaseJob("version-check");
 includesAll(
   versionCheckJob,
@@ -101,71 +92,22 @@ assert.match(
   "release signer allowlist must contain a principal and a valid SSH public-key record",
 );
 
-const publicationPreflightJob = releaseJob("publication-preflight");
-includesAll(
-  publicationPreflightJob,
-  [
-    "needs: [version-check]",
-    "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}",
-    "CARGO_REGISTRY_TOKEN is required for crates.io publication",
-    "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}",
-    "node scripts/npm-publisher-preflight.mjs",
-    "id-token: write",
-  ],
-  "publication preflight",
-);
-assert.match(
-  githubReleaseJob,
-  /needs: \[version-check, package, attest, publication-preflight, receipt-init\]/,
-  "GitHub publication must wait for attestation and registry preflight",
-);
-for (const [label, job, requiredNeeds] of [
-  ["attestation", attestJob, ["version-check", "package"]],
-  ["GitHub Release", githubReleaseJob, ["version-check", "package", "attest", "publication-preflight", "receipt-init"]],
-  ["crates.io", publishCratesJob, ["version-check", "package", "github-release"]],
-  ["npm", publishNpmJob, ["version-check", "package", "github-release", "publish-crates"]],
-  ["channel verification", verifyChannelsJob, ["version-check", "package", "promote-channels", "verify-native-default"]],
-]) {
-  assert.match(job, /if: >-\s+\$\{\{\s+always\(\)/, `${label} must override intentional resume skip propagation`);
-  for (const dependency of requiredNeeds) {
-    assert.ok(job.includes(`needs.${dependency}.result == 'success'`), `${label} must require successful ${dependency}`);
-  }
+includesAll(publishJob, [
+  "needs: [version-check, package]", "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}",
+  "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}", "node release-tooling/scripts/npm-publisher-preflight.mjs",
+  "HARDGATE_NPM_AUTH_MODE == 'trusted'", "--auth-mode token", "id-token: write", "contents: write",
+  "attestations: write", "artifact-metadata: write",
+], "publication authorization");
+const preflight = publishJob.indexOf("name: Validate npm channel promotion authentication");
+assert.ok(preflight >= 0 && preflight < publishJob.indexOf("scripts/stage-github-release.mjs"));
+for (const marker of ["Recheck signed tag immediately before GitHub", "Recheck signed tag immediately before crates.io", "Recheck signed tag immediately before npm"]) {
+  assert.ok(publishJob.includes(marker), "each channel rechecks the signed tag");
 }
-includesAll(
-  releaseCompleteJob,
-  [
-    "name: Release publication aggregate",
-    "if: ${{ always() }}",
-    "needs: [version-check, package, attest, publication-preflight, receipt-init, github-release, publish-crates, publish-npm, verify-native-exact, promote-channels, verify-native-default, verify-channels]",
-    "contains(needs.*.result, 'failure')",
-    "contains(needs.*.result, 'cancelled')",
-    "contains(needs.*.result, 'skipped')",
-  ],
-  "release completion aggregate",
-);
-for (const [label, job] of [
-  ["GitHub Release", githubReleaseJob],
-  ["crates.io", publishCratesJob],
-  ["npm", publishNpmJob],
-]) {
-  includesAll(
-    job,
-    [
-      "Recheck signed tag immediately before",
-      "RELEASE_TAG: ${{ needs.version-check.outputs.tag }}",
-      "RELEASE_COMMIT: ${{ needs.version-check.outputs.commit }}",
-      'git cat-file -t "$RELEASE_TAG"',
-      'verify-tag "$RELEASE_TAG"',
-      'git rev-parse "${RELEASE_TAG}^{commit}"',
-    ],
-    `${label} publication tag guard`,
-  );
+for (const job of ["version-check", "package", "verify-exact", "verify-channels"]) {
+  assert.doesNotMatch(releaseJob(job), /secrets\.|id-token: write|contents: write/, `${job} must not receive publication credentials`);
 }
-includesAll(
-  githubReleaseJob,
-  [
-    'test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"',
-    'node release-tooling/scripts/stage-github-release.mjs --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --dist dist',
-  ],
-  "tested GitHub staging and existing-release recovery guard",
-);
+assert.doesNotMatch(releaseJob("promote-channels"), /id-token: write/, "dist-tag promotion uses explicit token authentication");
+includesAll(publishJob, [
+  'test "$(git -C release-tooling rev-parse HEAD)" = "$GITHUB_SHA"',
+  'node release-tooling/scripts/stage-github-release.mjs --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --dist dist',
+], "tested staging and immutable existing-release recovery");

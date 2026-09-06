@@ -12,8 +12,6 @@ pub enum SupportedLanguage {
     TypeScript,
     Tsx,
     JavaScript,
-    Python,
-    Go,
 }
 
 impl SupportedLanguage {
@@ -23,8 +21,6 @@ impl SupportedLanguage {
             "ts" | "mts" | "cts" => Some(SupportedLanguage::TypeScript),
             "tsx" => Some(SupportedLanguage::Tsx),
             "js" | "jsx" | "mjs" | "cjs" => Some(SupportedLanguage::JavaScript),
-            "py" => Some(SupportedLanguage::Python),
-            "go" => Some(SupportedLanguage::Go),
             _ => None,
         }
     }
@@ -35,8 +31,6 @@ impl SupportedLanguage {
             SupportedLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             SupportedLanguage::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
             SupportedLanguage::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            SupportedLanguage::Python => tree_sitter_python::LANGUAGE.into(),
-            SupportedLanguage::Go => tree_sitter_go::LANGUAGE.into(),
         }
     }
 
@@ -54,8 +48,6 @@ impl SupportedLanguage {
                         | "function_expression"
                 )
             }
-            SupportedLanguage::Python => kind == "function_definition",
-            SupportedLanguage::Go => matches!(kind, "function_declaration" | "method_declaration"),
         }
     }
 
@@ -87,6 +79,12 @@ impl SupportedLanguage {
         path: &std::path::Path,
         content: &str,
     ) -> anyhow::Result<Option<(Self, tree_sitter::Tree)>> {
+        if crate::discovery::classification::is_retired_source(path) {
+            anyhow::bail!(
+                "unsupported analysis request for `{}`; only Rust and JavaScript/TypeScript are supported",
+                path.display()
+            );
+        }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let Some(lang) = Self::from_extension(ext) else {
             return Ok(None);

@@ -93,16 +93,16 @@ fn javascript_package_scripts_supply_all_orchestration_commands() {
             write(
                 root,
                 "package.json",
-                r#"{"packageManager":"npm@10","scripts":{"format:check":"format-check","format":"format","lint":"lint","test":"test"}}"#,
+                r#"{"packageManager":"npm@10","scripts":{"format:check":"prettier --check .","format":"prettier --write .","lint":"eslint --fix .","test":"test"}}"#,
             )
         },
         |_, config, _| {
             assert_commands(
                 config,
                 [
-                    "npm run format:check",
-                    "npm run format",
-                    "npm run lint",
+                    "prettier --check .",
+                    "prettier --write .",
+                    "eslint --no-fix .",
                     "npm run test",
                 ],
             );
@@ -184,9 +184,7 @@ fn javascript_config_without_a_local_tool_stays_unconfigured() {
     balanced_case(
         "javascript-config-missing-tool",
         |root| write(root, "biome.json", "{}"),
-        |_, config, content| {
-            assert_unconfigured(config, content, "Biome configuration was detected")
-        },
+        |_, config, content| assert_unconfigured(config, content, "Biome requires"),
     );
 }
 
@@ -224,7 +222,9 @@ fn javascript_config_accepts_a_validated_local_executable() {
         |_, config, _| {
             assert_eq!(
                 config.orchestration.format_check.as_deref(),
-                Some("biome ci --linter-enabled=false .")
+                Some(
+                    "biome ci --formatter-enabled=true --linter-enabled=false --assist-enabled=false ."
+                )
             );
             assert_eq!(
                 config.orchestration.format.as_deref(),
@@ -232,42 +232,10 @@ fn javascript_config_accepts_a_validated_local_executable() {
             );
             assert_eq!(
                 config.orchestration.lint.as_deref(),
-                Some("biome ci --formatter-enabled=false .")
+                Some(
+                    "biome ci --linter-enabled=true --formatter-enabled=false --assist-enabled=false ."
+                )
             );
-        },
-    );
-}
-
-#[test]
-fn python_config_and_invalid_toml_are_reported_without_guessing() {
-    balanced_case(
-        "python-invalid-toml",
-        |root| write(root, "pyproject.toml", "[tool.ruff\n"),
-        |_, config, content| {
-            assert!(config.orchestration.format.is_none());
-            assert!(config.orchestration.lint.is_none());
-            assert!(content.contains("formatter command is not configured"));
-            assert!(content.contains("linter command is not configured"));
-        },
-    );
-    balanced_case(
-        "python-ruff-config",
-        |root| write(root, "ruff.toml", "line-length = 88\n"),
-        |_, config, _| {
-            assert_eq!(
-                config.orchestration.format_check.as_deref(),
-                Some("ruff format --check .")
-            );
-            assert_eq!(config.orchestration.lint.as_deref(), Some("ruff check ."));
-        },
-    );
-    balanced_case(
-        "python-test-config",
-        |root| write(root, "tox.ini", "[tox]\nenvlist = py\n"),
-        |_, config, _| {
-            assert_eq!(config.orchestration.test_cmd.as_deref(), Some("pytest"));
-            assert!(config.orchestration.format.is_none());
-            assert!(config.orchestration.lint.is_none());
         },
     );
 }
@@ -303,11 +271,8 @@ fn package_manager_lockfiles_are_explicit_and_deduplicated() {
             write(root, "bun.lockb", "legacy\n");
         },
         |_, config, _| {
-            assert_eq!(
-                config.orchestration.format.as_deref(),
-                Some("bun run format")
-            );
-            assert_eq!(config.orchestration.lint.as_deref(), Some("bun run lint"));
+            assert!(config.orchestration.format.is_none());
+            assert!(config.orchestration.lint.is_none());
         },
     );
 }

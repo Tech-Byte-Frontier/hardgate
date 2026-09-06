@@ -23,7 +23,6 @@ max_bytes = 100000
 
 [budgets.functions]
 max_cyclomatic = 100
-max_cognitive = 100
 max_parameters = 20
 max_lines = 1000
 max_nesting_depth = 20
@@ -45,7 +44,9 @@ fn check_json_flags_have_deterministic_precedence() {
 
     let full = run(
         fixture.as_ref(),
-        &["check", "--json", "--format", "terminal"],
+        &[
+            "check", "--checks", "policy", "--json", "--format", "terminal",
+        ],
     );
     assert_status(&full, true, "check --json --format terminal");
     let full_report = json(&full);
@@ -54,7 +55,14 @@ fn check_json_flags_have_deterministic_precedence() {
 
     let summary = run(
         fixture.as_ref(),
-        &["check", "--format", "json", "--summary"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--format",
+            "json",
+            "--summary",
+        ],
     );
     assert!(summary.status.success(), "{}", stderr(&summary));
     let summary_report = json(&summary);
@@ -68,7 +76,14 @@ fn check_missing_scope_is_a_structured_json_command_error() {
     let fixture = Fixture::new("entrypoint", "missing-scope", Some(BASE_CONFIG));
     let output = run(
         fixture.as_ref(),
-        &["check", "missing.rs", "--format", "json"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "missing.rs",
+            "--format",
+            "json",
+        ],
     );
 
     assert!(!output.status.success());
@@ -88,7 +103,10 @@ fn check_missing_scope_is_a_structured_json_command_error() {
 fn diff_without_git_is_a_structured_json_command_error() {
     let fixture = Fixture::new("entrypoint", "diff-without-git", Some(BASE_CONFIG));
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    let output = run(fixture.as_ref(), &["check", "--diff", "--format", "json"]);
+    let output = run(
+        fixture.as_ref(),
+        &["check", "--checks", "policy", "--diff", "--format", "json"],
+    );
 
     assert!(!output.status.success());
     let failure = json(&output);
@@ -102,7 +120,10 @@ fn diff_without_git_is_a_structured_json_command_error() {
 fn verify_empty_explicit_scope_remains_a_successful_scoped_report() {
     let fixture = Fixture::new("entrypoint", "empty-scope", Some(BASE_CONFIG));
     std::fs::create_dir(fixture.0.join("empty")).unwrap();
-    let output = run(fixture.as_ref(), &["verify", "empty", "--format", "json"]);
+    let output = run(
+        fixture.as_ref(),
+        &["check", "--checks", "policy", "empty", "--format", "json"],
+    );
 
     assert!(output.status.success(), "{}", stderr(&output));
     let report = json(&output);
@@ -195,7 +216,10 @@ fn verify_empty_mutation_report_list_is_blocking_evidence() {
     let fixture = Fixture::new("entrypoint", "empty-mutation-reports", Some(&config));
     fixture.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
 
-    let output = run(fixture.as_ref(), &["verify", "--format", "json"]);
+    let output = run(
+        fixture.as_ref(),
+        &["check", "--checks", "policy", "--format", "json"],
+    );
     assert!(!output.status.success());
     let report = json(&output);
     assert_eq!(report["passed"], false);
@@ -280,7 +304,10 @@ fn public_empty_discovery_printer_distinguishes_scope_and_diff() {
 #[test]
 fn invalid_output_format_is_rejected_before_gate_execution() {
     let fixture = Fixture::new("entrypoint", "invalid-format", Some(BASE_CONFIG));
-    let output = run(fixture.as_ref(), &["check", "--format", "yaml"]);
+    let output = run(
+        fixture.as_ref(),
+        &["check", "--checks", "policy", "--format", "yaml"],
+    );
 
     assert!(!output.status.success());
     assert!(stdout(&output).is_empty());

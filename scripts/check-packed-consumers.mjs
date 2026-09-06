@@ -8,6 +8,7 @@ import path from "node:path";
 
 import { inspectPackedArtifacts, snapshotArchiveFiles, verifyArchiveSnapshot } from "./packed-consumer-artifacts.mjs";
 import { startLocalRegistry } from "./packed-consumer-registry.mjs";
+import { installAndVerifyGlobal } from "./packed-consumer-global.mjs";
 import { createConsumerRoot, expectedVersion, installAndVerify } from "./packed-consumer-runtime.mjs";
 
 export function aggregateCleanupErrors(primaryError, cleanupErrors) {
@@ -64,6 +65,12 @@ export async function checkPackedConsumers({ packagesDir, binary, version }) {
         expectedHash: inspected.expectedHash,
         tempRoot,
       }));
+    }
+    for (const manager of ["npm", "pnpm"]) {
+      const root = createConsumerRoot(tempRoot, `${manager}-global`);
+      consumers.push(await installAndVerifyGlobal({ manager, root, registry, version: inspected.expectedVersion,
+        expectedOutput, expectedHash: inspected.expectedHash, expectedBinary: inspected.expectedBinary,
+        wrapperLauncherBytes: inspected.wrapperLauncherBytes, tempRoot }));
     }
     verifyArchiveSnapshot(snapshot);
     result = {
@@ -126,7 +133,7 @@ function renderReport(report) {
   console.log(`packed consumers: OK (${report.version})`);
   console.log(`host optional dependency: ${report.hostPackage}`);
   console.log(`native binary sha256: ${report.binarySha256}`);
-  for (const consumer of report.consumers) console.log(`${consumer.manager}: ${consumer.versionOutput} (${consumer.nativeSha256})`);
+  for (const consumer of report.consumers) console.log(`${consumer.manager} (${consumer.scope}): ${consumer.versionOutput} (${consumer.nativeSha256})`);
 }
 
 async function main(argv = process.argv.slice(2)) {

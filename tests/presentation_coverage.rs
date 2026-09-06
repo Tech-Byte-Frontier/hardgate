@@ -38,7 +38,9 @@ fn color_controls_and_empty_environment_values_have_observable_effects() {
     let fixture = fixture("color");
     let always = run_with_env(
         &fixture,
-        &["check", "--format", "terminal", "--color", "always"],
+        &[
+            "check", "--checks", "policy", "--format", "terminal", "--color", "always",
+        ],
         &[("NO_COLOR", Some("1")), ("CLICOLOR_FORCE", Some("1"))],
     );
     assert_eq!(always.status.code(), Some(1));
@@ -46,7 +48,9 @@ fn color_controls_and_empty_environment_values_have_observable_effects() {
 
     let never = run_with_env(
         &fixture,
-        &["check", "--format", "terminal", "--color", "never"],
+        &[
+            "check", "--checks", "policy", "--format", "terminal", "--color", "never",
+        ],
         &[("NO_COLOR", None), ("CLICOLOR_FORCE", Some("1"))],
     );
     assert_eq!(never.status.code(), Some(1));
@@ -54,7 +58,9 @@ fn color_controls_and_empty_environment_values_have_observable_effects() {
 
     let no_color = run_with_env(
         &fixture,
-        &["check", "--format", "terminal", "--color", "auto"],
+        &[
+            "check", "--checks", "policy", "--format", "terminal", "--color", "auto",
+        ],
         &[("NO_COLOR", Some("1")), ("CLICOLOR_FORCE", None)],
     );
     assert_eq!(no_color.status.code(), Some(1));
@@ -62,7 +68,9 @@ fn color_controls_and_empty_environment_values_have_observable_effects() {
 
     let forced = run_with_env(
         &fixture,
-        &["check", "--format", "terminal", "--color", "auto"],
+        &[
+            "check", "--checks", "policy", "--format", "terminal", "--color", "auto",
+        ],
         &[("NO_COLOR", None), ("CLICOLOR_FORCE", Some("1"))],
     );
     assert_eq!(forced.status.code(), Some(1));
@@ -70,7 +78,9 @@ fn color_controls_and_empty_environment_values_have_observable_effects() {
 
     let empty_values = run_with_env(
         &fixture,
-        &["check", "--format", "terminal", "--color", "auto"],
+        &[
+            "check", "--checks", "policy", "--format", "terminal", "--color", "auto",
+        ],
         &[
             ("NO_COLOR", Some("")),
             ("CLICOLOR_FORCE", Some("")),
@@ -99,12 +109,24 @@ fn timing_and_error_formats_preserve_observable_runtime_contracts() {
     assert_eq!(missing_report["stage"], "scan");
     assert!(stderr(&missing).is_empty());
 
-    let json_args = run(&fixture, &["check", "--format=json", "--unknown-option"]);
+    let json_args = run(
+        &fixture,
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--format=json",
+            "--unknown-option",
+        ],
+    );
     assert_eq!(json_args.status.code(), Some(2));
     assert_eq!(json(&json_args)["stage"], "arguments");
     assert!(stderr(&json_args).is_empty());
 
-    let text_args = run(&fixture, &["check", "--unknown-option"]);
+    let text_args = run(
+        &fixture,
+        &["check", "--checks", "policy", "--unknown-option"],
+    );
     assert_eq!(text_args.status.code(), Some(2));
     assert!(stdout(&text_args).is_empty());
     assert!(stderr(&text_args).contains("error:"));

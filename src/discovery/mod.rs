@@ -202,7 +202,7 @@ pub(crate) fn discover_paths(options: DiscoverOptions) -> Result<DiscoveryResult
             continue;
         }
 
-        if is_inventory_file(path) {
+        if classification::is_discoverable_file(path) {
             let rel = path.strip_prefix(options.root).unwrap_or(path);
             if has_exclusions && exclusion_glob.is_match(rel) {
                 excluded_files.push(path.to_path_buf());
@@ -328,7 +328,7 @@ impl<'a> GitDiffCollector<'a> {
             return;
         }
         let path = self.root.join(target);
-        if path.is_file() && is_inventory_file(&path) {
+        if path.is_file() && classification::is_discoverable_file(&path) {
             let rel = path.strip_prefix(self.root).unwrap_or(&path);
             if self.has_exclusions && self.exclusions.is_match(rel) {
                 self.excluded.insert(path.clone());
@@ -337,3 +337,4 @@ impl<'a> GitDiffCollector<'a> {
         }
     }
 }
+pub(crate) mod rust_ownership;

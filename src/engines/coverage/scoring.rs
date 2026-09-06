@@ -56,7 +56,6 @@ impl CoverageScorer {
             violations: &mut violations,
         };
         evaluate_missing_function_files(&self.config, &mut context);
-        evaluate_function_crap(self.config.max_crap_score, &mut context);
         evaluate_critical_paths(&mut context, self.config.critical_paths.as_deref());
         violations
     }
@@ -222,47 +221,6 @@ fn evaluate_missing_function_files(
     }
 }
 
-fn evaluate_function_crap(max_crap: Option<f64>, context: &mut ScoreContext<'_>) {
-    let max_crap = max_crap.unwrap_or(25.0);
-    for function in context.functions {
-        if !function_in_scope(context.index, context.source_keys, &function.file) {
-            continue;
-        }
-        let Some((_, coverage)) = context.index.resolve(context.coverage_map, &function.file)
-        else {
-            continue;
-        };
-        let Some(coverage_ratio) =
-            calculate_function_coverage_ratio(coverage, function.start_line, function.end_line)
-        else {
-            continue;
-        };
-        let complexity = function.cyclomatic as f64;
-        let crap = complexity.powi(2) * (1.0 - coverage_ratio).powi(3) + complexity;
-        if crap > max_crap {
-            context.violations.push(CoverageViolation {
-                file: function.file.clone(),
-                function_name: Some(function.name.clone()),
-                metric: "CRAP Score".to_string(),
-                actual: crap,
-                limit: max_crap,
-                message: format!(
-                    "CRAP score for `{}` is {crap:.1} (limit: {max_crap:.1}). Complexity: {}, Coverage: {:.1}%",
-                    function.name,
-                    function.cyclomatic,
-                    coverage_ratio * 100.0
-                ),
-                recommendation: format!(
-                    "Write tests covering lines {}-{} in `{}` or reduce complexity.",
-                    function.start_line,
-                    function.end_line,
-                    function.file.display()
-                ),
-            });
-        }
-    }
-}
-
 fn evaluate_critical_paths(context: &mut ScoreContext<'_>, critical_paths: Option<&[String]>) {
     let Some(critical_paths) = critical_paths else {
         return;
@@ -313,28 +271,4 @@ fn function_in_scope(
     source_keys
         .map(|keys| index.key(path).is_some_and(|key| keys.contains(&key)))
         .unwrap_or(true)
-}
-
-fn calculate_function_coverage_ratio(
-    coverage: &FileCoverage,
-    start_line: usize,
-    end_line: usize,
-) -> Option<f64> {
-    if end_line < start_line {
-        return None;
-    }
-    let (executable, hit) = coverage
-        .line_hits
-        .iter()
-        .filter(|&(&line, _)| (start_line..=end_line).contains(&line))
-        .fold((0usize, 0usize), |(executable, hit), (_, hits)| {
-            let executable = executable.saturating_add(1);
-            let hit = hit.saturating_add(usize::from(*hits > 0));
-            (executable, hit)
-        });
-    if executable == 0 {
-        None
-    } else {
-        Some(super::calc_ratio(hit, executable))
-    }
 }

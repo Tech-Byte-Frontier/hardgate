@@ -44,7 +44,7 @@ fn remediation(step: &str) -> &'static str {
             "Generate current line/function/branch LCOV for the selected source and configure coverage.report (or --coverage-report); preserve missing-source failures."
         }
         "mutation-report" => {
-            "Run the configured mutation tool against current source with a successful baseline and non-empty sample; set mutation.reports (or verify --mutation-report)."
+            "Run `hardgate evidence cargo-mutants` or `hardgate evidence stryker` against current source; set mutation.reports (or check --mutation-report)."
         }
         "legacy-ratchet" => {
             "Set legacy.reference_branch to a resolvable, trusted Git reference and retain its source history."

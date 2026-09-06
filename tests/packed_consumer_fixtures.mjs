@@ -46,24 +46,18 @@ function fixtureEnvironment(fixtureRoot) {
 export function makeFixtureArchives({ fixtureRoot, root }) {
   const packagesDir = path.join(fixtureRoot, "packages");
   fs.mkdirSync(packagesDir, { recursive: true });
-  const nativeSource = path.join(fixtureRoot, "fixture.c");
-  const nativeBinary = path.join(fixtureRoot, "fixture-native");
-  fs.writeFileSync(nativeSource, `#include <stdio.h>\n#include <string.h>\nint main(int argc, char **argv) {\n  if (argc == 2 && strcmp(argv[1], "--version") == 0) puts("hardgate 0.5.0 (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)");\n  return 0;\n}\n`);
-  run("cc", ["-O2", nativeSource, "-o", nativeBinary]);
-  fs.chmodSync(nativeBinary, 0o755);
-  const names = [
-    "hardgate-linux-x64", "hardgate-linux-x64-musl", "hardgate-linux-arm64",
-    "hardgate-linux-arm64-musl", "hardgate-darwin-x64", "hardgate-darwin-arm64",
-  ];
+  const nativeBinary = path.resolve(process.env.HARDGATE_BINARY ?? path.join(root, "target/release/hardgate"));
+  fs.accessSync(nativeBinary, fs.constants.X_OK);
+  const names = ["hardgate-linux-x64"];
   for (const name of ["hardgate", ...names]) {
     const packageDirectory = path.join(fixtureRoot, name);
     fs.cpSync(path.join(root, "npm", name), packageDirectory, { recursive: true });
-    // This archive fixture deliberately represents a historical release;
-    // keep it independent of the next source version under development.
+    // Pack the actual current native binary; installed check acceptance must
+    // execute real Rust formatting, Clippy, and tests.
     const manifestPath = path.join(packageDirectory, "package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    manifest.version = "0.5.0";
-    for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = "0.5.0";
+    manifest.version = "0.6.0";
+    for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = "0.6.0";
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     if (name !== "hardgate") {
       fs.copyFileSync(nativeBinary, path.join(packageDirectory, "bin", "hardgate"));
@@ -162,7 +156,7 @@ export async function makeSkippedOptionalRoot({ fixtureRoot, nativeBinary, regis
   fs.mkdirSync(cache, { recursive: true });
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(userConfig, `registry=${registry.baseUrl}\ncache=${cache}\nomit=optional\nignore-scripts=false\naudit=false\nfund=false\n`);
-  await runAsync("npm", ["install", "--no-audit", "--no-fund", "--omit=optional", "--registry", registry.baseUrl, "@tech-byte-frontier/hardgate@0.5.0"], { cwd: root, env });
+  await runAsync("npm", ["install", "--no-audit", "--no-fund", "--omit=optional", "--registry", registry.baseUrl, "@tech-byte-frontier/hardgate@0.6.0"], { cwd: root, env });
   fs.copyFileSync(nativeBinary, path.join(ambient, "hardgate"));
   fs.chmodSync(path.join(ambient, "hardgate"), 0o755);
   fs.writeFileSync(path.join(sentinel, "hardgate"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });

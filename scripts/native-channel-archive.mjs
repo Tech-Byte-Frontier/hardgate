@@ -101,7 +101,6 @@ async function verifyArchiveAbi(binaryPath, descriptor, { runProcess, policy }) 
     symbols,
     notes,
     abi: descriptor.abi,
-    targetMarkerValid: descriptor.abi === "musl" && descriptor.target.endsWith("-musl"),
   });
   if (!evidence.ok) fail(`${descriptor.name} ${descriptor.abi} ABI evidence failed: ${evidence.reason}`);
 }

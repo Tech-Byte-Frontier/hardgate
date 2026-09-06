@@ -68,11 +68,6 @@ if (name === '@tech-byte-frontier/hardgate') {
   const wrapperRoot = path.join(nodeModules, '@tech-byte-frontier', 'hardgate');
   const optional = {
     'hardgate-linux-x64': selectedVersion,
-    'hardgate-linux-x64-musl': selectedVersion,
-    'hardgate-linux-arm64': selectedVersion,
-    'hardgate-linux-arm64-musl': selectedVersion,
-    'hardgate-darwin-x64': selectedVersion,
-    'hardgate-darwin-arm64': selectedVersion,
   };
   manifest(wrapperRoot, {name, version: selectedVersion, optionalDependencies: optional, bin: {hardgate: 'bin/hardgate.js'}});
   const launcher = path.join(wrapperRoot, 'bin', 'hardgate.js');

@@ -1,18 +1,10 @@
 #[path = "support/fs.rs"]
 mod fs;
 
-#[path = "support/mutations.rs"]
-mod mutations;
-
 use fs::tempdir;
 use hardgate::config::MutationConfig;
-use hardgate::engines::{AstMutationGenerator, MutationGatekeeper, MutationStats};
-use mutations::has_mutation;
+use hardgate::engines::{MutationGatekeeper, MutationStats};
 use std::path::{Path, PathBuf};
-
-fn default_value<T: Default>() -> T {
-    T::default()
-}
 
 fn gatekeeper() -> MutationGatekeeper {
     gatekeeper_with_floor(85.0)
@@ -23,9 +15,6 @@ fn gatekeeper_with_floor(min_score: f64) -> MutationGatekeeper {
         enabled: true,
         min_score: Some(min_score),
         reports: None,
-        test_cmd: None,
-        timeout_secs: Some(10),
-        max_mutants: Some(30),
     })
 }
 
@@ -35,26 +24,22 @@ fn write_report(root: &Path, name: &str, content: &str) -> PathBuf {
     path
 }
 
-#[test]
-fn test_ast_mutation_generator() {
-    let mut generator = default_value::<AstMutationGenerator>();
-
-    let code = r#"
-    fn evaluate(a: i32, b: i32) -> bool {
-        if a == b && a > 0 {
-            return true;
-        }
-        false
-    }
-    "#;
-
-    let mutants = generator.generate_mutants(Path::new("src/calc.rs"), code);
-    assert!(!mutants.is_empty());
-    assert!(has_mutation(&mutants, "==", "!="));
-    assert!(has_mutation(&mutants, "&&", "||"));
-    assert!(has_mutation(&mutants, ">", "<="));
-    assert!(has_mutation(&mutants, "true", "false"));
-}
+// Structured shape emitted by cargo-mutants 27.1.0; these are parser inputs,
+// separate from the real producer acceptance trial.
+const CARGO_CAUGHT: &str = r#"{
+  "cargo_mutants_version":"27.1.0", "end_time":"2026-09-05T00:00:00Z",
+  "total_mutants":1,"caught":1,"missed":0,"timeout":0,"unviable":0,"success":0,
+  "outcomes":[
+    {"scenario":"Baseline","summary":"Success","phase_results":[
+      {"phase":"Build","process_status":"Success","argv":["cargo","test","--no-run"]},
+      {"phase":"Test","process_status":"Success","argv":["cargo","test"]}
+    ]},
+    {"scenario":{"Mutant":{"file":"src/lib.rs","replacement":"0"}},"summary":"CaughtMutant","phase_results":[
+      {"phase":"Build","process_status":"Success","argv":["cargo","test","--no-run"]},
+      {"phase":"Test","process_status":{"Failure":101},"argv":["cargo","test"]}
+    ]}
+  ]
+}"#;
 
 #[test]
 fn test_mutation_report_parsers() {
@@ -71,11 +56,7 @@ fn test_mutation_report_parsers() {
     assert!(low.iter().any(|x| x.metric == "Mutation Kill Rate"));
 
     // cargo-mutants shape: everything caught = 100%, no violation.
-    let caught = write_report(
-        &tmp,
-        "cm.json",
-        r#"{"outcomes": [{"summary": "caught"}, {"summary": "caught"}]}"#,
-    );
+    let caught = write_report(&tmp, "cm.json", CARGO_CAUGHT);
     assert!(keeper.evaluate_report(&caught).unwrap().is_empty());
 
     // Generic tallies behave the same at 90%+.
@@ -303,41 +284,29 @@ fn test_generic_counts_reject_overflow_and_mismatched_total() {
 }
 
 #[test]
-fn test_cargo_mutants_integrity_statuses_and_declared_total() {
+fn test_cargo_mutants_require_baseline_executed_tests_and_consistent_counts() {
     let tmp = tempdir("mut-cargo-integrity");
     let keeper = gatekeeper();
-    let report = write_report(
-        &tmp,
-        "cargo.json",
-        r#"{"total": 7, "outcomes":[
-            {"summary":"caught"},
-            {"summary":"missed"},
-            {"summary":"timeout"},
-            {"summary":"compile_error"},
-            {"summary":"error"},
-            {"summary":"equivalent"},
-            {"summary":"unviable"}
-        ]}"#,
-    );
-    let violations = keeper.evaluate_report(&report).unwrap();
-    for metric in [
-        "Mutation Kill Rate",
-        "Mutation Timeouts",
-        "Mutation Compile Errors",
-        "Mutation Runner Errors",
-        "Mutation Unviable Mutants",
-    ] {
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.metric == metric),
-            "missing {metric}"
-        );
+    let original: serde_json::Value = serde_json::from_str(CARGO_CAUGHT).unwrap();
+    let mut no_baseline = original.clone();
+    no_baseline["outcomes"].as_array_mut().unwrap().remove(0);
+    let mut no_tests = original.clone();
+    no_tests["outcomes"][1]["phase_results"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let mut wrong_count = original.clone();
+    wrong_count["caught"] = 2.into();
+    let mut wrong_status = original.clone();
+    wrong_status["outcomes"][1]["phase_results"][1]["process_status"] = "Success".into();
+    let mut unfinished = original;
+    unfinished["end_time"] = serde_json::Value::Null;
+    for (index, invalid) in [no_baseline, no_tests, wrong_count, wrong_status, unfinished]
+        .iter()
+        .enumerate()
+    {
+        let path = write_report(&tmp, &format!("invalid-{index}.json"), &invalid.to_string());
+        assert!(keeper.evaluate_report(&path).is_err(), "case {index}");
     }
-    assert!(
-        !violations
-            .iter()
-            .any(|violation| violation.metric == "Mutation Equivalent Mutants")
-    );
-    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::remove_dir_all(tmp).unwrap();
 }

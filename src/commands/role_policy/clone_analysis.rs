@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) struct CloneRun<'a> {
     pub snapshot: &'a SourceSnapshot,
+    pub ownership: &'a crate::discovery::rust_ownership::RustOwnership,
     pub selected_ids: &'a [FileId],
     pub changed_files: &'a [PathBuf],
     pub config: &'a HardgateConfig,
@@ -49,41 +50,55 @@ pub(crate) fn run_clone_analysis(input: CloneRun<'_>, report: &mut GateReport) -
     Ok(())
 }
 
-fn clone_group<'a>(
-    input: &'a CloneRun<'_>,
+fn clone_group(
+    input: &CloneRun<'_>,
     role: FileRole,
     selected: &HashSet<FileId>,
     report: &mut GateReport,
-) -> Vec<(PathBuf, &'a str)> {
+) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();
     for source in &input.snapshot.files {
-        if source.classified.role != role || (!input.diff && !selected.contains(&source.id)) {
+        if (!input.diff && !selected.contains(&source.id))
+            || !input.ownership.has_role(&source.classified, role)
+        {
             continue;
         }
         match &source.content {
-            Ok(text) => files.push((source.classified.path.clone(), text.as_ref())),
-            Err(error) => record_role_evidence_failure(
-                report,
-                RoleEvidence {
-                    config: input.config,
-                    role,
-                    step: "read-clone-index",
-                    target: &source.classified.path,
-                    message: format!("Unable to read file required by full clone index: {error}"),
-                },
+            Ok(text) => files.extend(
+                input
+                    .ownership
+                    .views(&source.classified, text)
+                    .into_iter()
+                    .filter(|view| view.file.role == role)
+                    .map(|view| (view.file.path, view.text)),
             ),
+            Err(error) if input.ownership.file_role(&source.classified) == role => {
+                record_role_evidence_failure(
+                    report,
+                    RoleEvidence {
+                        config: input.config,
+                        role,
+                        step: "read-clone-index",
+                        target: &source.classified.path,
+                        message: format!(
+                            "Unable to read file required by full clone index: {error}"
+                        ),
+                    },
+                )
+            }
+            Err(_) => {}
         }
     }
     files
 }
 
-struct CloneGroup<'a> {
+struct CloneGroup {
     role: FileRole,
-    files: Vec<(PathBuf, &'a str)>,
+    files: Vec<(PathBuf, String)>,
     detector: CloneDetector,
 }
 
-fn run_clone_group(group: CloneGroup<'_>, input: &CloneRun<'_>, report: &mut GateReport) {
+fn run_clone_group(group: CloneGroup, input: &CloneRun<'_>, report: &mut GateReport) {
     let CloneGroup {
         role,
         files,
@@ -99,14 +114,15 @@ fn run_clone_group(group: CloneGroup<'_>, input: &CloneRun<'_>, report: &mut Gat
             "{count} {noun} excluded from clone detection via hardgate.toml."
         ));
     }
-    if files.len() < 2 {
+    if files.is_empty() {
         return;
     }
     report.observe_engine(
         crate::diagnostics::execution::EngineId::Clones,
         crate::diagnostics::execution::EngineState::Completed,
     );
-    match detector.detect_clones_borrowed(&files, input.root, input.changed_files) {
+    match detector.detect_clones_checked_with_changed_files(&files, input.root, input.changed_files)
+    {
         Ok(mut findings) => {
             if input.diff {
                 findings.retain(|finding| {

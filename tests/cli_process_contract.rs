@@ -17,7 +17,7 @@ fn fixture(tag: &str) -> Fixture {
 fn exits_distinguish_policy_failure_missing_evidence_and_invalid_configuration() {
     let fixture = fixture("exit-codes");
     for format in ["terminal", "agent", "json", "compact", "summary"] {
-        let args = ["check", "--format", format];
+        let args = ["check", "--checks", "policy", "--format", format];
         assert_eq!(run(&fixture, &args).status.code(), Some(1), "{format}");
         fixture.write("src/value.rs", "pub fn answer() -> i32 { 17 }\n");
         assert_eq!(run(&fixture, &args).status.code(), Some(0), "{format}");
@@ -45,9 +45,16 @@ fn exits_distinguish_policy_failure_missing_evidence_and_invalid_configuration()
 fn argument_errors_honor_requested_json_without_running_analysis() {
     let fixture = fixture("arguments");
     for args in [
-        vec!["check", "--json", "--threads", "0"],
+        vec!["check", "--checks", "policy", "--json", "--threads", "0"],
         vec!["scan", "--format=json"],
-        vec!["check", "--format", "json", "--unknown-option"],
+        vec![
+            "check",
+            "--checks",
+            "policy",
+            "--format",
+            "json",
+            "--unknown-option",
+        ],
     ] {
         let output = run(&fixture, &args);
         assert_eq!(output.status.code(), Some(2));
@@ -68,7 +75,7 @@ fn incomplete_report_records_and_unconfigured_freshness_use_exit_two() {
         "[generated]\nenabled = true\n",
     ] {
         fixture.write("hardgate.toml", &format!("{CONFIG}\n{policy}"));
-        let output = run(&fixture, &["check", "--json"]);
+        let output = run(&fixture, &["check", "--checks", "policy", "--json"]);
         assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
         assert_eq!(json(&output)["passed"], false);
     }
@@ -100,8 +107,22 @@ fn worker_limits_preserve_findings_and_timing_is_opt_in_stderr() {
             &SOURCE.replace("decide", &format!("decide_{index}")),
         );
     }
-    let mut single = json(&run(&fixture, &["check", "--json", "--threads", "1"]));
-    let output = run(&fixture, &["check", "--json", "--threads", "2", "--timing"]);
+    let mut single = json(&run(
+        &fixture,
+        &["check", "--checks", "policy", "--json", "--threads", "1"],
+    ));
+    let output = run(
+        &fixture,
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--json",
+            "--threads",
+            "2",
+            "--timing",
+        ],
+    );
     let mut parallel = json(&output);
     single.as_object_mut().unwrap().remove("duration_ms");
     parallel.as_object_mut().unwrap().remove("duration_ms");
@@ -119,7 +140,9 @@ fn color_flags_override_environment_and_json_stays_plain() {
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_hardgate"))
             .current_dir(&fixture.0)
-            .args(["check", "--format", format, "--color", color])
+            .args([
+                "check", "--checks", "policy", "--format", format, "--color", color,
+            ])
             .env("NO_COLOR", "1")
             .env("CLICOLOR_FORCE", "1")
             .output()
@@ -130,7 +153,7 @@ fn color_flags_override_environment_and_json_stays_plain() {
 
 #[cfg(unix)]
 #[test]
-fn already_closed_stdout_never_panics_or_starts_mutation_children() {
+fn already_closed_stdout_never_panics() {
     use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
     use std::process::Stdio;
@@ -140,21 +163,14 @@ fn already_closed_stdout_never_panics_or_starts_mutation_children() {
         &format!("{CONFIG}\n[mutation]\nenabled = true\n"),
     );
     let cases = [
-        vec!["check", "--format", "terminal"],
-        vec!["check", "--format", "agent"],
-        vec!["check", "--json"],
-        vec!["check", "--compact"],
-        vec!["check", "--summary"],
+        vec!["check", "--checks", "policy", "--format", "terminal"],
+        vec!["check", "--checks", "policy", "--format", "agent"],
+        vec!["check", "--checks", "policy", "--json"],
+        vec!["check", "--checks", "policy", "--compact"],
+        vec!["check", "--checks", "policy", "--summary"],
         vec!["scan", "src/value.rs", "--json"],
         vec!["config", "--format", "json"],
-        vec!["check", "--json", "--threads", "0"],
-        vec![
-            "mutate",
-            "--scoped",
-            "src/value.rs",
-            "--test-cmd",
-            "touch unexpected-child",
-        ],
+        vec!["check", "--checks", "policy", "--json", "--threads", "0"],
     ];
     for args in cases {
         let (reader, writer) = UnixStream::pair().unwrap();
@@ -176,7 +192,6 @@ fn already_closed_stdout_never_panics_or_starts_mutation_children() {
         );
         assert!(output.stderr.is_empty());
     }
-    assert!(!fixture.join("unexpected-child").exists());
     assert_eq!(
         std::fs::read_to_string(fixture.join("src/value.rs")).unwrap(),
         SOURCE

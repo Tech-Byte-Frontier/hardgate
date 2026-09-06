@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { createRequire } from "node:module";
 
+import { verifyInstalledCheck } from "./installed-check.mjs";
 import { runReleaseProcess } from "./release-process.mjs";
 import { WRAPPER_NAME } from "./packed-consumer-artifacts.mjs";
 
@@ -16,7 +17,7 @@ function fail(message) {
   throw new Error(message);
 }
 
-function managerPath(name) {
+export function managerPath(name) {
   const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
   for (const entry of entries) {
     const candidate = path.join(entry, name);
@@ -37,6 +38,8 @@ function clearAmbientConfig(env) {
   for (const key of [
     "HARDGATE_BINARY", "HARDGATE_BINARY_PATH", "HARDGATE_LAUNCHER_DEPTH", "NODE_PATH", "NODE_OPTIONS",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+    "NODE_AUTH_TOKEN", "NPM_TOKEN", "CARGO_REGISTRY_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
   ]) delete env[key];
 }
 
@@ -100,7 +103,7 @@ function prepareConsumerDirectories(env, cache, store) {
   }
 }
 
-function cleanConsumerEnvironment(root, registryUrl, cache, store) {
+export function cleanConsumerEnvironment(root, registryUrl, cache, store) {
   const env = { ...process.env };
   clearAmbientConfig(env);
   Object.assign(env, environmentPaths(root, cache, store));
@@ -112,7 +115,7 @@ function cleanConsumerEnvironment(root, registryUrl, cache, store) {
   return env;
 }
 
-function invocationEnvironment(root, installEnvironment) {
+export function invocationEnvironment(root, installEnvironment) {
   return { ...installEnvironment, PATH: privateRuntimePath(root) };
 }
 
@@ -219,7 +222,7 @@ export function verifyResolvedNative({ root, resolved, expectedNative, label }) 
   return actual;
 }
 
-async function boundedProcess(command, args, options, label) {
+export async function boundedProcess(command, args, options, label) {
   try {
     return await runReleaseProcess(command, args, {
       cwd: options.cwd, env: options.env, timeoutMs: PROCESS_TIMEOUT_MS, maxBuffer: PROCESS_OUTPUT_BYTES,
@@ -286,7 +289,8 @@ export async function installAndVerify({ manager, root, registry, version, host,
   verifyResolvedNative({ root, resolved: resolvedNative, expectedNative: nativePackage.binary, label: `${manager} wrapper` });
   const output = (await boundedProcess(installedWrapperBinary, ["--version"], { cwd: root, env: invocationEnv }, `${manager} packed consumer invocation`)).trim();
   if (output !== expectedOutput) fail(`${manager} installed wrapper reported ${JSON.stringify(output)}; expected ${JSON.stringify(expectedOutput)}`);
-  return { manager, nativeSha256: installedHash, versionOutput: output };
+  const acceptance = await verifyInstalledCheck(installedWrapperBinary, { parent: tempRoot, env: invocationEnv });
+  return { manager, scope: "project", nativeSha256: installedHash, versionOutput: output, acceptance };
 }
 
 export async function expectedVersion(binary, version, tempRoot) {

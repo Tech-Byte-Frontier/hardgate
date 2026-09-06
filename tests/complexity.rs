@@ -14,7 +14,7 @@ fn analyze_one(path: &str, code: &str) -> FunctionMetrics {
     found.into_iter().next().unwrap()
 }
 
-/// OneAnalyzer per language, driven by a table so the four cases share
+/// OneAnalyzer per language, driven by a table so the supported cases share
 /// a single assertion path instead of four cloned blocks.
 #[test]
 fn test_complexity_analyzers() {
@@ -41,41 +41,16 @@ fn test_complexity_analyzers() {
         }
     }
     "#;
-    let py_code = r#"
-def calculate(data):
-    total = 0
-    for x in data:
-        if x > 10:
-            total += x
-    return total
-"#;
-    let go_code = r#"
-package main
-
-func SumPositive(nums []int) int {
-    sum := 0
-    for _, n := range nums {
-        if n > 0 {
-            sum += n
-        }
-    }
-    return sum
-}
-"#;
-
-    // (path, code, expected name, expected params, min cyclomatic, min cognitive)
+    // (path, code, expected name, expected params, min cyclomatic)
     let cases = [
-        ("src/test.rs", rust_code, "complex_decision", 2, 4, 3),
-        ("src/test.ts", ts_code, "classify", 1, 2, 2),
-        ("src/test.py", py_code, "calculate", 1, 2, 0),
-        ("src/test.go", go_code, "SumPositive", 1, 2, 0),
+        ("src/test.rs", rust_code, "complex_decision", 2, 4),
+        ("src/test.ts", ts_code, "classify", 1, 2),
     ];
-    for (path, code, name, params, cyclo, cog) in cases {
+    for (path, code, name, params, cyclo) in cases {
         let f = analyze_one(path, code);
         assert_eq!(f.name, name, "wrong symbol for {path}");
         assert_eq!(f.parameters, params, "wrong arity for {name}");
         assert!(f.cyclomatic >= cyclo, "low cyclomatic for {name}");
-        assert!(f.cognitive >= cog, "low cognitive for {name}");
     }
 }
 
@@ -97,52 +72,44 @@ fn test_complexity_ast_breakdown() {
 
     let f = analyze_one("src/test.rs", code);
 
-    // Both the outer if and the nested if (higher score) must be reported.
-    assert!(!f.cognitive_breakdown.is_empty());
-    assert!(f.cognitive_breakdown.iter().any(|c| c.score >= 2));
+    // Both decision branches contribute to the cyclomatic score.
     assert!(!f.cyclomatic_breakdown.is_empty());
 
     let budgets = FunctionBudgets {
-        max_cognitive: Some(1),
+        max_cyclomatic: Some(1),
         ..Default::default()
     };
     let violations = ComplexityAnalyzer::check_violations(std::slice::from_ref(&f), &budgets);
     assert_eq!(violations.len(), 1);
     assert!(!violations[0].breakdown.is_empty());
-    assert!(violations[0].breakdown[0].score >= 2);
+    assert!(violations[0].breakdown[0].score == 1);
 }
 
 #[test]
-fn test_complexity_advanced_budgets_enforced() {
+fn test_statement_budget_enforced() {
     let budgets = FunctionBudgets {
-        max_halstead_difficulty: Some(10.0),
         max_statements: Some(5),
-        max_abc: Some(10.0),
         ..Default::default()
     };
-    let bad = metrics::sample_metrics(99, 2, 99.0, 99.0);
+    let bad = metrics::sample_metrics(99);
     let bad_violations = ComplexityAnalyzer::check_violations(&[bad], &budgets);
     let reported: Vec<&str> = bad_violations.iter().map(|v| v.metric.as_str()).collect();
-    for expected in ["Halstead Difficulty", "Statement Count", "ABC Score"] {
-        assert!(reported.contains(&expected), "missing {expected}");
-    }
+    assert_eq!(reported, ["Statement Count"]);
 
-    let good = metrics::sample_metrics(1, 2, 1.0, 1.0);
+    let good = metrics::sample_metrics(1);
     assert!(ComplexityAnalyzer::check_violations(&[good], &budgets).is_empty());
 }
 
 #[test]
 fn test_limit_violation_details_and_order_are_preserved() {
-    let mut function = metrics::sample_metrics(99, 2, 99.0, 99.0);
+    let mut function = metrics::sample_metrics(99);
     function.parameters = 6;
     function.max_nesting_depth = 6;
     let budgets = FunctionBudgets {
         max_parameters: Some(4),
         max_lines: Some(80),
         max_nesting_depth: Some(4),
-        max_halstead_difficulty: Some(80.0),
         max_statements: Some(30),
-        max_abc: Some(10.0),
         ..Default::default()
     };
     let violations =
@@ -160,7 +127,7 @@ fn test_limit_violation_details_and_order_are_preserved() {
             99.0,
             80.0,
             "Function body spans 99 lines (budget: 80)",
-            "Split `untested_monster` into smaller focused functions.",
+            "Review code and documentation in `untested_monster` separately; extract cohesive code only where it improves clarity.",
         ),
         (
             "Nesting Depth",
@@ -170,25 +137,11 @@ fn test_limit_violation_details_and_order_are_preserved() {
             "Use early returns or guard clauses to reduce nesting depth in `untested_monster`.",
         ),
         (
-            "Halstead Difficulty",
-            99.0,
-            80.0,
-            "Halstead difficulty is 99.0 (budget: 80.0)",
-            "Simplify operators/operands in `untested_monster`: extract helpers, reduce distinct operators.",
-        ),
-        (
             "Statement Count",
             99.0,
             30.0,
             "Function has 99 statements (budget: 30)",
             "Split `untested_monster` into smaller focused functions.",
-        ),
-        (
-            "ABC Score",
-            99.0,
-            10.0,
-            "ABC score is 99.0 (budget: 10.0)",
-            "Reduce assignments/branches/calls in `untested_monster` by extracting helpers.",
         ),
     ];
 
@@ -211,8 +164,8 @@ fn test_limit_violation_details_and_order_are_preserved() {
 
 #[test]
 fn test_equal_score_breakdown_uses_line_tie_breaker() {
-    let mut function = metrics::sample_metrics(4, 9, 1.0, 1.0);
-    function.cognitive_breakdown = [41, 7, 29, 13, 5, 19]
+    let mut function = metrics::sample_metrics(4);
+    function.cyclomatic_breakdown = [41, 7, 29, 13, 5, 19]
         .into_iter()
         .map(|line| ComplexityContribution {
             line,
@@ -224,7 +177,7 @@ fn test_equal_score_breakdown_uses_line_tie_breaker() {
         .collect();
 
     let budgets = FunctionBudgets {
-        max_cognitive: Some(8),
+        max_cyclomatic: Some(1),
         ..Default::default()
     };
     let violations = ComplexityAnalyzer::check_violations(&[function], &budgets);
@@ -238,7 +191,7 @@ fn test_equal_score_breakdown_uses_line_tie_breaker() {
 }
 
 #[test]
-fn test_function_expressions_cover_language_name_fallbacks_and_empty_halstead() {
+fn test_function_expressions_cover_language_name_fallbacks() {
     const EMPTY_EXPRESSION: &str = "const typed = function () {};";
     let cases = [
         ("src/expression.ts", "typed"),
@@ -252,7 +205,6 @@ fn test_function_expressions_cover_language_name_fallbacks_and_empty_halstead() 
             .unwrap_or_else(|error| panic!("failed to parse {path}: {error}"));
         assert_eq!(metrics.len(), 1, "expected one function in {path}");
         assert_eq!(metrics[0].name, expected_name);
-        assert_eq!(metrics[0].halstead_difficulty, 0.0);
     }
 
     let mut analyzer = ComplexityAnalyzer::new();
@@ -271,18 +223,11 @@ fn test_function_expressions_cover_language_name_fallbacks_and_empty_halstead() 
 
 #[test]
 fn test_property_and_field_identifiers_are_analyzed_across_dialects() {
-    let cases = [
-        (
-            "src/property.js",
-            "function read(record) { return record.value; }",
-            "read",
-        ),
-        (
-            "src/method.go",
-            "package main\n\ntype Counter struct { value int }\n\nfunc (c Counter) Reset(value int) int {\n    return c.value + value\n}\n",
-            "Reset",
-        ),
-    ];
+    let cases = [(
+        "src/property.js",
+        "function read(record) { return record.value; }",
+        "read",
+    )];
 
     for (path, source, expected_name) in cases {
         let mut analyzer = ComplexityAnalyzer::new();
@@ -291,7 +236,6 @@ fn test_property_and_field_identifiers_are_analyzed_across_dialects() {
             .unwrap_or_else(|error| panic!("failed to parse {path}: {error}"));
         assert_eq!(metrics.len(), 1, "expected one function in {path}");
         assert_eq!(metrics[0].name, expected_name);
-        assert!(metrics[0].halstead_difficulty > 0.0);
     }
 }
 
@@ -344,31 +288,6 @@ const CURRENT_AST_REGRESSION_CASES: &[(&str, &str, &str, Option<&str>)] = &[
         }"#,
         "js_case",
         Some("for_in_statement"),
-    ),
-    (
-        "src/regression.py",
-        r#"def py_case(value):
-            try:
-                return value
-            except* ValueError as error:
-                return error
-        "#,
-        "py_case",
-        Some("except_clause"),
-    ),
-    (
-        "src/regression.go",
-        r#"package main
-        func go_case(value int) int {
-            switch value {
-            case 1:
-                return 1
-            default:
-                return 0
-            }
-        }"#,
-        "go_case",
-        Some("expression_case"),
     ),
 ];
 

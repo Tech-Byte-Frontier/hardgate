@@ -122,7 +122,7 @@ fn is_comment_at(bytes: &[u8], i: usize, hash: bool) -> bool {
 }
 
 fn is_hash_comment_start(bytes: &[u8], i: usize) -> bool {
-    // `#` starts a shell/Python comment only at line start or after whitespace,
+    // `#` starts a configuration comment only at line start or after whitespace,
     // and not as part of Rust `#[attr]` / `#!`.
     if bytes.get(i + 1) == Some(&b'[')
         || (bytes.get(i + 1) == Some(&b'!') && bytes.get(i + 2) == Some(&b'['))

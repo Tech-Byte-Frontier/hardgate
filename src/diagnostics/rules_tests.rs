@@ -1,8 +1,8 @@
 use super::diagnostics;
 use crate::diagnostics::GateReport;
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, DeadCodeViolation,
-    InvariantViolation, MutationViolation, OrchestrationViolation, SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, InvariantViolation,
+    MutationViolation, OrchestrationViolation, SuppressionViolation,
 };
 use std::path::PathBuf;
 
@@ -35,7 +35,9 @@ fn complexity(metric: &str) -> ComplexityViolation {
         file: PathBuf::from("src/complexity.rs"),
         function_name: "work".to_string(),
         line_number: 5,
+        column_number: 0,
         end_line: 12,
+        size: None,
         metric: metric.to_string(),
         actual: 11.0,
         limit: 10.0,
@@ -99,17 +101,6 @@ fn mutation(metric: &str) -> MutationViolation {
     }
 }
 
-fn dead_code(kind: &str, line_number: Option<usize>) -> DeadCodeViolation {
-    DeadCodeViolation {
-        file: PathBuf::from("src/dead.rs"),
-        line_number,
-        symbol: Some("unused".to_string()),
-        violation_type: kind.to_string(),
-        message: "dead code".to_string(),
-        recommendation: "remove the unused code".to_string(),
-    }
-}
-
 fn orchestration(step: &str) -> OrchestrationViolation {
     OrchestrationViolation {
         step: step.to_string(),
@@ -130,7 +121,6 @@ fn add_orchestration_variants(report: &mut GateReport) {
         "coverage-diff",
         "coverage-report",
         "coverage-source-classification",
-        "dead-code-context",
         "read-clone-index",
         "clone-index",
         "read-source",
@@ -164,13 +154,10 @@ fn representative_report_preserves_category_order_and_locations() {
     report
         .mutation_violations
         .push(mutation("Mutation Kill Rate"));
-    report
-        .dead_code_violations
-        .push(dead_code("Unused Export", Some(8)));
     report.orchestration_violations.push(orchestration("lint"));
 
     let found = diagnostics(&report);
-    assert_eq!(found.len(), 9);
+    assert_eq!(found.len(), 8);
     assert_eq!(
         found
             .iter()
@@ -184,7 +171,6 @@ fn representative_report_preserves_category_order_and_locations() {
             "clone",
             "coverage",
             "mutation",
-            "dead-code",
             "orchestration",
         ]
     );
@@ -196,10 +182,8 @@ fn representative_report_preserves_category_order_and_locations() {
     assert_eq!(found[4].locations[1].line, Some(20));
     assert_eq!(found[5].locations[0].line, None);
     assert_eq!(found[6].locations[0].line, None);
-    assert_eq!(found[7].locations[0].line, Some(8));
-    assert!(found[8].locations.is_empty());
+    assert!(found[7].locations.is_empty());
     assert_eq!(found[2].recommendation, "split the function");
-    assert_eq!(found[7].recommendation, "remove the unused code");
 }
 
 #[test]
@@ -210,13 +194,10 @@ fn live_metric_variants_have_explicit_ids() {
     }
     for metric in [
         "Cyclomatic Complexity",
-        "Cognitive Complexity",
         "Parameter Count",
         "Function Lines",
         "Nesting Depth",
-        "Halstead Difficulty",
         "Statement Count",
-        "ABC Score",
     ] {
         report.complexity_violations.push(complexity(metric));
     }
@@ -229,7 +210,6 @@ fn live_metric_variants_have_explicit_ids() {
         "Global Function Coverage",
         "Global Branch Coverage",
         "Missing Source Coverage",
-        "CRAP Score",
         "Missing Critical Path",
         "Critical Path 100% Coverage",
         "Missing Diff Coverage",
@@ -246,9 +226,7 @@ fn live_metric_variants_have_explicit_ids() {
     ] {
         report.mutation_violations.push(mutation(metric));
     }
-    for kind in ["Unreferenced File", "Unused Export"] {
-        report.dead_code_violations.push(dead_code(kind, Some(1)));
-    }
+
     add_orchestration_variants(&mut report);
 
     let found = diagnostics(&report);
@@ -256,16 +234,15 @@ fn live_metric_variants_have_explicit_ids() {
     assert_eq!(found[0].rule_id, "HG-BUDGET-FILE-BYTE-SIZE");
     assert_eq!(found[1].rule_id, "HG-BUDGET-PHYSICAL-LINES");
     assert_eq!(found[2].rule_id, "HG-COMPLEXITY-CYCLOMATIC");
-    assert_eq!(found[10].rule_id, "HG-INVARIANT-DISALLOWED-IMPORT");
-    assert_eq!(found[13].rule_id, "HG-COVERAGE-COUNT-OVERFLOW");
-    assert_eq!(found[23].rule_id, "HG-MUTATION-KILL-RATE");
-    assert_eq!(found[28].rule_id, "HG-DEAD-CODE-UNREFERENCED-FILE");
-    assert_eq!(found[30].rule_id, "HG-ORCHESTRATION-FORMAT-CHECK");
+    assert_eq!(found[7].rule_id, "HG-INVARIANT-DISALLOWED-IMPORT");
+    assert_eq!(found[10].rule_id, "HG-COVERAGE-COUNT-OVERFLOW");
+    assert_eq!(found[19].rule_id, "HG-MUTATION-KILL-RATE");
+    assert_eq!(found[24].rule_id, "HG-ORCHESTRATION-FORMAT-CHECK");
     assert_eq!(
-        found[37].rule_id,
+        found[31].rule_id,
         "HG-ORCHESTRATION-COVERAGE-SOURCE-CLASSIFICATION"
     );
-    assert_eq!(found[46].rule_id, "HG-ORCHESTRATION-LEGACY-RATCHET");
+    assert_eq!(found[39].rule_id, "HG-ORCHESTRATION-LEGACY-RATCHET");
 }
 
 #[test]
@@ -280,9 +257,6 @@ fn unknown_values_use_category_fallback_ids() {
         .push(invariant("Future Invariant"));
     report.coverage_violations.push(coverage("Future Coverage"));
     report.mutation_violations.push(mutation("Future Mutation"));
-    report
-        .dead_code_violations
-        .push(dead_code("Future Dead Code", None));
     report
         .orchestration_violations
         .push(orchestration("future-step"));
@@ -299,7 +273,6 @@ fn unknown_values_use_category_fallback_ids() {
             "HG-INVARIANT-UNKNOWN-KIND",
             "HG-COVERAGE-UNKNOWN-METRIC",
             "HG-MUTATION-UNKNOWN-METRIC",
-            "HG-DEAD-CODE-UNKNOWN-KIND",
             "HG-ORCHESTRATION-UNKNOWN-STEP",
         ]
     );
@@ -347,13 +320,9 @@ fn missing_line_values_remain_unlocated() {
     report
         .clone_violations
         .push(clone_violation("a.rs", (0, 0), "b.rs", (0, 0)));
-    report
-        .dead_code_violations
-        .push(dead_code("Unused Export", None));
 
     let found = diagnostics(&report);
     assert_eq!(found[0].locations[0].line, None);
     assert_eq!(found[0].locations[0].end_line, None);
     assert_eq!(found[0].locations[1].line, None);
-    assert_eq!(found[1].locations[0].line, None);
 }

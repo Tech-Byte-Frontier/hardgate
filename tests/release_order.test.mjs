@@ -6,17 +6,17 @@ import {
   assertReleaseDoesNotRegress,
   compareReleaseTags,
 } from "../scripts/release-order.mjs";
-import { includesAll, release } from "./release_contract.sources.mjs";
+import { includesAll, releaseJob } from "./release_contract.sources.mjs";
 
-const publicationPreflight = release.slice(release.indexOf("  publication-preflight:"), release.indexOf("  github-release:"));
+const publicationPreflight = releaseJob("publish");
 includesAll(
   publicationPreflight,
   [
     "Prevent latest-channel rollback",
     'repos/${GITHUB_REPOSITORY}/releases/latest',
     'https://registry.npmjs.org/${encoded_name}/latest',
-    'node scripts/release-order.mjs --target-tag "$RELEASE_TAG" --latest-tag "$latest_tag"',
-    'node scripts/release-order.mjs --target-tag "v$RELEASE_VERSION" --latest-tag "v$latest_version"',
+    'node release-tooling/scripts/release-order.mjs --target-tag "$RELEASE_TAG" --latest-tag "$latest_tag"',
+    'node release-tooling/scripts/release-order.mjs --target-tag "v$RELEASE_VERSION" --latest-tag "v$latest_version"',
     "unable to determine the current GitHub latest release; refusing registry publication",
     "npm latest probe for $package_name returned HTTP $npm_status; refusing registry publication",
   ],
@@ -24,11 +24,6 @@ includesAll(
 );
 for (const packageName of [
   "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
   "@tech-byte-frontier/hardgate",
 ]) {
   assert.ok(publicationPreflight.includes(packageName), `rollback guard must inspect npm latest for ${packageName}`);

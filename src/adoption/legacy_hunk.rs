@@ -1,6 +1,5 @@
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
-    SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, InvariantViolation, SuppressionViolation,
 };
 use crate::git_evidence::ChangeSet;
 use std::path::Path;
@@ -41,17 +40,6 @@ impl LegacyFinding for CloneViolation {
     fn attributable(&self, changes: &ChangeSet) -> bool {
         changed_range(&self.file_a, self.lines_a, changes)
             || changed_range(&self.file_b, self.lines_b, changes)
-    }
-}
-
-impl LegacyFinding for DeadCodeViolation {
-    fn attributable(&self, changes: &ChangeSet) -> bool {
-        if self.violation_type == "Unreferenced File" {
-            return changed_file(&self.file, changes);
-        }
-        self.line_number
-            .map(|line| changed_line(&self.file, line, changes))
-            .unwrap_or_else(|| changed_file(&self.file, changes))
     }
 }
 

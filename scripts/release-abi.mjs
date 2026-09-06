@@ -1,38 +1,16 @@
-// Pure ABI evidence classifier used by release verification and its offline
-// adversarial contract. The target marker is produced by Cargo's build.rs;
-// readelf/file evidence remains a defense-in-depth check around that marker.
+// Positive ABI evidence for the supported Linux x64 GNU release artifact.
 "use strict";
 
-const GLIBC_MARKERS = /GLIBC_|gnu_get_libc_version|_dl_relocate_static_pie|ld-linux|glibc|\.note\.ABI-tag|NT_GNU_ABI_TAG|GNU ABI tag/i;
-const MUSL_INTERPRETER = /ld-musl(?:-[^\s\]]+)?\.so(?:\.[0-9]+)?/i;
-const MUSL_SYMBOL = /\b__init_libc\b/;
-
-export function classifyBinaryAbi({ report, programHeaders, symbols, notes = "", abi, targetMarkerValid }) {
-  if (!abi) return { ok: true, reason: "non-Linux target" };
+export function classifyBinaryAbi({ report, programHeaders, symbols, notes = "", abi }) {
+  if (abi !== "gnu") return { ok: false, reason: "only Linux GNU artifacts are supported" };
   const text = `${report}\n${programHeaders}\n${symbols}\n${notes}`;
-  if (abi === "musl") {
-    if (GLIBC_MARKERS.test(text)) {
-      return { ok: false, reason: "glibc markers are present" };
-    }
-    const staticBinary = /(?:static(?:-pie)?|statically linked)/i.test(report);
-    const muslInterpreter = MUSL_INTERPRETER.test(programHeaders);
-    const muslSymbol = MUSL_SYMBOL.test(symbols);
-    if (staticBinary) {
-      if (!targetMarkerValid) {
-        return { ok: false, reason: "static musl binary lacks the exact Cargo target marker" };
-      }
-      return { ok: true, reason: "exact Cargo target marker and no glibc ABI evidence" };
-    }
-    if (!muslInterpreter) {
-      return { ok: false, reason: "dynamic musl binary lacks a musl interpreter" };
-    }
-    return {
-      ok: true,
-      reason: muslSymbol ? "positive musl evidence (__init_libc and interpreter)" : "positive musl evidence (interpreter)",
-    };
+  if (/ld-musl|__init_libc/.test(text)) return { ok: false, reason: "musl ABI evidence is unsupported" };
+  if (!/ELF 64-bit/.test(report) || !/ld-linux|glibc/i.test(text)) {
+    return { ok: false, reason: "no positive ELF/glibc ABI evidence" };
   }
-  if (abi === "gnu" && !/ld-linux|glibc/i.test(text)) {
-    return { ok: false, reason: "no glibc ABI marker" };
+  const versions = [...text.matchAll(/GLIBC_(\d+)\.(\d+)(?:\.(\d+))?/g)];
+  if (versions.some(([, major, minor, patch]) => Number(major) > 2 || (Number(major) === 2 && (Number(minor) > 39 || (Number(minor) === 39 && Number(patch ?? 0) > 0))))) {
+    return { ok: false, reason: "artifact requires glibc newer than the supported 2.39 baseline" };
   }
   return { ok: true, reason: "positive GNU evidence" };
 }

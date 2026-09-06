@@ -25,7 +25,12 @@ fn execute(
     timeout: Duration,
 ) -> io::Result<ProcessOutcome> {
     let guard = MutationGuard::acquire()?;
-    let mut command = command_for_tokens(tokens, roots, "mutation");
+    let mut command = command_for_tokens(tokens, roots, "mutation")?;
+    // cargo-mutants serializes --in-place execution itself and rejects even
+    // CARGO_MUTANTS_JOBS=1. Its private copy still inherits the OS boundary.
+    if tokens.iter().any(|token| token == "--in-place") {
+        command.env_remove("CARGO_MUTANTS_JOBS");
+    }
     guard.budget.constrain_environment(&mut command);
     let inherited = crate::resources::runtime::inherited()?;
     let mut managed = if inherited {

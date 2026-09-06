@@ -27,7 +27,6 @@ impl GateReport {
         self.render_clones_agent(&mut out);
         self.render_coverage_agent(&mut out);
         self.render_mutation_agent(&mut out);
-        self.render_dead_code_agent(&mut out);
         self.render_orchestration_agent(&mut out);
         out
     }
@@ -51,21 +50,32 @@ impl GateReport {
     }
 
     fn render_complexity_agent(&self, out: &mut String) {
-        for v in &self.complexity_violations {
+        for group in self.function_reviews() {
             out.push_str(&format!(
-                "### ⚡ Complexity in `{}:{}`\n- Function: `{}`\n- Metric: {} is {:.0} (Budget limit: {:.0})\n",
-                v.file.display(), v.line_number, v.function_name, v.metric, v.actual, v.limit
+                "### ⚡ Complexity in `{}`\n\nFunction: `{}` ({} related metric findings).\n\n",
+                group.location(),
+                group.function_name,
+                group.metrics.len()
             ));
-            append_agent_contributors(&v.breakdown, out);
-            out.push_str(&format!("- Actionable Refactor: {}\n\n", v.recommendation));
+            if let Some(size) = group.size {
+                out.push_str(&format!("Size: {}.\n\n", size.description()));
+            }
+            for v in group.metrics {
+                out.push_str(&format!(
+                    "- Metric: {} is {:.0} (Budget limit: {:.0})\n",
+                    v.metric, v.actual, v.limit
+                ));
+                append_agent_contributors(&v.breakdown, out);
+                out.push_str(&format!("- Review: {}\n\n", v.recommendation));
+            }
         }
     }
 
     fn render_budgets_agent(&self, out: &mut String) {
         for v in &self.budget_violations {
             out.push_str(&format!(
-                "### 📦 Physical Budget in `{}`\n- Metric: {}\n- Value: {} (Budget limit: {})\n- Directive: Split this file into cohesive modules.\n\n",
-                v.file.display(), v.metric, v.actual, v.limit
+                "### 📦 Physical Budget in `{}`\n- Metric: {}\n- Value: {} (Budget limit: {})\n- Size: {}\n- Review: Assess code and documentation separately before choosing an extraction.\n\n",
+                v.file.display(), v.metric, v.actual, v.limit, self.file_size_description(&v.file).unwrap_or_else(|| "syntax breakdown unavailable in this saved report".into())
             ));
         }
     }
@@ -91,8 +101,12 @@ impl GateReport {
     fn render_coverage_agent(&self, out: &mut String) {
         for v in &self.coverage_violations {
             out.push_str(&format!(
-                "### 🎯 Coverage / CRAP in `{}`\n- Metric: {} is {:.1} (Threshold: {:.1})\n- Hint: {}\n\n",
-                v.file.display(), v.metric, v.actual, v.limit, v.recommendation
+                "### 🎯 Coverage in `{}`\n- Metric: {} is {:.1} (Threshold: {:.1})\n- Hint: {}\n\n",
+                v.file.display(),
+                v.metric,
+                v.actual,
+                v.limit,
+                v.recommendation
             ));
         }
     }
@@ -106,19 +120,8 @@ impl GateReport {
         }
     }
 
-    fn render_dead_code_agent(&self, out: &mut String) {
-        for v in &self.dead_code_violations {
-            out.push_str(&format!(
-                "### 🍂 Dead Code in `{}`\n- Type: `{}`\n- Details: {}\n- Directive: {}\n\n",
-                v.file.display(),
-                v.violation_type,
-                v.message,
-                v.recommendation
-            ));
-        }
-    }
-
     fn render_orchestration_agent(&self, out: &mut String) {
+        self.render_specialist_findings(out);
         for v in &self.orchestration_violations {
             out.push_str(&format!(
                 "### 🛠️ Tool Failure: `{}`\n- Command: `{}`\n- Exit Code: {:?}\n- Output:\n```text\n{}\n```\n- Directive: {}\n\n",

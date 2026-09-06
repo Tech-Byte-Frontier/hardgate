@@ -1,4 +1,4 @@
-use super::{coverage, fs, metrics, source_scope_violations, strict_scorer};
+use super::{coverage, fs, source_scope_violations, strict_scorer};
 use hardgate::config::CoverageConfig;
 use hardgate::engines::complexity::FunctionMetrics;
 use hardgate::engines::coverage::FileCoverage;
@@ -13,19 +13,18 @@ fn function_metric(
     cyclomatic: u32,
 ) -> FunctionMetrics {
     FunctionMetrics {
+        test_only: false,
+        size: None,
         name: "fixture_function".to_string(),
         file: PathBuf::from(file),
         start_line,
+        start_column: 0,
         end_line,
         lines: end_line.saturating_sub(start_line).saturating_add(1),
         parameters: 0,
         cyclomatic,
-        cognitive: 0,
-        halstead_difficulty: 0.0,
         max_nesting_depth: 0,
         statements: 0,
-        abc_score: 0.0,
-        cognitive_breakdown: Vec::new(),
         cyclomatic_breakdown: Vec::new(),
     }
 }
@@ -34,7 +33,6 @@ fn scoring_config(
     min_line_percent: Option<f64>,
     min_function_percent: Option<f64>,
     min_branch_percent: Option<f64>,
-    max_crap_score: Option<f64>,
 ) -> CoverageConfig {
     CoverageConfig {
         enabled: true,
@@ -42,7 +40,6 @@ fn scoring_config(
         min_line_percent,
         min_function_percent,
         min_branch_percent,
-        max_crap_score,
         critical_paths: None,
     }
 }
@@ -59,61 +56,6 @@ fn has_missing_source(violations: &[CoverageViolation]) -> bool {
     violations
         .iter()
         .any(|violation| violation.metric == "Missing Source Coverage")
-}
-
-#[test]
-fn test_crap_score_calculation() {
-    let scorer = CoverageScorer::new(&CoverageConfig {
-        enabled: true,
-        report: None,
-        min_line_percent: Some(80.0),
-        min_function_percent: None,
-        min_branch_percent: None,
-        max_crap_score: Some(25.0),
-        critical_paths: None,
-    });
-
-    let mut cov_map = HashMap::new();
-    let mut file_cov = FileCoverage {
-        file_path: PathBuf::from("src/calc.rs"),
-        lines_found: 10,
-        lines_hit: 2,
-        ..Default::default()
-    };
-    for line in 1..=10 {
-        file_cov
-            .line_hits
-            .insert(line, if line <= 2 { 1 } else { 0 });
-    }
-    cov_map.insert(file_cov.file_path.clone(), file_cov);
-
-    let funcs = vec![metrics::sample_metrics(10, 12, 20.0, 12.0)];
-    let violations = scorer.evaluate(&cov_map, &funcs, Path::new("."));
-    let crap = violations.iter().find(|v| v.metric == "CRAP Score");
-    assert!(matches!(crap, Some(v) if v.actual > 25.0));
-}
-
-#[test]
-fn crap_scoring_skips_cfg_excluded_functions_but_scores_zero_hit_functions() {
-    let config = scoring_config(None, None, None, Some(25.0));
-    let scorer = CoverageScorer::new(&config);
-    let function = function_metric("src/platform.rs", 10, 20, 7);
-
-    let excluded = coverage_records(&[("src/platform.rs", &[(1, 1)])]);
-    let violations = scorer.evaluate(&excluded, std::slice::from_ref(&function), Path::new("."));
-    assert!(
-        violations
-            .iter()
-            .all(|violation| violation.metric != "CRAP Score")
-    );
-
-    let uncovered = coverage_records(&[("src/platform.rs", &[(10, 0)])]);
-    let violations = scorer.evaluate(&uncovered, &[function], Path::new("."));
-    assert!(
-        violations
-            .iter()
-            .any(|violation| { violation.metric == "CRAP Score" && violation.actual == 56.0 })
-    );
 }
 
 #[test]
@@ -145,7 +87,6 @@ fn zero_denominators_are_blocking_for_every_enabled_global_floor() {
         min_line_percent: Some(1.0),
         min_function_percent: Some(1.0),
         min_branch_percent: Some(1.0),
-        max_crap_score: None,
         critical_paths: None,
     };
     let scorer = CoverageScorer::new(&config);
@@ -186,7 +127,6 @@ fn hostile_counter_addition_is_reported_without_wrapping() {
         min_line_percent: Some(1.0),
         min_function_percent: None,
         min_branch_percent: None,
-        max_crap_score: None,
         critical_paths: None,
     };
     let scorer = CoverageScorer::new(&config);
@@ -277,7 +217,7 @@ fn absolute_report_paths_under_root_match_exact_sources() {
 
 #[test]
 fn full_scoring_deduplicates_missing_function_files() {
-    let config = scoring_config(Some(1.0), None, None, None);
+    let config = scoring_config(Some(1.0), None, None);
     let scorer = CoverageScorer::new(&config);
     let functions = vec![
         function_metric("src/missing.rs", 1, 1, 1),
@@ -343,7 +283,7 @@ fn scoped_scoring_normalizes_windows_separators_under_root() {
 
 #[test]
 fn full_scoring_uses_only_unique_normalized_records() {
-    let config = scoring_config(Some(100.0), None, None, None);
+    let config = scoring_config(Some(100.0), None, None);
     let map = coverage_records(&[
         ("/repo/src/lib.rs", &[(1, 1)]),
         ("src/lib.rs", &[(1, 0)]),
@@ -359,7 +299,7 @@ fn full_scoring_uses_only_unique_normalized_records() {
 
 #[test]
 fn scoring_covers_passing_floors_and_full_critical_path() {
-    let mut config = scoring_config(Some(100.0), Some(100.0), Some(100.0), Some(25.0));
+    let mut config = scoring_config(Some(100.0), Some(100.0), Some(100.0));
     config.critical_paths = Some(vec!["src/full.rs".to_string()]);
     let mut file = coverage("src/full.rs", &[(1, 1)]);
     file.functions_found = 1;
@@ -370,29 +310,4 @@ fn scoring_covers_passing_floors_and_full_critical_path() {
     let functions = [function_metric("src/full.rs", 1, 1, 1)];
     let violations = CoverageScorer::new(&config).evaluate(&map, &functions, Path::new("."));
     assert!(violations.is_empty());
-}
-
-#[test]
-fn scoring_skips_out_of_scope_and_inverted_crap_ranges() {
-    let config = scoring_config(None, None, None, Some(25.0));
-    let map = coverage_records(&[
-        ("src/in_scope.rs", &[(1, 1)]),
-        ("src/out_of_scope.rs", &[(1, 0)]),
-    ]);
-    let source = [PathBuf::from("src/in_scope.rs")];
-    let functions = [
-        function_metric("src/in_scope.rs", 2, 1, 1),
-        function_metric("src/out_of_scope.rs", 1, 1, 10),
-    ];
-    let violations = CoverageScorer::new(&config).evaluate_for_sources(
-        &map,
-        &functions,
-        super::CoverageEvaluationScope {
-            root: Path::new("."),
-            source_files: Some(&source),
-        },
-    );
-    assert!(violations.iter().all(|violation| {
-        violation.metric != "CRAP Score" || violation.file == Path::new("src/in_scope.rs")
-    }));
 }

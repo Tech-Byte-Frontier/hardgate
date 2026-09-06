@@ -9,10 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-// Match execvp's unset-PATH defaults for the supported Linux C libraries.
-#[cfg(target_env = "musl")]
-const DEFAULT_PATH: &str = "/usr/local/bin:/bin:/usr/bin";
-#[cfg(not(target_env = "musl"))]
+// Match execvp's unset-PATH default on the supported GNU target.
 const DEFAULT_PATH: &str = "/bin:/usr/bin";
 
 pub(super) fn available_tools() -> io::Result<Option<(PathBuf, PathBuf)>> {

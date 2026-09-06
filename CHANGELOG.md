@@ -1,53 +1,51 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0 (2026-09-06)
 
-- `init` defaults to balanced structural adoption; explicit strict-agent and
-  no-config execution retain required 95/95/90 coverage and 85% mutation evidence.
-  Strict-agent allows five parameters; balanced/legacy allow 50 statements.
-  Test size and duplication are visible advisories while complexity and safety
-  still block. Source clone detection remains sensitive, with separate blocking
-  minimums (strict 10 lines/100 tokens; balanced/legacy 15/150). Category severity
-  overrides preserve deliberate stricter policies. Existing explicit settings
-  win; omitted preset fields inherit these updated defaults. Legacy verdicts
-  identify adoption scope and do not certify removal of historical debt.
+- Support is limited to Rust and JavaScript/TypeScript. Python/Go parsers,
+  adapters and language rules are removed; unsupported required source remains
+  an explicit failure. Related text/config/generated inventory is retained.
+- `check` is the combined acceptance command: structural policy, read-only
+  formatting/linting, configured tests/type checks, and required evidence.
+  `--checks`, `--diff`, path selection and output flags make partial runs explicit. The old
+  `verify`, `mutate`, `--all` and generic dead-code interfaces are removed.
+- Native mutation is replaced by optional cargo-mutants/Stryker integrations.
+  Coverage and mutation receipts bind source, tests, configuration and report
+  bytes. Empty, stale, invalid or unfinished evidence blocks acceptance;
+  execution and report ingestion remain distinct. Cargo mutation requires a
+  successful complete workspace prerequisite and verified restoration.
+- Checks execute in protected disposable copies, including when project tools
+  enable fixes. Missing tools and ambiguous scripts produce setup failures.
+  Explicit formatting remains a separate action. pnpm checks cannot silently
+  reinstall dependencies; copied installation metadata may require explicit
+  local verifier commands.
+- Cargo detection covers workspace members, doctests and declared feature/target
+  scope. Clippy diagnostics retain rule, location and individual finding counts.
+  Rust cfg(test) ownership separates inline and imported test code from production.
+- Remove cognitive complexity, Halstead, ABC and CRAP throughout configuration,
+  analysis and reports. Group remaining metrics by function, show code and
+  documentation size separately, and count flat else-if chains without artificial
+  nesting. Architecture rules remain explicit repository-owned boundaries.
+- Preserve diff suppression checks, full-context clone comparison, role policies,
+  legacy static ratcheting, real failure propagation and resource containment.
+  `init` defaults to balanced adoption; strict-agent/no-config retain required
+  coverage and mutation evidence. Existing explicit policy settings remain authoritative.
+- Machine output retains schema version 1 and adds acceptance/partial status,
+  per-engine execution states, grouped review targets and specialist diagnostics.
+  Exit 1 identifies violations; exit 2 identifies incomplete evaluation/setup.
+  Invalid obsolete configuration is rejected instead of silently ignored.
+- Future releases target Linux x64 GNU only through Cargo, direct archives,
+  npm and pnpm. Remove the shell installer and unused platform packages/matrices.
+  CI reuses one supported binary, validates actual installed checks, and keeps
+  signed tags, checksums, provenance, immutable artifacts and same-tag recovery.
+- Real Rust and JS/workspace trials document useful observations and remaining
+  noise. The retained ripgrep ByteSet integration reproduces a surviving mutant,
+  a passing new assertion and that same mutant being caught, with restoration.
+  See [trial results](docs/TRIALS_0_6.md).
 
-- Machine-readable gate, mutation, no-op, config, and error outputs use
-  `schema_version: 1`; execution records distinguish `disabled`, `skipped`,
-  `incomplete`, `failed`, and `completed` evidence.
-- Exit status is 0 for pass/no-op, 1 for policy violations, and 2 when required
-  evidence or configuration cannot be evaluated. Complete verdict/summary counts survive bounded
-  `--max-diagnostics`/`--snippets` output; stable rule IDs replace message parsing and snippets use
-  only captured source bytes.
-- `check --diff` indexes the full eligible repository for clones and reports
-  changed/reference context, catching copies against unchanged files; dead-code analysis retains
-  required repository reference context.
-- Native mutation serializes workloads across projects for the same user, caps
-  common build-worker defaults, checks Linux memory pressure and applies aggregate
-  Linux memory limits when an eligible systemd user manager is available. Resource
-  failures remain incomplete evidence. Snapshot copying uses bounded buffers.
-- The README is a concise entry point with linked installation and getting-started guides.
-- Native `mutate` runs in a private workspace, restores and verifies source bytes
-  after each mutant, and cleans up owned processes and temporary files. Mutation report ingestion
-  remains a separate engine.
-- Policy discovery uses the nearest `hardgate.toml` up to the Git boundary;
-  absent policy defaults to `strict-agent` at the Git root. Fixed configuration tables reject
-  unknown keys, while `hardgate config` exposes effective policy, root, invocation directory, and identity.
-- Public command APIs return `CommandOutcome`/`CommandResult` and structured
-  reports/errors. `init` is project-aware and non-destructive; use `--preview` or `--full`, and add explicit
-  commands for ambiguous or nested projects. Shell completions, `--threads`, `--timing`, effective-policy
-  inspection, and bounded diagnostics are available; migrate consumers to documented roots, schema/status
-  checks, exit 1 versus 2, additive fields, and stable rule IDs.
-- Local unreleased release tooling drafts staged identity-bound receipts with
-  exact-version-before-default checks, explicit npm auth modes, and independent native/registry/consumer
-  verification. This is review-only local capability; no publication or external settings change is claimed.
-
-This is a new `0.6.0` compatibility release: public Rust command result types,
-JSON schema/status contracts, and CLI exit meanings changed since `0.5.0`.
-Update integrations to distinguish policy failure (exit 1) from incomplete
-evaluation (exit 2), check `schema_version`, and read engine execution states.
-Existing `0.5.0` artifacts remain immutable; these changes must not be republished
-under that version.
+This is a breaking pre-1.0 compatibility release. Migrate CLI/config/report and
+public Rust integrations using the configuration and command guides. Existing
+0.5.0 artifacts remain immutable. Publication uses the signed, CI-validated release workflow.
 
 ## 0.5.0
 

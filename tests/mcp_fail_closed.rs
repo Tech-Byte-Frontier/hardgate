@@ -24,7 +24,6 @@ rs = 10000
 
 [budgets.functions]
 max_cyclomatic = 100
-max_cognitive = 100
 max_parameters = 20
 max_lines = 1000
 max_nesting_depth = 20
@@ -59,7 +58,6 @@ rs = 10000
 
 [budgets.functions]
 max_cyclomatic = 100
-max_cognitive = 100
 max_parameters = 20
 max_lines = 1000
 max_nesting_depth = 20

@@ -15,7 +15,6 @@ import {
   digestFile,
   fail,
   hostNativePackage,
-  needsNpmForce,
   nodeNpmPath,
   npmPackageSpec,
   pathInside,
@@ -103,7 +102,6 @@ export async function installNpmPackage({
   globalConfig,
   home = path.join(path.dirname(prefix), "home"),
   temp = path.join(path.dirname(prefix), "tmp"),
-  force = false,
   npmCommand = nodeNpmPath(),
   runProcess = runReleaseProcess,
   policy = verificationPolicy(version),
@@ -126,7 +124,6 @@ export async function installNpmPackage({
     "--registry",
     PUBLIC_NPM_REGISTRY,
   ];
-  if (force) args.push("--force");
   args.push(npmPackageSpec(packageName, version, mode));
   const paths = {prefix, cache, userConfig, globalConfig, home, temp};
   let lastError;
@@ -193,13 +190,12 @@ function createPathSentinel(prefix) {
   return directory;
 }
 
-export async function verifyDirectConsumer({ values, host, policy, workRoot, install, runProcess, archiveEvidence }) {
+export async function verifyDirectConsumer({ values, policy, workRoot, install, runProcess, archiveEvidence }) {
   const directPaths = installPaths(workRoot, "direct");
   await install({
     packageName: values.packageName,
     version: values.version,
     mode: values.mode,
-    force: needsNpmForce(values.descriptor, host),
     ...directPaths,
     policy,
     cwd: workRoot,
@@ -222,7 +218,6 @@ export async function verifyWrapperConsumer({ values, host, policy, workRoot, in
     packageName: WRAPPER_PACKAGE,
     version: values.version,
     mode: values.mode,
-    force: false,
     ...wrapperPaths,
     policy,
     cwd: workRoot,

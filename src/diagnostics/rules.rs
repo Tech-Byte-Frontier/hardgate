@@ -1,6 +1,6 @@
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, DeadCodeViolation,
-    InvariantViolation, MutationViolation, OrchestrationViolation, SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, InvariantViolation,
+    MutationViolation, OrchestrationViolation, SuppressionViolation,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,6 @@ const INVARIANT: &str = "invariant";
 const CLONE: &str = "clone";
 const COVERAGE: &str = "coverage";
 const MUTATION: &str = "mutation";
-const DEAD_CODE: &str = "dead-code";
 const ORCHESTRATION: &str = "orchestration";
 
 /// Stable machine-readable explanation of one blocking gate finding.
@@ -57,7 +56,23 @@ pub fn diagnostics(report: &super::GateReport) -> Vec<RuleDiagnostic> {
     diagnostics.extend(report.clone_violations.iter().map(clone_diagnostic));
     diagnostics.extend(report.coverage_violations.iter().map(coverage_diagnostic));
     diagnostics.extend(report.mutation_violations.iter().map(mutation_diagnostic));
-    diagnostics.extend(report.dead_code_violations.iter().map(dead_code_diagnostic));
+    diagnostics.extend(
+        report
+            .tool_diagnostics
+            .iter()
+            .filter(|finding| finding.blocking)
+            .map(|finding| RuleDiagnostic {
+                rule_id: finding.rule.clone(),
+                category: finding.tool.clone(),
+                message: finding.message.clone(),
+                locations: vec![DiagnosticLocation {
+                    file: finding.file.clone(),
+                    line: Some(finding.line),
+                    end_line: Some(finding.end_line),
+                }],
+                recommendation: "Resolve the specialist diagnostic at this source location.".into(),
+            }),
+    );
     diagnostics.extend(
         report
             .orchestration_violations
@@ -70,10 +85,10 @@ pub fn diagnostics(report: &super::GateReport) -> Vec<RuleDiagnostic> {
 fn budget_diagnostic(violation: &BudgetViolation) -> RuleDiagnostic {
     let recommendation = match violation.metric.as_str() {
         "File Byte Size" => {
-            "Split the file into cohesive modules or remove unnecessary content before accepting the gate."
+            "Review code and documentation separately before choosing cohesive module boundaries; preserve the configured physical-size policy."
         }
         metric if is_physical_lines_metric(metric) => {
-            "Split the file into cohesive modules or remove unnecessary lines before accepting the gate."
+            "Review code and documentation separately before choosing cohesive module boundaries; preserve the configured physical-size policy."
         }
         _ => "Reduce the measured file size while keeping the configured policy intact.",
     };
@@ -177,22 +192,6 @@ fn mutation_diagnostic(violation: &MutationViolation) -> RuleDiagnostic {
     )
 }
 
-fn dead_code_diagnostic(violation: &DeadCodeViolation) -> RuleDiagnostic {
-    diagnostic(
-        (DEAD_CODE, dead_code_rule_id(&violation.violation_type)),
-        violation.message.clone(),
-        vec![location(
-            &violation.file,
-            violation.line_number.and_then(line),
-            None,
-        )],
-        recommendation_or(
-            &violation.recommendation,
-            "Remove the unused code or connect it to an active entry point.",
-        ),
-    )
-}
-
 fn orchestration_diagnostic(violation: &OrchestrationViolation) -> RuleDiagnostic {
     let message = if violation.output.trim().is_empty() {
         format!("Orchestration step `{}` failed.", violation.step)
@@ -278,10 +277,6 @@ fn mutation_rule_id(metric: &str) -> &'static str {
     lookup_rule_id(metric, MUTATION_IDS, "HG-MUTATION-UNKNOWN-METRIC")
 }
 
-fn dead_code_rule_id(kind: &str) -> &'static str {
-    lookup_rule_id(kind, DEAD_CODE_IDS, "HG-DEAD-CODE-UNKNOWN-KIND")
-}
-
 fn orchestration_rule_id(step: &str) -> &'static str {
     lookup_rule_id(step, ORCHESTRATION_IDS, "HG-ORCHESTRATION-UNKNOWN-STEP")
 }
@@ -301,13 +296,10 @@ fn lookup_rule_id(value: &str, table: &'static str, fallback: &'static str) -> &
 
 const COMPLEXITY_IDS: &str = concat!(
     "Cyclomatic Complexity\0HG-COMPLEXITY-CYCLOMATIC\0",
-    "Cognitive Complexity\0HG-COMPLEXITY-COGNITIVE\0",
     "Parameter Count\0HG-COMPLEXITY-PARAMETERS\0",
     "Function Lines\0HG-COMPLEXITY-FUNCTION-LINES\0",
     "Nesting Depth\0HG-COMPLEXITY-NESTING\0",
-    "Halstead Difficulty\0HG-COMPLEXITY-HALSTEAD\0",
     "Statement Count\0HG-COMPLEXITY-STATEMENTS\0",
-    "ABC Score\0HG-COMPLEXITY-ABC\0",
 );
 
 const INVARIANT_IDS: &str = concat!(
@@ -322,7 +314,6 @@ const COVERAGE_IDS: &str = concat!(
     "Global Function Coverage\0HG-COVERAGE-GLOBAL-FUNCTIONS\0",
     "Global Branch Coverage\0HG-COVERAGE-GLOBAL-BRANCHES\0",
     "Missing Source Coverage\0HG-COVERAGE-MISSING-SOURCE\0",
-    "CRAP Score\0HG-COVERAGE-CRAP\0",
     "Missing Critical Path\0HG-COVERAGE-MISSING-CRITICAL-PATH\0",
     "Critical Path 100% Coverage\0HG-COVERAGE-CRITICAL-PATH\0",
     "Missing Diff Coverage\0HG-COVERAGE-MISSING-DIFF\0",
@@ -337,11 +328,6 @@ const MUTATION_IDS: &str = concat!(
     "Mutation Unviable Mutants\0HG-MUTATION-UNVIABLE\0",
 );
 
-const DEAD_CODE_IDS: &str = concat!(
-    "Unreferenced File\0HG-DEAD-CODE-UNREFERENCED-FILE\0",
-    "Unused Export\0HG-DEAD-CODE-UNUSED-EXPORT\0",
-);
-
 const ORCHESTRATION_IDS: &str = concat!(
     "format_check\0HG-ORCHESTRATION-FORMAT-CHECK\0",
     "format\0HG-ORCHESTRATION-FORMAT\0",
@@ -351,7 +337,6 @@ const ORCHESTRATION_IDS: &str = concat!(
     "coverage-diff\0HG-ORCHESTRATION-COVERAGE-DIFF\0",
     "coverage-report\0HG-ORCHESTRATION-COVERAGE-REPORT\0",
     "coverage-source-classification\0HG-ORCHESTRATION-COVERAGE-SOURCE-CLASSIFICATION\0",
-    "dead-code-context\0HG-ORCHESTRATION-DEAD-CODE-CONTEXT\0",
     "read-clone-index\0HG-ORCHESTRATION-READ-CLONE-INDEX\0",
     "clone-index\0HG-ORCHESTRATION-CLONE-INDEX\0",
     "read-source\0HG-ORCHESTRATION-READ-SOURCE\0",

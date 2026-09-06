@@ -175,7 +175,7 @@ fn test_invariants_handle_import_and_rule_edges() {
             "/* ignored block comment */\n",
             "use    ;\n",
             "use ,;\n",
-            "import safe_module\n",
+            "import 'safe-module';\n",
             "use crate::db::{' pool', \"models\", ''};\n",
             "use crate::db::pool, , crate::db::query;\n",
         ),

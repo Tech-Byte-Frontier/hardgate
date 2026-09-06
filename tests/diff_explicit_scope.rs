@@ -16,7 +16,6 @@ max_bytes = 10
 [budgets.functions]
 max_lines = 1000
 max_cyclomatic = 100
-max_cognitive = 100
 max_parameters = 20
 max_nesting_depth = 20
 
@@ -57,7 +56,15 @@ fn diff_scope_adds_explicit_directory_without_hiding_changed_files() {
     let scope = format!("{}/", scope.display());
     let output = run(
         &root,
-        &["check", "--diff", scope.as_str(), "--format", "json"],
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--diff",
+            scope.as_str(),
+            "--format",
+            "json",
+        ],
     );
     assert!(
         !output.status.success(),
@@ -97,7 +104,12 @@ fn diff_scope_repository_root_includes_changed_and_unchanged_files() {
     let absolute = root.to_str().expect("fixture path should be UTF-8");
 
     for scope in [absolute, "."] {
-        let output = run(&root, &["check", "--diff", scope, "--format", "json"]);
+        let output = run(
+            &root,
+            &[
+                "check", "--checks", "policy", "--diff", scope, "--format", "json",
+            ],
+        );
         assert_status(&output, false, "repository root scope");
         let report = json(&output);
         assert_eq!(report["files_scanned"], 4);

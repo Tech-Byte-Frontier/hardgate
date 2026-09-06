@@ -6,9 +6,9 @@ mod fs_git;
 mod trees;
 
 use fs_git::{commit_baseline, init_repo, write};
-use hardgate::config::{AntiGamingConfig, DeadCodeConfig};
+use hardgate::config::AntiGamingConfig;
 use hardgate::discovery::{DiscoverOptions, discover_files_with_exclusions, filter_files_by_paths};
-use hardgate::engines::{AntiGamingScanner, ComplexityAnalyzer, DeadCodeAnalyzer};
+use hardgate::engines::{AntiGamingScanner, ComplexityAnalyzer};
 use std::path::{Path, PathBuf};
 use trees::{has_suffix, write_tree};
 
@@ -51,110 +51,6 @@ function outer(value) {
         contribution.kind == "ternary_expression"
             && contribution.description == "ternary operator (`? :`)"
     }));
-}
-
-#[test]
-fn complexity_walker_counts_python_boolean_branches() {
-    let source = r#"
-def gate(first, second, fallback):
-    if first and second or fallback:
-        return 1
-    return first if second else fallback
-"#;
-    let mut analyzer = ComplexityAnalyzer::new();
-    let metrics = analyzer
-        .analyze_file_checked(Path::new("src/gate.py"), source, Path::new("."))
-        .expect("valid Python should parse");
-    assert_eq!(metrics.len(), 1);
-    let function = &metrics[0];
-    assert!(function.cyclomatic >= 3);
-    assert!(
-        function
-            .cyclomatic_breakdown
-            .iter()
-            .any(|contribution| contribution.description.contains("boolean operator"))
-    );
-    assert!(function.cyclomatic_breakdown.iter().any(|contribution| {
-        contribution.kind == "conditional_expression"
-            && contribution.description
-                == "conditional expression (`value if condition else fallback`)"
-    }));
-}
-
-#[test]
-fn dead_code_respects_entries_exclusions_and_import_graph_edges() {
-    let analyzer = DeadCodeAnalyzer::new(&DeadCodeConfig {
-        enabled: true,
-        entry_points: vec!["src/custom.ts".to_string(), "[".to_string()],
-        exclude: vec!["src/ignored/**".to_string(), "[".to_string()],
-    });
-    assert!(analyzer.is_enabled());
-    assert!(!DeadCodeAnalyzer::new(&DeadCodeConfig::default()).is_enabled());
-
-    let files = vec![
-        PathBuf::from("src/index.ts"),
-        PathBuf::from("src/lib.rs"),
-        PathBuf::from("src/custom.ts"),
-        PathBuf::from("src/feature.ts"),
-        PathBuf::from("src/utility.rs"),
-        PathBuf::from("src/path_mod.rs"),
-        PathBuf::from("src/ignored/dead.ts"),
-        PathBuf::from("src/component.test.ts"),
-        PathBuf::from("src/orphan.rs"),
-    ];
-    let contents = vec![
-        (PathBuf::from("src/index.ts"), String::new()),
-        (
-            PathBuf::from("src/lib.rs"),
-            "mod utility; #[path = \"path_mod.rs\"] mod alias;".to_string(),
-        ),
-        (
-            PathBuf::from("src/custom.ts"),
-            "import { feature } from \"./feature\"; feature();".to_string(),
-        ),
-        (
-            PathBuf::from("src/feature.ts"),
-            "export function feature() { return 1; }\nexport function _helper() {}\nexport const orphanExport = 1;".to_string(),
-        ),
-        (PathBuf::from("src/utility.rs"), "pub fn utility() {}".to_string()),
-        (PathBuf::from("src/path_mod.rs"), "pub fn path_module() {}".to_string()),
-        (
-            PathBuf::from("src/ignored/dead.ts"),
-            "export const ignored = 1;".to_string(),
-        ),
-        (
-            PathBuf::from("src/component.test.ts"),
-            "export const testOnly = 1;".to_string(),
-        ),
-        (PathBuf::from("src/orphan.rs"), "fn orphan() {}".to_string()),
-    ];
-
-    let violations = analyzer.analyze(&files, &contents, Path::new("."));
-    assert!(violations.iter().any(|violation| {
-        violation.file == Path::new("src/orphan.rs")
-            && violation.violation_type == "Unreferenced File"
-    }));
-    assert!(violations.iter().any(|violation| {
-        violation.symbol.as_deref() == Some("orphanExport")
-            && violation.violation_type == "Unused Export"
-    }));
-    for retained in ["src/feature.ts", "src/utility.rs", "src/path_mod.rs"] {
-        assert!(!violations.iter().any(|violation| {
-            violation.file == Path::new(retained) && violation.violation_type == "Unreferenced File"
-        }));
-    }
-    for ignored in ["src/ignored/dead.ts", "src/component.test.ts"] {
-        assert!(
-            !violations
-                .iter()
-                .any(|violation| violation.file == Path::new(ignored))
-        );
-    }
-    assert!(
-        !violations
-            .iter()
-            .any(|violation| violation.symbol.as_deref() == Some("_helper"))
-    );
 }
 
 #[test]

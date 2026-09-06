@@ -19,7 +19,6 @@ fn test_clean_toml_formatting() {
     );
     assert!(toml_str.contains("[gate]"));
     assert!(toml_str.contains("[orchestration]"));
-    assert!(toml_str.contains("[analysis.dead_code]"));
     assert!(!toml_str.contains("format_check ="));
 
     // The template must deserialize cleanly back into a config.
@@ -84,8 +83,6 @@ min_line_percent = 77.0
 [mutation]
 enabled = false
 min_score = 70.0
-timeout_secs = 5
-max_mutants = 7
 
 [orchestration]
 format_check = "my-fmt --check"
@@ -110,13 +107,10 @@ enforce = false
     assert_eq!(cfg.gate.name, "merge-test");
     assert_eq!(cfg.budgets.functions.max_cyclomatic, Some(42));
     // Untouched keys keep the balanced preset scaling.
-    assert_eq!(cfg.budgets.functions.max_cognitive, Some(22));
     // Explicit sections win wholesale, even `enabled = false`.
     assert!(!cfg.coverage.enabled);
     assert_eq!(cfg.coverage.min_line_percent, Some(77.0));
     assert!(!cfg.mutation.enabled);
-    assert_eq!(cfg.mutation.timeout_secs, Some(5));
-    assert_eq!(cfg.mutation.max_mutants, Some(7));
     assert_eq!(
         cfg.orchestration.format_check.as_deref(),
         Some("my-fmt --check")
@@ -281,22 +275,25 @@ fn test_orchestration_engine() {
         lint: Some("echo linting-passed".to_string()),
         test_cmd: None,
         timeout_secs: None,
+        ..Default::default()
     };
 
     let engine = hardgate::engines::OrchestrationEngine::new(&config);
-    let root = Path::new(".");
+    let directory = tempdir("orchestration-engine");
+    let root = directory.as_path();
 
     let check = engine.run_format_check(root).unwrap();
-    assert!(check.is_ok());
+    assert!(check.is_ok(), "{check:?}");
     assert!(check.unwrap().output.contains("formatting-checked"));
 
     let fmt = engine.run_format(root).unwrap();
-    assert!(fmt.is_ok());
+    assert!(fmt.is_ok(), "{fmt:?}");
     assert!(fmt.unwrap().output.contains("formatting-fixed"));
 
     let lint = engine.run_lint(root).unwrap();
-    assert!(lint.is_ok());
+    assert!(lint.is_ok(), "{lint:?}");
     assert!(lint.unwrap().output.contains("linting-passed"));
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

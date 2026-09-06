@@ -16,7 +16,6 @@ impl GateReport {
         self.render_clones_terminal(&mut out);
         self.render_coverage_terminal(&mut out);
         self.render_mutation_terminal(&mut out);
-        self.render_dead_code_terminal(&mut out);
         self.render_orchestration_terminal(&mut out);
         self.render_terminal_summary(&mut out);
         out
@@ -66,28 +65,38 @@ impl GateReport {
         if self.complexity_violations.is_empty() {
             return;
         }
+        let groups = self.function_reviews();
         out.push_str(&format!(
             "{}\n",
-            format!("error[complexity] ({})", self.complexity_violations.len())
-                .bold()
-                .red()
+            format!(
+                "error[complexity] ({} functions, {} metric findings)",
+                groups.len(),
+                self.complexity_violations.len()
+            )
+            .bold()
+            .red()
         ));
-        for v in &self.complexity_violations {
+        for group in groups {
             out.push_str(&format!(
-                "  --> {}:{} [{}]: {} is {:.0} (limit: {:.0})\n",
-                v.file.display().to_string().bold(),
-                v.line_number.to_string().yellow(),
-                v.function_name.cyan(),
-                v.metric,
-                v.actual,
-                v.limit
+                "  --> {} [{}]\n",
+                group.location().bold(),
+                group.function_name.cyan()
             ));
-            append_terminal_contributors(&v.breakdown, out);
-            out.push_str(&format!(
-                "       {} {}\n",
-                "help:".dimmed(),
-                v.recommendation.dimmed()
-            ));
+            if let Some(size) = group.size {
+                out.push_str(&format!("       size: {}\n", size.description()));
+            }
+            for v in group.metrics {
+                out.push_str(&format!(
+                    "       {} is {:.0} (limit: {:.0})\n",
+                    v.metric, v.actual, v.limit
+                ));
+                append_terminal_contributors(&v.breakdown, out);
+                out.push_str(&format!(
+                    "       {} {}\n",
+                    "help:".dimmed(),
+                    v.recommendation.dimmed()
+                ));
+            }
         }
         out.push('\n');
     }
@@ -110,6 +119,9 @@ impl GateReport {
                 v.actual.to_string().red(),
                 v.limit.to_string().green()
             ));
+            if let Some(size) = self.file_size_description(&v.file) {
+                out.push_str(&format!("       size: {size}\n"));
+            }
         }
         out.push('\n');
     }
@@ -209,32 +221,8 @@ impl GateReport {
         out.push('\n');
     }
 
-    fn render_dead_code_terminal(&self, out: &mut String) {
-        if self.dead_code_violations.is_empty() {
-            return;
-        }
-        out.push_str(&format!(
-            "{}\n",
-            format!("error[dead-code] ({})", self.dead_code_violations.len())
-                .bold()
-                .red()
-        ));
-        for v in &self.dead_code_violations {
-            let line_str = v.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
-            out.push_str(&format!(
-                "  --> {}{} [{}]: {}\n       {} {}\n",
-                v.file.display().to_string().bold(),
-                line_str.yellow(),
-                v.violation_type.cyan(),
-                v.message,
-                "help:".dimmed(),
-                v.recommendation.dimmed()
-            ));
-        }
-        out.push('\n');
-    }
-
     fn render_orchestration_terminal(&self, out: &mut String) {
+        self.render_specialist_findings(out);
         if self.orchestration_violations.is_empty() {
             return;
         }
@@ -259,6 +247,13 @@ impl GateReport {
     }
 
     pub(crate) fn render_terminal_summary(&self, out: &mut String) {
+        let targets = self.function_reviews().len();
+        if targets > 0 {
+            out.push_str(&format!(
+                "review: {targets} functions with {} related metric findings\n",
+                self.complexity_violations.len()
+            ));
+        }
         let code_findings = self.code_findings_count();
         let blockers = self.analysis_blockers_count();
         if self.passed {

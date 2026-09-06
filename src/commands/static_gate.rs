@@ -1,5 +1,7 @@
+mod file_analysis;
+pub use file_analysis::{AnalyzeInput, analyze_file_content};
+use file_analysis::{analyze_loaded_files, receives_invariants};
 mod classification_gaps;
-use super::dead_code::{DeadCodeScope, run_scoped_dead_code_analysis};
 use classification_gaps::record_classification_gaps;
 mod excerpts;
 mod observations;
@@ -17,10 +19,11 @@ use super::role_policy::{
 use super::source_snapshot::{SharedSource, SourceSnapshot};
 use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
+use crate::discovery::rust_ownership::{RoleView, RustOwnership};
 use crate::discovery::{ClassifiedFile, DiscoverOptions, FileRole, discover_paths};
 use crate::engines::{
     AntiGamingScanner, BudgetViolation, ComplexityAnalyzer, ComplexityViolation, FunctionMetrics,
-    InvariantViolation, InvariantsChecker, SuppressionViolation, check_content_budgets,
+    InvariantViolation, InvariantsChecker, SuppressionViolation,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -71,7 +74,6 @@ pub fn run_static_gate_snapshot(
         root,
         paths: &[],
         diff: false,
-        dead_code: false,
         snippets: false,
     };
     let outcome = analyze_snapshot(request, files, Vec::new(), snapshot)?;
@@ -88,7 +90,6 @@ pub(crate) struct StaticRequest<'a> {
     pub root: &'a Path,
     pub paths: &'a [PathBuf],
     pub diff: bool,
-    pub dead_code: bool,
     pub snippets: bool,
 }
 
@@ -97,6 +98,7 @@ pub(crate) struct StaticAnalysis {
     pub files: Vec<PathBuf>,
     pub read_results: Vec<SharedSource>,
     pub functions: Vec<FunctionMetrics>,
+    pub ownership: RustOwnership,
     pub empty: bool,
 }
 
@@ -120,7 +122,6 @@ pub fn run_static_gate_at(
         root,
         paths,
         diff,
-        dead_code: false,
         snippets: false,
     })?;
     if run.empty {
@@ -135,9 +136,8 @@ pub fn run_static_gate_at(
 }
 
 pub(crate) fn run_shared_gate(request: StaticRequest<'_>) -> Result<StaticAnalysis> {
-    let reference_context =
-        request.dead_code || (request.diff && clone_context_enabled(request.config));
-    let full = if reference_context || (request.diff && !request.paths.is_empty()) {
+    let reference_context = request.diff && clone_context_enabled(request.config);
+    let full = if reference_context || request.diff || !request.paths.is_empty() {
         Some(discover_paths(DiscoverOptions {
             root: request.root,
             diff_only: false,
@@ -175,10 +175,27 @@ pub(crate) fn run_shared_gate(request: StaticRequest<'_>) -> Result<StaticAnalys
         return analyze_snapshot(request, files, excluded, SourceSnapshot::default());
     }
     let mut context_paths = if reference_context {
-        full.map(|full| full.files).unwrap_or_default()
+        full.as_ref()
+            .map(|full| full.files.clone())
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
+    if let Some(full) = &full {
+        context_paths.extend(
+            full.files
+                .iter()
+                .chain(&full.excluded_files)
+                .filter(|path| RustOwnership::context_path(path))
+                .cloned(),
+        );
+    }
+    context_paths.extend(
+        excluded
+            .iter()
+            .filter(|path| RustOwnership::context_path(path))
+            .cloned(),
+    );
     context_paths.extend_from_slice(&files);
     context_paths.sort();
     context_paths.dedup();
@@ -208,6 +225,24 @@ fn analyze_snapshot(
     excluded: Vec<PathBuf>,
     snapshot: SourceSnapshot,
 ) -> Result<StaticAnalysis> {
+    let ownership_inputs = snapshot
+        .files
+        .iter()
+        .filter_map(|file| {
+            file.content
+                .as_ref()
+                .ok()
+                .map(|text| (&file.classified, text.as_ref()))
+        })
+        .collect::<Vec<_>>();
+    let mut ownership = RustOwnership::from_inputs(&ownership_inputs);
+    if snapshot
+        .files
+        .iter()
+        .any(|file| RustOwnership::context_path(&file.classified.path) && file.content.is_err())
+    {
+        ownership.disable_module_proof();
+    }
     let mut report = GateReport::new(request.config.gate.name.clone());
     record_budget_exclusion_advisory(&excluded, &mut report);
     let selected = files
@@ -235,10 +270,11 @@ fn analyze_snapshot(
             ),
         }
     }
-    let functions = analyze_loaded_files(&loaded, request.config, request.root, &mut report);
+    let functions = analyze_loaded_files(&loaded, &request, &ownership, &mut report);
     run_clone_analysis(
         CloneRun {
             snapshot: &snapshot,
+            ownership: &ownership,
             selected_ids: &snapshot.selected_ids(&files),
             changed_files: &files,
             config: request.config,
@@ -247,17 +283,7 @@ fn analyze_snapshot(
         },
         &mut report,
     )?;
-    if request.dead_code {
-        run_scoped_dead_code_analysis(
-            DeadCodeScope {
-                config: request.config,
-                root: request.root,
-                selected: &files,
-                snapshot: &snapshot,
-            },
-            &mut report,
-        )?;
-    }
+
     if request.snippets {
         excerpts::capture(&snapshot, request.root, &mut report);
     }
@@ -265,6 +291,7 @@ fn analyze_snapshot(
         report,
         read_results: snapshot.shared_contents(&files),
         functions,
+        ownership,
         empty: files.is_empty(),
         files,
     })
@@ -280,211 +307,4 @@ fn record_budget_exclusion_advisory(excluded_files: &[PathBuf], report: &mut Gat
         "{} {} excluded from file budget checks via hardgate.toml.",
         count, noun
     ));
-}
-
-fn analyze_loaded_files(
-    analyzed_inputs: &[(&ClassifiedFile, &str)],
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-) -> Vec<FunctionMetrics> {
-    let anti_gaming = AntiGamingScanner::new(&config.anti_gaming);
-    let invariants = InvariantsChecker::new(&config.invariants.rules);
-    let context = FileAnalysisContext {
-        config,
-        root,
-        anti_gaming: &anti_gaming,
-        invariants: &invariants,
-    };
-    let analyzed = analyze_inputs(analyzed_inputs, &context);
-    for (file, _) in analyzed_inputs {
-        observations::observe_file(file, config, report);
-    }
-    merge_file_analysis(analyzed, config, report)
-}
-
-struct FileAnalysis {
-    role: FileRole,
-    path: PathBuf,
-    budgets: Vec<BudgetViolation>,
-    suppressions: Vec<SuppressionViolation>,
-    invariants: Vec<InvariantViolation>,
-    functions: Vec<FunctionMetrics>,
-    complexity: Vec<ComplexityViolation>,
-    parse_error: Option<String>,
-}
-
-struct FileAnalysisContext<'a> {
-    config: &'a HardgateConfig,
-    root: &'a Path,
-    anti_gaming: &'a AntiGamingScanner,
-    invariants: &'a InvariantsChecker,
-}
-
-fn analyze_inputs(
-    inputs: &[(&ClassifiedFile, &str)],
-    context: &FileAnalysisContext<'_>,
-) -> Vec<FileAnalysis> {
-    if inputs.len() < 8 {
-        inputs
-            .iter()
-            .map(|(file, content)| analyze_one(file, content, context))
-            .collect()
-    } else {
-        inputs
-            .par_iter()
-            .map(|(file, content)| analyze_one(file, content, context))
-            .collect()
-    }
-}
-
-fn analyze_one(
-    file: &ClassifiedFile,
-    content: &str,
-    context: &FileAnalysisContext<'_>,
-) -> FileAnalysis {
-    let (budgets, suppressions, invariants) = analyze_safety(file, content, context);
-    let (functions, complexity, parse_error) = analyze_complexity(file, content, context);
-    FileAnalysis {
-        role: file.role,
-        path: file.path.clone(),
-        budgets,
-        suppressions,
-        invariants,
-        functions,
-        complexity,
-        parse_error: parse_error.map(|(_, error)| error),
-    }
-}
-
-fn analyze_safety(
-    file: &ClassifiedFile,
-    content: &str,
-    context: &FileAnalysisContext<'_>,
-) -> (
-    Vec<BudgetViolation>,
-    Vec<SuppressionViolation>,
-    Vec<InvariantViolation>,
-) {
-    let path = &file.path;
-    let safety = file.role.receives_safety_checks();
-    let budgets = if safety {
-        let policy = effective_file_budgets(context.config, file.role);
-        check_content_budgets(path, content, &policy, context.root)
-    } else {
-        Vec::new()
-    };
-    let suppressions = if safety && context.config.anti_gaming.disallow_suppressions {
-        context
-            .anti_gaming
-            .scan_content(path, content, context.root)
-    } else {
-        Vec::new()
-    };
-    let invariants = if receives_invariants(file) && context.config.invariants.enforce {
-        context.invariants.check_file(path, content, context.root)
-    } else {
-        Vec::new()
-    };
-    (budgets, suppressions, invariants)
-}
-
-fn receives_invariants(file: &ClassifiedFile) -> bool {
-    matches!(file.role, FileRole::Source | FileRole::Test)
-}
-
-fn analyze_complexity(
-    file: &ClassifiedFile,
-    content: &str,
-    context: &FileAnalysisContext<'_>,
-) -> (
-    Vec<FunctionMetrics>,
-    Vec<ComplexityViolation>,
-    Option<(PathBuf, String)>,
-) {
-    if !file.role.receives_complexity() || !file.ast_supported {
-        return (Vec::new(), Vec::new(), None);
-    }
-    let path = &file.path;
-    let mut analyzer = ComplexityAnalyzer::new();
-    let parsed = analyzer.analyze_file_checked(path, content, context.root);
-    let functions = match parsed {
-        Ok(functions) => functions,
-        Err(error) => {
-            return (
-                Vec::new(),
-                Vec::new(),
-                Some((path.clone(), error.to_string())),
-            );
-        }
-    };
-    let policy = effective_function_budgets(context.config, file.role);
-    let violations = ComplexityAnalyzer::check_violations(&functions, &policy);
-    (functions, violations, None)
-}
-
-fn merge_file_analysis(
-    analyzed: Vec<FileAnalysis>,
-    config: &HardgateConfig,
-    report: &mut GateReport,
-) -> Vec<FunctionMetrics> {
-    let mut all_functions = Vec::new();
-    for file in analyzed {
-        apply_budget_findings(report, config, file.role, file.budgets);
-        apply_suppression_findings(report, config, file.role, file.suppressions);
-        apply_invariant_findings(report, config, file.role, file.invariants);
-        apply_complexity_findings(report, config, file.role, file.complexity);
-        all_functions.extend(file.functions);
-        if let Some(error) = file.parse_error {
-            record_role_evidence_failure(
-                report,
-                RoleEvidence {
-                    config,
-                    role: file.role,
-                    step: "parse-source",
-                    target: &file.path,
-                    message: error,
-                },
-            );
-        }
-    }
-    all_functions
-}
-
-/// Shared single-file analysis used by `scan` and the MCP server.
-pub struct AnalyzeInput<'a> {
-    pub path: &'a Path,
-    pub content: &'a str,
-    pub config: &'a HardgateConfig,
-    pub root: &'a Path,
-    pub anti_gaming: &'a AntiGamingScanner,
-    pub invariants: &'a InvariantsChecker,
-}
-
-pub fn analyze_file_content(input: AnalyzeInput, report: &mut GateReport) -> Vec<FunctionMetrics> {
-    let classified = match classify_file(input.path, input.config, input.root) {
-        Ok(file) => file,
-        Err(error) => {
-            record_evidence_failure(
-                report,
-                true,
-                EvidenceFailure {
-                    step: "classify-source",
-                    target: input.path,
-                    message: format!("Unable to classify file: {error}"),
-                },
-            );
-            return Vec::new();
-        }
-    };
-    record_classification_gaps(&[&classified], input.config, input.root, report);
-    let context = FileAnalysisContext {
-        config: input.config,
-        root: input.root,
-        anti_gaming: input.anti_gaming,
-        invariants: input.invariants,
-    };
-    let analyzed = analyze_one(&classified, input.content, &context);
-    observations::observe_file(&classified, input.config, report);
-    merge_file_analysis(vec![analyzed], input.config, report)
 }

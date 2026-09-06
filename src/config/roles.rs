@@ -42,9 +42,6 @@ pub struct RolePolicy {
     pub max_bytes: Option<u64>,
     pub max_lines: Option<usize>,
     pub max_cyclomatic: Option<u32>,
-    pub max_cognitive: Option<u32>,
-    pub max_halstead_difficulty: Option<f64>,
-    pub max_abc: Option<f64>,
     pub max_parameters: Option<usize>,
     #[serde(alias = "max_function_lines")]
     pub max_function_lines: Option<usize>,
@@ -72,12 +69,6 @@ impl RolePolicy {
         merge_option(&mut self.max_bytes, &overrides.max_bytes);
         merge_option(&mut self.max_lines, &overrides.max_lines);
         merge_option(&mut self.max_cyclomatic, &overrides.max_cyclomatic);
-        merge_option(&mut self.max_cognitive, &overrides.max_cognitive);
-        merge_option(
-            &mut self.max_halstead_difficulty,
-            &overrides.max_halstead_difficulty,
-        );
-        merge_option(&mut self.max_abc, &overrides.max_abc);
         merge_option(&mut self.max_parameters, &overrides.max_parameters);
         merge_option(&mut self.max_function_lines, &overrides.max_function_lines);
         merge_option(&mut self.max_statements, &overrides.max_statements);
@@ -99,7 +90,6 @@ impl RolePolicy {
     fn validate(&self, role: FileRole) -> Result<()> {
         let name = role_name(role);
         validate_integer_thresholds(self, name)?;
-        validate_float_thresholds(self, name)?;
         if role != FileRole::Source && self.mutation_target == Some(true) {
             bail!(
                 "roles.{}.mutation_target may only be true for source",
@@ -123,7 +113,6 @@ fn validate_integer_thresholds(policy: &RolePolicy, role: &str) -> Result<()> {
         ),
         (policy.max_lines.map(|value| value as u64), "max_lines"),
         (policy.max_cyclomatic.map(u64::from), "max_cyclomatic"),
-        (policy.max_cognitive.map(u64::from), "max_cognitive"),
         (
             policy.max_parameters.map(|value| value as u64),
             "max_parameters",
@@ -151,18 +140,6 @@ fn validate_integer_thresholds(policy: &RolePolicy, role: &str) -> Result<()> {
     ] {
         if let Some(value) = value {
             ensure_positive(value, &format!("roles.{role}.{field}"))?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_float_thresholds(policy: &RolePolicy, role: &str) -> Result<()> {
-    for (value, field) in [
-        (policy.max_halstead_difficulty, "max_halstead_difficulty"),
-        (policy.max_abc, "max_abc"),
-    ] {
-        if let Some(value) = value {
-            ensure_positive_float(value, &format!("roles.{role}.{field}"))?;
         }
     }
     Ok(())
@@ -420,13 +397,6 @@ where
 {
     if value == T::from(0) {
         bail!("{field} must be greater than zero");
-    }
-    Ok(())
-}
-
-pub(super) fn ensure_positive_float(value: f64, field: &str) -> Result<()> {
-    if !value.is_finite() || value <= 0.0 {
-        bail!("{field} must be finite and greater than zero");
     }
     Ok(())
 }

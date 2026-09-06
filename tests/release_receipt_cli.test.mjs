@@ -15,11 +15,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "scripts", "release-receipt-cli.mjs");
 const platformAssets = [
   "hardgate-linux-x64.tar.gz",
-  "hardgate-linux-x64-musl.tar.gz",
-  "hardgate-linux-arm64.tar.gz",
-  "hardgate-linux-arm64-musl.tar.gz",
-  "hardgate-darwin-x64.tar.gz",
-  "hardgate-darwin-arm64.tar.gz",
 ];
 const version = "0.5.0";
 
@@ -96,8 +91,8 @@ try {
   assert.notEqual(result.status, 0);
   const linked = path.join(directory, "linked-dist");
   makeDist(linked);
-  fs.unlinkSync(path.join(linked, platformAssets[1]));
-  fs.symlinkSync(path.join(linked, platformAssets[0]), path.join(linked, platformAssets[1]));
+  fs.unlinkSync(path.join(linked, platformAssets[0]));
+  fs.symlinkSync(path.join(linked, "SHA256SUMS"), path.join(linked, platformAssets[0]));
   result = runCli(createArgs(linked, path.join(directory, "linked.json")));
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /symbolic link/);
@@ -145,7 +140,7 @@ try {
   assert.equal(result.status, 0, result.stderr);
   const failedValue = JSON.parse(fs.readFileSync(failedReceipt, "utf8"));
   assert.equal(failedValue.channels[REQUIRED_CHANNELS[2]].events.length, 2);
-  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=9/);
+  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=4/);
   assert.equal(runCli(["assert", "--receipt", failedReceipt, "--require-complete"]).status, 1);
   result = runCli(["failure", "--receipt", failedReceipt, "--channel", REQUIRED_CHANNELS[2], "--code", "BAD!", "--message", "invalid"]);
   assert.notEqual(result.status, 0);

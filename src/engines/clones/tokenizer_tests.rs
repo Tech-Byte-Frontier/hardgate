@@ -17,8 +17,6 @@ fn declarations_do_not_hide_the_first_executable_line() {
         "import{One}from 'module';",
         "import\"module\";",
         "import'module';",
-        "import (\n\"module\"\n)",
-        "from module import (\n one,\n two\n)",
         "export * from 'module';",
         "export { One } from 'module';",
         "export type { One } from 'module';",
@@ -100,4 +98,19 @@ fn interned_symbols_distinguish_collisions_and_reuse_exact_matches() {
     assert_eq!(interner.symbol(first), "first");
     assert_eq!(interner.symbol(second), "second");
     assert_eq!(interner.hash(second), hash_token("second"));
+}
+
+#[test]
+fn javascript_dynamic_imports_remain_executable_clone_tokens() {
+    for source in [
+        "import('module');",
+        "import ('module');",
+        "import\n/* load */\n('module');",
+        "import.meta.url",
+    ] {
+        assert!(
+            words(source).iter().any(|(token, _)| token == "import"),
+            "{source}"
+        );
+    }
 }

@@ -14,7 +14,6 @@ impl GateReport {
                 EngineId::Complexity,
                 EngineId::Invariants,
                 EngineId::Clones,
-                EngineId::DeadCode,
             ] {
                 self.observe_incomplete(id, step, message);
             }
@@ -31,13 +30,15 @@ impl GateReport {
     }
 
     pub(super) fn finalize_execution(&mut self) {
+        if self.tool_findings_count() > 0 {
+            self.observe_engine(EngineId::Lint, EngineState::Failed);
+        }
         for (id, count) in [
             (EngineId::FileBudgets, self.budget_violations.len()),
             (EngineId::Suppressions, self.suppression_violations.len()),
             (EngineId::Complexity, self.complexity_violations.len()),
             (EngineId::Invariants, self.invariant_violations.len()),
             (EngineId::Clones, self.clone_violations.len()),
-            (EngineId::DeadCode, self.dead_code_violations.len()),
             (EngineId::MutationReport, self.mutation_violations.len()),
         ] {
             if count > 0 {

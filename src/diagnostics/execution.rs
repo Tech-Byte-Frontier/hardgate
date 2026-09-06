@@ -13,15 +13,14 @@ pub enum EngineId {
     Complexity,
     Invariants,
     Clones,
-    DeadCode,
     Coverage,
     MutationReport,
-    MutationExecution,
     GeneratedFreshness,
     LegacyRatchet,
     FormatCheck,
     Lint,
     Tests,
+    Typecheck,
 }
 
 /// Cached is reserved for verified cache hits; current engines never emit it.
@@ -87,6 +86,23 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    pub fn is_partial(&self) -> bool {
+        self.command != "check"
+            || self.scope.mode != "repository"
+            || self
+                .engines
+                .iter()
+                .any(|engine| engine.enabled && !engine.selected)
+    }
+
+    pub fn omitted_requirements(&self) -> Vec<EngineId> {
+        self.engines
+            .iter()
+            .filter(|engine| engine.enabled && !engine.selected)
+            .map(|engine| engine.id)
+            .collect()
+    }
+
     pub(crate) fn reconcile(
         &mut self,
         observations: &BTreeMap<EngineId, EngineState>,
@@ -136,7 +152,6 @@ fn rank(state: EngineState) -> u8 {
 pub(crate) fn evidence_engine(step: &str) -> EngineId {
     match step {
         "clone-index" | "read-clone-index" => EngineId::Clones,
-        "dead-code-context" => EngineId::DeadCode,
         "coverage-report" | "coverage-diff" | "coverage-source-classification" => {
             EngineId::Coverage
         }
@@ -152,6 +167,7 @@ fn command_engine(step: &str) -> EngineId {
         "format_check" => EngineId::FormatCheck,
         "lint" => EngineId::Lint,
         "test" => EngineId::Tests,
+        "typecheck" => EngineId::Typecheck,
         _ => EngineId::Complexity,
     }
 }

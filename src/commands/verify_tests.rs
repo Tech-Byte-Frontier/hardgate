@@ -14,7 +14,6 @@ fn coverage_config() -> HardgateConfig {
             min_line_percent: Some(90.0),
             min_function_percent: None,
             min_branch_percent: None,
-            max_crap_score: None,
             critical_paths: None,
         },
         ..HardgateConfig::default()
@@ -23,19 +22,18 @@ fn coverage_config() -> HardgateConfig {
 
 fn function(file: &str) -> FunctionMetrics {
     FunctionMetrics {
+        test_only: false,
+        size: None,
         name: "main".to_string(),
         file: PathBuf::from(file),
         start_line: 1,
+        start_column: 0,
         end_line: 1,
         lines: 1,
         parameters: 0,
         cyclomatic: 1,
-        cognitive: 0,
-        halstead_difficulty: 0.0,
         max_nesting_depth: 0,
         statements: 1,
-        abc_score: 0.0,
-        cognitive_breakdown: Vec::new(),
         cyclomatic_breakdown: Vec::new(),
     }
 }

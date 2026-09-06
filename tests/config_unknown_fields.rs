@@ -42,8 +42,6 @@ const UNKNOWN_FIELD_CASES: &[&str] = &[
     "coverage|[coverage]\nreprot = \"coverage.info\"\n|reprot|report",
     "mutation|[mutation]\nenabeld = false\n|enabeld|enabled",
     "orchestration|[orchestration]\ntimout_secs = 1\n|timout_secs|timeout_secs",
-    "analysis|[analysis]\ndeadcode = true\n|deadcode|dead_code",
-    "dead-code|[analysis.dead_code]\nentry_pionts = [\"src/main.rs\"]\n|entry_pionts|entry_points",
     "role|[roles.source]\nmax_lins = 77\n|max_lins|max_lines",
     "role-section|[roles.sourc]\nmax_lines = 77\n|sourc|source",
     "classification-table|[classification]\nrulz = []\n|rulz|rules",
@@ -112,12 +110,7 @@ critical_paths = []
 [mutation]
 enabled = false
 reports = []
-test_cmd = ""
 
-[analysis.dead_code]
-enabled = false
-entry_points = []
-exclude = []
 "#,
     );
     let config = HardgateConfig::load_or_default(Some(&path)).unwrap();
@@ -129,10 +122,6 @@ exclude = []
     assert_eq!(config.coverage.critical_paths, Some(Vec::new()));
     assert!(!config.mutation.enabled);
     assert_eq!(config.mutation.reports, Some(Vec::new()));
-    assert_eq!(config.mutation.test_cmd.as_deref(), Some(""));
-    assert!(!config.analysis.dead_code.enabled);
-    assert!(config.analysis.dead_code.entry_points.is_empty());
-    assert!(config.analysis.dead_code.exclude.is_empty());
 
     let _ = std::fs::remove_dir_all(dir);
 }

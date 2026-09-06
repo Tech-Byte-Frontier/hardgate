@@ -3,6 +3,8 @@
 // Usage: node scripts/release-package.mjs --incoming build-binaries --output dist
 "use strict";
 
+import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,14 +12,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { option } from "./release-support.mjs";
 
-const targets = [
-  ["x86_64-unknown-linux-gnu", "hardgate-linux-x64"],
-  ["x86_64-unknown-linux-musl", "hardgate-linux-x64-musl"],
-  ["aarch64-unknown-linux-gnu", "hardgate-linux-arm64"],
-  ["aarch64-unknown-linux-musl", "hardgate-linux-arm64-musl"],
-  ["x86_64-apple-darwin", "hardgate-darwin-x64"],
-  ["aarch64-apple-darwin", "hardgate-darwin-arm64"],
-];
+const targets = Object.values(NATIVE_PACKAGES).map(({ target, name }) => [target, name]);
 
 function fail(message) {
   throw new Error(`release-package: ${message}`);

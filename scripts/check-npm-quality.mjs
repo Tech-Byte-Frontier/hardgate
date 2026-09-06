@@ -5,6 +5,8 @@
 // files[] includes README + both licenses, platform READMEs exist,
 // versions + optionalDependencies in sync with Cargo.toml.
 "use strict";
+
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { projectRoot as root, readCargoVersion } from "./release-support.mjs";
@@ -15,14 +17,7 @@ if (!version) {
   process.exit(1);
 }
 
-const platformPkgs = [
-  "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
-];
+const platformPkgs = PLATFORM_NAMES;
 
 let failures = 0;
 const fail = (msg) => {
@@ -39,6 +34,10 @@ const main = readJson("npm/hardgate/package.json");
 if (main.name !== "@tech-byte-frontier/hardgate")
   fail(`npm/hardgate name = ${main.name} (unscoped 'hardgate' is blocked by npm typosquat protection)`);
 if (main.version !== version) fail(`npm/hardgate version ${main.version} != Cargo ${version}`);
+if (JSON.stringify(Object.keys(main.optionalDependencies ?? {}).sort()) !== JSON.stringify([...platformPkgs].sort())) fail("wrapper must contain exactly the supported optional dependencies");
+for (const [field, expected] of Object.entries({ os: ["linux"], cpu: ["x64"], libc: ["glibc"] })) {
+  if (JSON.stringify(main[field]) !== JSON.stringify(expected)) fail(`wrapper ${field} must identify Linux x64 GNU`);
+}
 for (const p of platformPkgs) {
   if (main.optionalDependencies?.[p] !== version)
     fail(`npm/hardgate optionalDependencies[${p}] != ${version}`);

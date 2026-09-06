@@ -1,6 +1,10 @@
 // Inspect exact npm pack output without rewriting or shelling out to tar.
 "use strict";
 
+import { detectHost, hostNativePackage } from "./native-channel-support.mjs";
+
+import { PLATFORM_CONTRACT as RELEASE_CONTRACT } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,14 +15,7 @@ import { validateHost, validateManifestContract, validatePlatformArtifact, valid
 export const WRAPPER_NAME = "@tech-byte-frontier/hardgate";
 // Keep this contract aligned with scripts/verify-npm-publication.mjs, which is
 // the release verifier's authoritative platform map.
-const PLATFORM_CONTRACT = [
-  { name: "hardgate-linux-x64", os: ["linux"], cpu: ["x64"], libc: ["glibc"] },
-  { name: "hardgate-linux-x64-musl", os: ["linux"], cpu: ["x64"], libc: ["musl"] },
-  { name: "hardgate-linux-arm64", os: ["linux"], cpu: ["arm64"], libc: ["glibc"] },
-  { name: "hardgate-linux-arm64-musl", os: ["linux"], cpu: ["arm64"], libc: ["musl"] },
-  { name: "hardgate-darwin-x64", os: ["darwin"], cpu: ["x64"] },
-  { name: "hardgate-darwin-arm64", os: ["darwin"], cpu: ["arm64"] },
-];
+const PLATFORM_CONTRACT = RELEASE_CONTRACT;
 const PLATFORM_PACKAGES = PLATFORM_CONTRACT.map(({ name }) => name);
 const MAX_TOTAL_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
@@ -93,24 +90,7 @@ function packageArchiveFiles(packagesDir) {
 }
 
 function hostPlatformPackage() {
-  if (process.platform === "darwin") {
-    if (process.arch === "x64") return "hardgate-darwin-x64";
-    if (process.arch === "arm64") return "hardgate-darwin-arm64";
-    return null;
-  }
-  if (process.platform !== "linux") return null;
-  const musl = (() => {
-    try {
-      const report = process.report?.getReport?.();
-      const version = report?.header?.glibcVersionRuntime;
-      return !(typeof version === "string" && version.trim().length > 0);
-    } catch {
-      return true;
-    }
-  })();
-  if (process.arch === "x64") return `hardgate-linux-x64${musl ? "-musl" : ""}`;
-  if (process.arch === "arm64") return `hardgate-linux-arm64${musl ? "-musl" : ""}`;
-  return null;
+  return hostNativePackage(detectHost());
 }
 
 function readArtifact(archivePath, directory, expectedVersion, budget) {
@@ -160,7 +140,7 @@ function requireExactPackageSet(artifacts, expectedVersion) {
   const extraNames = [...artifacts.keys()].filter((name) => !expectedNames.has(name));
   if (missingNames.length === 0 && extraNames.length === 0 && artifacts.size === expectedNames.size) return;
   const missingLabel = missingNames.map((name) => `${name}@${expectedVersion}`).join(", ") || "none";
-  fail(`--packages-dir must contain exactly the wrapper and six platform archives (missing: ${missingLabel}; extra: ${extraNames.join(", ") || "none"})`);
+  fail(`--packages-dir must contain exactly the wrapper and the Linux x64 GNU platform archive (missing: ${missingLabel}; extra: ${extraNames.join(", ") || "none"})`);
 }
 
 function validateNonHostPlatforms(artifacts, host, expectedVersion) {

@@ -11,7 +11,7 @@ Use the repository pins:
 - Rust `1.98.1`, from `rust-toolchain.toml`, with `rustfmt`, `clippy`, and
   `llvm-tools-preview`.
 - Node `26.8.1`, from `.nvmrc`.
-- CI also pins npm `12.0.2`, pnpm `11.25.0`, Yarn `4.18.0`, and Bun `1.4.0`.
+- CI also pins npm `12.0.2` and pnpm `11.25.0`.
 - Coverage uses nightly Rust `nightly-2026-09-04`, `cargo-llvm-cov` `0.9.0`,
   and `cargo-audit` `0.22.2`.
 
@@ -48,13 +48,12 @@ node tests/npm-wrapper-regression.test.mjs
 node tests/consumer_matrix.mjs
 node tests/release_contract.sbom.test.mjs
 node tests/release_contract.test.mjs
-node tests/release_contract.install.test.mjs
 node tests/release_contract.package.test.mjs
 node tests/release_contract.abi.test.mjs
 ```
 
 The complete configured evidence gate is `scripts/self-gate.sh`. It covers
-static and dead-code checks, pinned coverage, a real mutation sample, and the
+static policy and specialist lint checks, pinned coverage, a real mutation sample, and the
 consumer matrix. Run it only with its required pinned tools and a repository
 binary available at `target/release/hardgate` or through `HARDGATE_BINARY`.
 
@@ -66,7 +65,7 @@ is not sufficient.
 
 ## Mutation and fixtures
 
-Native mutation runs in a private copy of the current working files, including
+Specialist mutation runs in a private copy of the current working files, including
 dirty and untracked inputs. Dependencies are copied; `.git` and `target` are
 omitted. SIGINT and SIGTERM stop owned children and remove the copy. SIGKILL
 can leave that copy behind, but mutants never replace the original sources.

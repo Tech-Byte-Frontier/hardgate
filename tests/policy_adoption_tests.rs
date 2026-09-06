@@ -18,14 +18,23 @@ fn init_defaults_to_structural_policy_but_explicit_strict_requires_evidence() {
     assert_eq!(config.gate.preset, Preset::Balanced);
     assert!(!config.coverage.enabled && !config.mutation.enabled);
     balanced.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    let output = run(balanced.as_ref(), &["check", "--json"]);
+    let output = run(
+        balanced.as_ref(),
+        &["check", "--checks", "policy", "--json"],
+    );
     assert_status(&output, true, "structural adoption check");
     let report = json(&output);
-    assert!(report["advisories"].as_array().unwrap().iter().any(|item| {
-        item.as_str()
+    for id in ["coverage", "mutation_report"] {
+        let engine = report["execution"]["engines"]
+            .as_array()
             .unwrap()
-            .contains("coverage evidence (disabled by policy)")
-    }));
+            .iter()
+            .find(|engine| engine["id"] == id)
+            .unwrap();
+        assert_eq!(engine["state"], "disabled");
+    }
+    assert_eq!(report["partial"], true);
+    assert_eq!(report["accepted"], false);
 
     let strict = Fixture::new("policy-adoption", "strict", None);
     assert_status(
@@ -34,7 +43,7 @@ fn init_defaults_to_structural_policy_but_explicit_strict_requires_evidence() {
         "strict initialization",
     );
     strict.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
-    let output = run(strict.as_ref(), &["check", "--json"]);
+    let output = run(strict.as_ref(), &["check", "--checks", "policy", "--json"]);
     assert_status(&output, false, "strict missing evidence");
     let report = json(&output);
     for step in ["coverage-report", "mutation-report"] {
@@ -132,7 +141,7 @@ clone_block_min_tokens = 1
         "tests/example.rs",
         "fn test() {\n let a = 1;\n let b = 2;\n}\n",
     );
-    let output = run(fixture.as_ref(), &["check", "--json"]);
+    let output = run(fixture.as_ref(), &["check", "--checks", "policy", "--json"]);
     assert_status(&output, false, "explicit test size enforcement");
     let report = json(&output);
     assert!(!report["budget_violations"].as_array().unwrap().is_empty());
@@ -199,9 +208,11 @@ fn calibrated_numeric_boundaries_keep_complexity_and_strict_evidence() {
     use hardgate::engines::ComplexityAnalyzer;
     use std::path::Path;
     let mut analyzer = ComplexityAnalyzer::new();
-    let source = "def five(a, b, *, c, d, e):\n    return a + b + c + d + e\ndef six(a, b, *, c, d, e, f):\n    return a + b + c + d + e + f\n";
+    let source = "function five(a, b, c, d, e) { return a + b + c + d + e; }
+function six(a, b, c, d, e, f) { return a + b + c + d + e + f; }
+";
     let metrics = analyzer
-        .analyze_file_checked(Path::new("src/args.py"), source, Path::new("."))
+        .analyze_file_checked(Path::new("src/args.ts"), source, Path::new("."))
         .unwrap();
     let strict = Preset::StrictAgent.to_default_config();
     let findings = ComplexityAnalyzer::check_violations(&metrics, &strict.budgets.functions);
@@ -212,7 +223,6 @@ fn calibrated_numeric_boundaries_keep_complexity_and_strict_evidence() {
     assert_eq!(parameters.len(), 1);
     assert_eq!(parameters[0].function_name, "six");
     assert_eq!(strict.budgets.functions.max_cyclomatic, Some(10));
-    assert_eq!(strict.budgets.functions.max_cognitive, Some(15));
     assert_eq!(strict.budgets.functions.max_nesting_depth, Some(4));
     assert!(strict.coverage.enabled && strict.mutation.enabled);
     assert_eq!(strict.coverage.min_line_percent, Some(95.0));
@@ -253,7 +263,7 @@ fn adoption_preserves_baseline_debt_but_blocks_new_debt_and_missing_evidence() {
     );
     fs_git::init_repo(fixture.as_ref());
     fs_git::commit_baseline(fixture.as_ref(), "baseline");
-    let output = run(fixture.as_ref(), &["check", "--json"]);
+    let output = run(fixture.as_ref(), &["check", "--checks", "policy", "--json"]);
     assert_status(&output, true, "existing debt adoption");
     let report = json(&output);
     assert!(
@@ -268,13 +278,13 @@ fn adoption_preserves_baseline_debt_but_blocks_new_debt_and_missing_evidence() {
         "pub fn added(a:i32,b:i32,c:i32,d:i32,e:i32,f:i32,g:i32) {}\n",
     );
     assert_status(
-        &run(fixture.as_ref(), &["check", "--json"]),
+        &run(fixture.as_ref(), &["check", "--checks", "policy", "--json"]),
         false,
         "new debt blocks",
     );
     std::fs::remove_file(fixture.as_ref().join("src/new.rs")).unwrap();
     fixture.write("hardgate.toml", "[gate]\npreset = \"legacy-migration\"\n[legacy]\nreference_branch = \"HEAD\"\n[coverage]\nenabled = true\nreport = \"missing.info\"\n");
-    let output = run(fixture.as_ref(), &["check", "--json"]);
+    let output = run(fixture.as_ref(), &["check", "--checks", "policy", "--json"]);
     assert_status(&output, false, "ratchet cannot waive current evidence");
     assert!(
         json(&output)["orchestration_violations"]

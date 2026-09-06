@@ -1,77 +1,17 @@
 // Shared validation, host, and proof primitives for native npm channel checks.
 "use strict";
 
+
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { compareReleaseTags } from "./release-order.mjs";
 
-export const NATIVE_PACKAGES = Object.freeze({
-  "hardgate-linux-x64": Object.freeze({
-    name: "hardgate-linux-x64",
-    platform: "linux",
-    arch: "x64",
-    libc: "glibc",
-    target: "x86_64-unknown-linux-gnu",
-    archPattern: /x86-64/,
-    abi: "gnu",
-  }),
-  "hardgate-linux-x64-musl": Object.freeze({
-    name: "hardgate-linux-x64-musl",
-    platform: "linux",
-    arch: "x64",
-    libc: "musl",
-    target: "x86_64-unknown-linux-musl",
-    archPattern: /x86-64/,
-    abi: "musl",
-  }),
-  "hardgate-linux-arm64": Object.freeze({
-    name: "hardgate-linux-arm64",
-    platform: "linux",
-    arch: "arm64",
-    libc: "glibc",
-    target: "aarch64-unknown-linux-gnu",
-    archPattern: /ARM aarch64/,
-    abi: "gnu",
-  }),
-  "hardgate-linux-arm64-musl": Object.freeze({
-    name: "hardgate-linux-arm64-musl",
-    platform: "linux",
-    arch: "arm64",
-    libc: "musl",
-    target: "aarch64-unknown-linux-musl",
-    archPattern: /ARM aarch64/,
-    abi: "musl",
-  }),
-  "hardgate-darwin-x64": Object.freeze({
-    name: "hardgate-darwin-x64",
-    platform: "darwin",
-    arch: "x64",
-    libc: null,
-    target: "x86_64-apple-darwin",
-    archPattern: /x86_64/,
-    abi: null,
-  }),
-  "hardgate-darwin-arm64": Object.freeze({
-    name: "hardgate-darwin-arm64",
-    platform: "darwin",
-    arch: "arm64",
-    libc: null,
-    target: "aarch64-apple-darwin",
-    archPattern: /arm64/,
-    abi: null,
-  }),
-});
+import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+export { NATIVE_PACKAGES } from "./release-platforms.mjs";
 
-const HOST_PACKAGE_RULES = [
-  ["linux", "x64", "glibc", "hardgate-linux-x64"],
-  ["linux", "x64", "musl", "hardgate-linux-x64-musl"],
-  ["linux", "arm64", "glibc", "hardgate-linux-arm64"],
-  ["linux", "arm64", "musl", "hardgate-linux-arm64-musl"],
-  ["darwin", "x64", null, "hardgate-darwin-x64"],
-  ["darwin", "arm64", null, "hardgate-darwin-arm64"],
-];
+const HOST_PACKAGE_RULES = Object.values(NATIVE_PACKAGES).map(({ platform, arch, libc, name }) => [platform, arch, libc, name]);
 
 export const WRAPPER_PACKAGE = "@tech-byte-frontier/hardgate";
 export const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -107,7 +47,7 @@ export function regularFile(file, label) {
 
 export function packageDescriptor(packageName) {
   const descriptor = Object.hasOwn(NATIVE_PACKAGES, packageName) ? NATIVE_PACKAGES[packageName] : undefined;
-  if (!descriptor) fail(`--package must identify one of the six native packages, got ${packageName || "<missing>"}`);
+  if (!descriptor) fail(`--package must identify the supported Linux x64 GNU package, got ${packageName || "<missing>"}`);
   return descriptor;
 }
 
@@ -243,10 +183,7 @@ export function hostNativePackage(host) {
   ))?.[3] ?? null;
 }
 
-export function needsNpmForce(descriptor, host) {
-  assertHostSupports(descriptor, host);
-  return descriptor.libc === "musl" && host.libc === "glibc";
-}
+
 
 export function npmPackageSpec(packageName, version, mode) {
   return `${packageName}@${mode === "exact" ? version : "latest"}`;

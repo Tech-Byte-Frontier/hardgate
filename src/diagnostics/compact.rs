@@ -2,8 +2,8 @@ use super::{GateReport, push_compact_entry, push_gate_header, status_label};
 use colored::*;
 
 impl GateReport {
-    /// Compact one-line-per-violation output without snippets, breakdowns, or
-    /// help text. Reduces thousands of lines down to one `-->` line each.
+    /// Compact output with one location per function review target and one
+    /// entry per other finding, without snippets, breakdowns, or help text.
     pub fn render_compact(&self) -> String {
         let mut out = String::new();
         push_gate_header(
@@ -38,17 +38,34 @@ impl GateReport {
             let title = format!("error[anti-gaming]: forbidden `{}`", v.token);
             rows.push((title, format!("{}:{}", v.file.display(), v.line_number)));
         }
-        for v in &self.complexity_violations {
-            let title = format!(
-                "error[complexity]: {} in `{}` is {:.0} (limit: {:.0})",
-                v.metric, v.function_name, v.actual, v.limit
-            );
-            rows.push((title, format!("{}:{}", v.file.display(), v.line_number)));
+        for group in self.function_reviews() {
+            let metrics = group
+                .metrics
+                .iter()
+                .map(|v| format!("{} {:.0}/{:.0}", v.metric, v.actual, v.limit))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let size = group
+                .size
+                .map(|size| format!("; {}", size.description()))
+                .unwrap_or_default();
+            rows.push((
+                format!(
+                    "error[complexity]: `{}`: {metrics}{size}",
+                    group.function_name
+                ),
+                group.location(),
+            ));
         }
         for v in &self.budget_violations {
             let title = format!(
-                "error[file-budget]: {} is {} (limit: {})",
-                v.metric, v.actual, v.limit
+                "error[file-budget]: {} is {} (limit: {}){}",
+                v.metric,
+                v.actual,
+                v.limit,
+                self.file_size_description(&v.file)
+                    .map(|size| format!("; {size}"))
+                    .unwrap_or_default()
             );
             rows.push((title, format!("{}", v.file.display())));
         }
@@ -102,10 +119,17 @@ impl GateReport {
             );
             rows.push((title, format!("{}", v.report_file.display())));
         }
-        for v in &self.dead_code_violations {
-            let title = format!("error[dead-code]: [{}] {}", v.violation_type, v.message);
-            let suffix = v.line_number.map(|l| format!(":{l}")).unwrap_or_default();
-            rows.push((title, format!("{}{suffix}", v.file.display())));
+
+        for finding in &self.tool_diagnostics {
+            rows.push((
+                format!("{}[{}]: {}", finding.level, finding.rule, finding.message),
+                format!(
+                    "{}:{}:{}",
+                    finding.file.display(),
+                    finding.line,
+                    finding.column
+                ),
+            ));
         }
         for v in &self.orchestration_violations {
             let title = format!("error[tool]: `{}` failed", v.command);

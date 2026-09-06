@@ -1,6 +1,0 @@
-{
-  "name": "consumer-package-manager-yarn",
-  "private": true,
-  "packageManager": "yarn@4.18.0",
-  "scripts": { "test": "jest" }
-}

@@ -6,10 +6,7 @@ use std::path::{Path, PathBuf};
 pub(crate) struct ManifestInventory {
     pub(crate) cargo: Vec<PathBuf>,
     pub(crate) packages: Vec<PathBuf>,
-    pub(crate) python: Vec<PathBuf>,
-    pub(crate) go: Vec<PathBuf>,
     pub(crate) js_config: bool,
-    pub(crate) python_config: bool,
 }
 
 pub(crate) fn collect_manifests(root: &Path) -> ManifestInventory {
@@ -17,8 +14,6 @@ pub(crate) fn collect_manifests(root: &Path) -> ManifestInventory {
     collect_manifests_at(root, 3, &mut inventory);
     inventory.cargo.sort();
     inventory.packages.sort();
-    inventory.python.sort();
-    inventory.go.sort();
     inventory.js_config = has_any(
         root,
         &[
@@ -35,16 +30,14 @@ pub(crate) fn collect_manifests(root: &Path) -> ManifestInventory {
             "eslint.config.js",
             "eslint.config.mjs",
             "oxlint.config.js",
-        ],
-    );
-    inventory.python_config = has_any(
-        root,
-        &[
-            "ruff.toml",
-            ".ruff.toml",
-            ".flake8",
-            "tox.ini",
-            "pytest.ini",
+            "oxlint.config.ts",
+            "oxlint.config.mts",
+            ".oxlintrc.json",
+            ".oxlintrc.jsonc",
+            ".oxfmtrc.json",
+            ".oxfmtrc.jsonc",
+            "oxfmt.config.ts",
+            "oxfmt.config.mts",
         ],
     );
     inventory
@@ -81,10 +74,6 @@ pub(crate) fn record_manifest(path: &Path, inventory: &mut ManifestInventory) {
     match path.file_name().and_then(|name| name.to_str()) {
         Some("Cargo.toml") => inventory.cargo.push(path.to_path_buf()),
         Some("package.json") => inventory.packages.push(path.to_path_buf()),
-        Some("pyproject.toml") | Some("setup.py") | Some("requirements.txt") => {
-            inventory.python.push(path.to_path_buf())
-        }
-        Some("go.mod") => inventory.go.push(path.to_path_buf()),
         _ => {}
     }
 }

@@ -20,6 +20,7 @@ fn orchestration_rendering_quotes_commands_and_preserves_timeout() {
         lint: Some("lint".to_string()),
         test_cmd: Some("test".to_string()),
         timeout_secs: Some(300),
+        ..Default::default()
     };
     let mut output = String::new();
     append_orchestration(&mut output, &orchestration);

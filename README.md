@@ -13,6 +13,10 @@ CI jobs, and coding agents can inspect before accepting a change.
 A passing report means that the enabled engines found no blocking findings. It
 does not claim that every possible quality property was proven.
 
+Hardgate 0.6 supports Linux x64 GNU (Ubuntu 24.04 baseline). Workload commands
+require cgroup v2, a systemd user manager or inherited verified limits, and
+Landlock ABI 3+ for read-only child checks. See [runtime setup](docs/INSTALLATION.md).
+
 ## Quick start
 
 Install the latest released Cargo CLI, then initialize a structural policy in
@@ -41,17 +45,17 @@ source version as an npm or registry install target before a release.
   migration, configuration, documentation, vendor, or unknown roles before
   engines choose their inputs.
 - **Structural budgets:** configurable file and function budgets use Tree-sitter
-  metrics for Rust, JavaScript, TypeScript/TSX, Python, and Go.
+  metrics for Rust, JavaScript, TypeScript/TSX.
 - **Anti-gaming and architecture:** suppression, forbidden-token, and
   declarative path-scoped import, call, and token rules can block a change.
 - **Clone debt:** bounded normalized-token comparisons produce stable,
   path-independent clone fingerprints.
 - **Evidence:** enabled LCOV, mutation-report, and generated-freshness checks
   fail closed when required inputs are missing, empty, unreadable, or malformed.
-- **Native mutation:** an optional baseline-plus-mutant workflow runs in a
-  private workspace and verifies source restoration on Linux and macOS.
-- **Orchestration:** `check --all` runs only the formatter, linter, and test
-  commands configured by the repository.
+- **Specialist evidence:** optional cargo-mutants, Stryker, LLVM and Vitest
+  producers bind fresh reports to source/test/config inputs and verify restoration.
+- **Acceptance:** `check` verifies formatting and linting by default, together
+  with configured tests, type checks and required evidence.
 
 Hardgate inventories additional text and data formats for classification and
 safety rules. It does not claim compiler or type-checker analysis, global
@@ -61,27 +65,25 @@ module resolution, or a hosted quality dashboard.
 
 | Command | Purpose |
 | --- | --- |
-| `check` | Static engines plus enabled evidence and freshness checks |
+| `check` | Combined policy, formatting, linting, configured tests/type checks and evidence |
 | `check --diff` | Changed/staged static scope and changed executable-line coverage |
-| `check --all` | `check` plus configured formatter, linter, and test commands |
-| `verify` | Full static/dead-code scope plus configured evidence and ratchet checks |
-| `mutate` | Native baseline and bounded AST mutants when native mutation is enabled |
+| `check --checks policy` | Explicit partial run of policy and required evidence |
+| `evidence <producer>` | Run a specialist in an isolated copy and bind its fresh report |
 | `mcp` | Static check, file scan, and metrics tools over stdio |
 
-These commands keep static analysis, report evaluation, orchestration, and
-native mutation separate. See the [CLI reference](docs/CLI_AND_INTEGRATION.md)
+These commands distinguish static analysis, report evaluation and orchestration. See the [CLI reference](docs/CLI_AND_INTEGRATION.md)
 for scope, evidence, exit status, and agent integration details.
 
 ## Documentation
 
 | Need | Guide |
 | --- | --- |
-| Install Cargo, npm, pnpm, Yarn, Bun, or shell channels | [Installation](docs/INSTALLATION.md) |
+| Install Cargo, npm, pnpm, or a direct binary | [Installation](docs/INSTALLATION.md) |
 | Initialize a policy and follow the first check loop | [Getting started](docs/GETTING_STARTED.md) |
 | Command behavior and agent/MCP integration | [CLI reference](docs/CLI_AND_INTEGRATION.md) |
 | Presets, roles, budgets, evidence, and classification | [Configuration](docs/CONFIGURATION_SPEC.md) |
 | Internal components and execution boundaries | [Architecture](docs/ARCHITECTURE.md) |
-| Native mutation resources and limits | [Mutation resources](docs/MUTATION_RESOURCES.md) |
+| Specialist mutation resources and limits | [Mutation resources](docs/MUTATION_RESOURCES.md) |
 | JSON reports and execution evidence | [Report schema](docs/REPORT_SCHEMA.md) |
 | Stable diagnostic rule IDs | [Diagnostic rules](docs/DIAGNOSTIC_RULES.md) |
 | Comparison with adjacent tools | [Existing landscape](docs/EXISTING_LANDSCAPE.md) |

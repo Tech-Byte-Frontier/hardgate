@@ -1,6 +1,5 @@
 mod detect;
 mod manifest;
-mod mixed;
 mod reference;
 mod render;
 mod tooling;
@@ -57,6 +56,10 @@ pub fn cmd_init_with_options(options: InitOptions) -> Result<()> {
     init_at(&root, &options)
 }
 
+pub(crate) fn detected_orchestration(root: &Path) -> crate::config::OrchestrationConfig {
+    detect::detect_project(root).orchestration
+}
+
 fn init_at(root: &Path, options: &InitOptions) -> Result<()> {
     let target = root.join("hardgate.toml");
     if !options.preview && entry_exists(&target)? {
@@ -79,7 +82,7 @@ fn init_at(root: &Path, options: &InitOptions) -> Result<()> {
         detection: &detection,
         reference_status,
     };
-    let missing_setup = missing_setup(&setup);
+    let missing_setup = missing_setup(&setup, options);
     let content = render::render(render::RenderInput {
         config: &config,
         preset,
@@ -158,12 +161,12 @@ struct SetupContext<'a> {
     reference_status: ReferenceStatus,
 }
 
-fn missing_setup(context: &SetupContext<'_>) -> Vec<String> {
+fn missing_setup(context: &SetupContext<'_>, options: &InitOptions) -> Vec<String> {
     let mut missing = context
         .detection
         .missing_setup
         .iter()
-        .filter(|message| !resolved_by_override(message, context.config))
+        .filter(|message| !resolved_by_override(message, options))
         .cloned()
         .collect();
     append_coverage_setup(&mut missing, context.root, context.config);
@@ -176,19 +179,12 @@ fn missing_setup(context: &SetupContext<'_>) -> Vec<String> {
     deduplicate(missing)
 }
 
-fn resolved_by_override(message: &str, config: &HardgateConfig) -> bool {
+fn resolved_by_override(message: &str, options: &InitOptions) -> bool {
     let message = message.to_ascii_lowercase();
-    let formatter_override =
-        config.orchestration.format_check.is_some() || config.orchestration.format.is_some();
-    let linter_override = config.orchestration.lint.is_some();
-    (formatter_override
-        && (message.contains("formatter")
-            || message.contains("prettier")
-            || message.contains("biome")))
-        || (linter_override
-            && (message.contains("linter")
-                || message.contains("eslint")
-                || message.contains("oxlint")))
+    let formatter_override = options.format_check.is_some();
+    let linter_override = options.lint.is_some();
+    (formatter_override && message.starts_with("formatter"))
+        || (linter_override && message.starts_with("linter"))
 }
 
 fn append_coverage_setup(missing: &mut Vec<String>, root: &Path, config: &HardgateConfig) {
@@ -336,14 +332,7 @@ fn next_command(
     {
         return "hardgate config";
     }
-    if config.orchestration.format_check.is_some()
-        || config.orchestration.lint.is_some()
-        || config.orchestration.test_cmd.is_some()
-    {
-        "hardgate check --all"
-    } else {
-        "hardgate check"
-    }
+    "hardgate check"
 }
 
 fn reference_label(status: ReferenceStatus) -> &'static str {

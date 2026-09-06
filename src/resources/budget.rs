@@ -45,18 +45,6 @@ impl MutationBudget {
         })
     }
 
-    pub(crate) fn source_bytes(self) -> usize {
-        (self.memory_bytes / 128).min(super::MAX_SOURCE_BYTES as u64) as usize
-    }
-
-    pub(crate) fn snapshot_bytes(self) -> usize {
-        (self.memory_bytes / 8).min(128 * MIB) as usize
-    }
-
-    pub(crate) fn candidate_count(self) -> usize {
-        (self.memory_bytes / 8192).min(100_000) as usize
-    }
-
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn high_bytes(self) -> u64 {
         Self::high_memory_bytes(self.memory_bytes)

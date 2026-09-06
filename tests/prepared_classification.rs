@@ -104,10 +104,7 @@ fn lockfiles_are_classified_as_generated() {
         "package-lock.json",
         "yarn.lock",
         "Cargo.lock",
-        "poetry.lock",
-        "Pipfile.lock",
         "bun.lock",
-        "composer.lock",
     ] {
         let classified = prepared.classify(Path::new(lockfile));
         assert_eq!(

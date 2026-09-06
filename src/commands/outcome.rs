@@ -76,11 +76,15 @@ pub(crate) fn append_scan_metrics(out: &mut String, functions: &[crate::engines:
     out.push_str("\nFunction metrics (all analyzed functions):\n");
     for function in functions {
         out.push_str(&format!(
-            "  {}:{} {}: cyclomatic={}, cognitive={}, parameters={}, lines={}, nesting={}, statements={}, Halstead={:.2}, ABC={:.2}\n",
-            function.file.display(), function.start_line, function.name,
-            function.cyclomatic, function.cognitive, function.parameters,
-            function.lines, function.max_nesting_depth, function.statements,
-            function.halstead_difficulty, function.abc_score,
+            "  {}:{} {}: cyclomatic={}, parameters={}, lines={}, nesting={}, statements={}\n",
+            function.file.display(),
+            function.start_line,
+            function.name,
+            function.cyclomatic,
+            function.parameters,
+            function.lines,
+            function.max_nesting_depth,
+            function.statements,
         ));
     }
 }

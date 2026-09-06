@@ -129,24 +129,13 @@ fn concise_and_full_outputs_preserve_the_effective_policy() {
                 r#"{"packageManager":"pnpm@9","scripts":{"format":"format","lint":"lint","test":"test"}}"#,
             ),
         ),
-        (
-            "effective-python",
-            (
-                "pyproject.toml",
-                "[project]\nname = \"fixture\"\n\n[tool.ruff]\nline-length = 88\n",
-            ),
-        ),
-        (
-            "effective-go",
-            ("go.mod", "module example.test\n\ngo 1.23\n"),
-        ),
     ] {
         assert_policy_round_trip(tag, "balanced", Some(manifest), [None, None, None]);
     }
     assert_policy_round_trip(
         "effective-overrides",
         "balanced",
-        Some(("go.mod", "module example.test\n\ngo 1.23\n")),
+        Some(("Cargo.toml", "[workspace]\nmembers=[]\n")),
         [
             Some("tool format --check"),
             Some("tool format"),
@@ -168,15 +157,15 @@ fn rust_detection_uses_cargo_commands() {
             [
                 "cargo fmt --all -- --check",
                 "cargo fmt --all",
-                "cargo clippy --all-targets --all-features -- -D warnings",
-                "cargo test --all-targets",
+                "cargo clippy --workspace --all-targets --all-features --message-format=json -- -D warnings",
+                "cargo test --workspace --all-targets --locked",
             ],
         );
     });
 }
 
 #[test]
-fn javascript_detection_uses_safe_package_script_wrappers() {
+fn javascript_detection_does_not_guess_custom_script_semantics() {
     with_root("javascript", |root| {
         fs::write(
             root.join("package.json"),
@@ -193,15 +182,14 @@ fn javascript_detection_uses_safe_package_script_wrappers() {
         .unwrap();
         cmd_init_with_options(options("balanced")).unwrap();
         let config = load_written(root);
-        assert_eq!(
-            config.orchestration.format_check.as_deref(),
-            Some("pnpm run format:check")
+        assert!(config.orchestration.format_check.is_none());
+        assert!(config.orchestration.format.is_none());
+        assert!(config.orchestration.lint.is_none());
+        assert!(
+            fs::read_to_string(root.join("hardgate.toml"))
+                .unwrap()
+                .contains("custom or ambiguous semantics")
         );
-        assert_eq!(
-            config.orchestration.format.as_deref(),
-            Some("pnpm run format")
-        );
-        assert_eq!(config.orchestration.lint.as_deref(), Some("pnpm run lint"));
         assert_eq!(
             config.orchestration.test_cmd.as_deref(),
             Some("pnpm run test")
@@ -209,74 +197,6 @@ fn javascript_detection_uses_safe_package_script_wrappers() {
         assert!(!root.join("FORMAT_EXECUTED").exists());
         assert!(!root.join("LINT_EXECUTED").exists());
         assert!(!root.join("TEST_EXECUTED").exists());
-    });
-}
-
-#[test]
-fn python_detection_requires_explicit_configured_tools() {
-    with_root("python", |root| {
-        let config = initialize_manifest(
-            root,
-            "pyproject.toml",
-            "[project]\nname = \"fixture\"\n\n[tool.ruff]\nline-length = 88\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
-        );
-        assert_commands(
-            &config,
-            [
-                "ruff format --check .",
-                "ruff format .",
-                "ruff check .",
-                "pytest",
-            ],
-        );
-    });
-}
-
-#[test]
-fn root_python_metadata_wins_over_nested_inventory_order() {
-    with_root("python-root-first", |root| {
-        fs::write(
-            root.join("pyproject.toml"),
-            "[project]\nname = \"root\"\n\n[tool.black]\nline-length = 88\n",
-        )
-        .unwrap();
-        let nested = root.join("packages").join("app");
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(
-            nested.join("pyproject.toml"),
-            "[project]\nname = \"nested\"\n\n[tool.ruff]\nline-length = 100\n",
-        )
-        .unwrap();
-        cmd_init_with_options(options("balanced")).unwrap();
-        let config = load_written(root);
-        assert_eq!(
-            config.orchestration.format_check.as_deref(),
-            Some("black --check .")
-        );
-        assert_eq!(config.orchestration.format.as_deref(), Some("black ."));
-        assert!(config.orchestration.lint.is_none());
-    });
-}
-
-#[test]
-fn go_detection_uses_go_tools_without_js_defaults() {
-    with_root("go", |root| {
-        fs::write(root.join("go.mod"), "module example.test\n\ngo 1.23\n").unwrap();
-        cmd_init_with_options(options("balanced")).unwrap();
-        let config = load_written(root);
-        assert_commands(
-            &config,
-            [
-                "sh -c 'files=$(gofmt -l .) || exit $?; test -z \"$files\"'",
-                "gofmt -w .",
-                "go vet ./...",
-                "go test ./...",
-            ],
-        );
-        assert_ne!(
-            config.orchestration.lint.as_deref(),
-            Some("oxlint --type-aware .")
-        );
     });
 }
 
@@ -298,7 +218,7 @@ fn ambiguous_monorepo_leaves_commands_unconfigured() {
 #[test]
 fn explicit_commands_override_detection() {
     with_root("overrides", |root| {
-        fs::write(root.join("go.mod"), "module example.test\n\ngo 1.23\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers=[]\n").unwrap();
         cmd_init_with_options(InitOptions {
             preset: "balanced".to_string(),
             format_check: Some("tool format --check".to_string()),

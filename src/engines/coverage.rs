@@ -4,6 +4,8 @@ mod evaluator;
 mod lcov;
 #[path = "coverage/lcov_details.rs"]
 mod lcov_details;
+#[path = "coverage/ownership.rs"]
+mod ownership;
 #[path = "coverage/paths.rs"]
 mod paths;
 #[path = "coverage/scoring.rs"]
@@ -23,7 +25,7 @@ pub use scoring::CoverageEvaluationScope;
 pub(crate) use paths::normalized_repository_key;
 pub(crate) use source_lines::retain_code_lines;
 
-/// One coverage or CRAP breach for a file or function.
+/// One coverage breach for a file or function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoverageViolation {
     pub file: PathBuf,

@@ -1,7 +1,7 @@
 use hardgate::GateReport;
 use hardgate::adoption::ratchet_report;
 use hardgate::config::{
-    ExclusionConfig, FileBudgets, GeneratedConfig, HardgateConfig, LegacyConfig, RolePoliciesConfig,
+    ExclusionConfig, FileBudgets, GeneratedConfig, HardgateConfig, LegacyConfig,
 };
 use hardgate::engines::{
     BudgetViolation, CloneViolation, CoverageViolation, SuppressionViolation,
@@ -42,16 +42,6 @@ fn config_read_errors_keep_the_path_context() {
 
 #[test]
 fn role_generated_and_legacy_validation_rejects_unsafe_edges() {
-    let mut roles = RolePoliciesConfig::default();
-    roles.source.max_abc = Some(1.5);
-    roles.source.max_halstead_difficulty = Some(2.0);
-    assert!(roles.validate().is_ok());
-
-    roles.source.max_abc = Some(0.0);
-    assert!(roles.validate().is_err());
-    roles.source.max_abc = Some(f64::NAN);
-    assert!(roles.validate().is_err());
-
     let empty_command = GeneratedConfig {
         enabled: false,
         freshness_command: Some("   ".to_string()),
@@ -94,14 +84,6 @@ fn config_validation_covers_nested_globs_and_numeric_rejections() {
         "nan-percent",
         "[gate]\npreset = \"custom\"\n\n[coverage]\nmin_line_percent = nan\n",
     );
-    assert_invalid_config(
-        "bad-crap",
-        "[gate]\npreset = \"custom\"\n\n[coverage]\nmax_crap_score = -1.0\n",
-    );
-    assert_invalid_config(
-        "nan-crap",
-        "[gate]\npreset = \"custom\"\n\n[coverage]\nmax_crap_score = nan\n",
-    );
 
     let (dir, path) = write_config(
         "nested-globs",
@@ -111,10 +93,6 @@ preset = "custom"
 
 [budgets.files.exclusions]
 paths = ["generated/**"]
-
-[analysis.dead_code]
-exclude = ["vendor/**"]
-entry_points = ["src/main.rs"]
 
 [[invariants.rules]]
 from = "src/**"

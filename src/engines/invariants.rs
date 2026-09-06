@@ -5,7 +5,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// One forbidden import, call, or token crossing an architectural boundary.
+/// One lexical match against a repository-owned path/import/token boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvariantViolation {
     pub file: PathBuf,
@@ -47,8 +47,6 @@ impl InvariantsChecker {
             Regex::new(r#"(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap(),
             // Rust: `use crate::db::pool;`, `use self::x::{A, B};`, `use super::y::*;`
             Regex::new(r#"\buse\s+([^;]+);"#).unwrap(),
-            Regex::new(r#"(?:from\s+([a-zA-Z0-9_\.]+)\s+import|import\s+([a-zA-Z0-9_\.]+))"#)
-                .unwrap(),
         ];
 
         Self {
@@ -291,7 +289,8 @@ fn push_comma_expansions(base: &str, out: &mut Vec<String>) {
 
 fn normalize_rust_import(import: &str) -> String {
     // `crate::db::pool` -> `db/pool`, `super::x` -> `x`, `self::y` -> `y`,
-    // `a::B` -> `a/B` so glob `src/db/**` and `*db*` both have a chance.
+    // `a::B` -> `a/B`. This is a lexical spelling alias, not a resolved file
+    // path: no filesystem, package, cfg, re-export, or alias resolution occurs.
     let mut s = import.trim().to_string();
     for prefix in ["crate::", "self::", "super::"] {
         while let Some(rest) = s.strip_prefix(prefix) {

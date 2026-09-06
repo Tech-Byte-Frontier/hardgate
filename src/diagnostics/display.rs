@@ -82,7 +82,8 @@ pub fn report_for_display(report: &super::GateReport) -> Cow<'_, super::GateRepo
     trim_vec(&mut display.clone_violations, &mut remaining);
     trim_vec(&mut display.coverage_violations, &mut remaining);
     trim_vec(&mut display.mutation_violations, &mut remaining);
-    trim_vec(&mut display.dead_code_violations, &mut remaining);
+    display.tool_diagnostics.retain(|finding| finding.blocking);
+    trim_vec(&mut display.tool_diagnostics, &mut remaining);
     trim_vec(&mut display.orchestration_violations, &mut remaining);
     Cow::Owned(display)
 }

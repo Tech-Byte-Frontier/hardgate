@@ -3,19 +3,14 @@
 // Usage: node scripts/release-checksums.mjs --dist dist --version <version>
 "use strict";
 
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { option } from "./release-support.mjs";
 
-const packages = [
-  "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
-];
+const packages = PLATFORM_NAMES;
 
 function fail(message) {
   throw new Error(`release-checksums: ${message}`);

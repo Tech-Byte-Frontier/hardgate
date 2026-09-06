@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Invoked only by the authorized release workflow after immutable staging.
 "use strict";
+
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { verificationPolicy, childTimeoutMs, remainingMs } from "./npm-verification-policy.mjs";
@@ -21,7 +23,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(directory, "package.json")
 const version = option("--version");
 const policy = verificationPolicy(version, { ...process.env, NPM_VERIFY_ATTEMPTS: process.env.NPM_VERIFY_ATTEMPTS ?? "60" });
 if (manifest.version !== version) throw new Error("staged npm package does not match requested version");
-if (!/^(?:hardgate-(?:linux-(?:x64|arm64)(?:-musl)?|darwin-(?:x64|arm64))|@tech-byte-frontier\/hardgate)$/.test(manifest.name)) throw new Error("unexpected staged npm package name");
+if (![...PLATFORM_NAMES, "@tech-byte-frontier/hardgate"].includes(manifest.name)) throw new Error("unexpected staged npm package name");
 const npmVersion = await runReleaseProcess("npm", ["--version"], { timeoutMs: childTimeoutMs(policy), env: auth.probeEnv });
 validateNpmPublisherToolchain(auth.mode, { nodeVersion: process.version, npmVersion: npmVersion.trim() });
 const request = { name: manifest.name, version, policy, env: auth.probeEnv };

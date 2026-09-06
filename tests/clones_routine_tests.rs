@@ -37,40 +37,6 @@ fn semicolon_free_type_alias_does_not_hide_following_executable_clones() {
 }
 
 #[test]
-fn clone_detector_ignores_python_routine_declarations() {
-    let detector = CloneDetector::new(&clone_config());
-
-    let py_a = r#"
-import os
-import sys
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timezone
-
-def calculate_area(radius):
-    pi = 3.14159
-    return pi * radius * radius
-"#;
-    let py_b = r#"
-import os
-import sys
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timezone
-
-def calculate_perimeter(length, width):
-    return 2 * (length + width)
-"#;
-    let files = vec![
-        (PathBuf::from("src/a.py"), py_a.to_string()),
-        (PathBuf::from("src/b.py"), py_b.to_string()),
-    ];
-    let violations = detector.detect_clones(&files, Path::new(".")).unwrap();
-    assert!(
-        violations.is_empty(),
-        "Python imports should not produce clone violations: {violations:?}"
-    );
-}
-
-#[test]
 fn clone_detector_ignores_typescript_routine_declarations() {
     let detector = CloneDetector::new(&clone_config());
     let ts_a = r#"

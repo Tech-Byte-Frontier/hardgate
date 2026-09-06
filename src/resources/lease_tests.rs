@@ -20,10 +20,8 @@ mod platform {
     impl LockFixture {
         fn new() -> Self {
             let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-            let directory = PathBuf::from(format!(
-                "/tmp/hardgate-lease-test-{}-{id}",
-                std::process::id()
-            ));
+            let directory = std::env::temp_dir()
+                .join(format!("hardgate-lease-test-{}-{id}", std::process::id()));
             let path = directory.join("slot.lock");
             Self { directory, path }
         }

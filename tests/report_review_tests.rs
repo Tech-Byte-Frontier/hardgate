@@ -142,24 +142,30 @@ fn compare_requires_matching_engine_selection_and_execution_metadata() {
 }
 
 #[test]
-fn verify_and_disabled_mutation_write_the_requested_output_file() {
+fn policy_check_writes_the_requested_output_file() {
     let fixture = Fixture::new(
         "report-review",
         "output",
         Some("[gate]\npreset = 'custom'\n[mutation]\nenabled = false\n"),
     );
     fixture.write("src/lib.rs", "pub fn value() -> i32 { 42 }\n");
-    for command in ["verify", "mutate"] {
-        let name = format!("{command}.json");
-        let output = run(fixture.as_ref(), &[command, "--json", "--output", &name]);
-        assert_status(&output, true, command);
-        let saved =
-            std::fs::read_to_string(fixture.as_ref().join(&name)).expect("output must be saved");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
-            json(&output)
-        );
-    }
+    let output = run(
+        fixture.as_ref(),
+        &[
+            "check",
+            "--checks",
+            "policy",
+            "--json",
+            "--output",
+            "check.json",
+        ],
+    );
+    assert_status(&output, true, "policy check");
+    let saved = std::fs::read_to_string(fixture.join("check.json")).expect("output must be saved");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
+        json(&output)
+    );
 }
 
 #[test]
@@ -170,7 +176,7 @@ fn comparison_keeps_distinct_functions_and_clone_partners() {
         input.coverage_violations.push(CoverageViolation {
             file: "src/a.rs".into(),
             function_name: Some(function.into()),
-            metric: "CRAP Score".into(),
+            metric: "Global Line Coverage".into(),
             actual: 40.0,
             limit: 25.0,
             message: "high risk".into(),
@@ -201,60 +207,32 @@ fn comparison_keeps_distinct_functions_and_clone_partners() {
 #[cfg(target_os = "linux")]
 #[test]
 fn comparison_stdout_errors_return_a_command_error_instead_of_panicking() {
+    use std::os::unix::process::CommandExt;
     let fixture = Fixture::new("report-review", "stdout-error", None);
     save(&fixture, "input.json", &report());
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hardgate"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_hardgate"));
+    command
         .current_dir(fixture.as_ref())
         .args(["report", "compare", "input.json", "input.json", "--json"])
-        .stdout(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open("/dev/full")
-                .unwrap(),
-        )
-        .output()
-        .unwrap();
+        .stdout(std::fs::File::create(fixture.join("stdout.json")).unwrap());
+    // Produce EFBIG within the fixture instead of requiring writable /dev/full.
+    // BrokenPipe is intentionally a successful downstream-consumer shutdown.
+    unsafe {
+        command.pre_exec(|| {
+            libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+            let limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
-}
-
-#[test]
-fn scope_advice_adds_only_omitted_flags_and_requires_enabling_evidence() {
-    let config =
-        "[gate]\npreset = 'custom'\n[coverage]\nenabled = false\n[mutation]\nenabled = false\n";
-    for (index, flags, suggestion) in [
-        (0, vec![], "add `--all --dead-code`"),
-        (1, vec!["--all"], "add `--dead-code`"),
-        (2, vec!["--dead-code"], "add `--all`"),
-        (3, vec!["--all", "--dead-code"], ""),
-    ] {
-        let fixture = Fixture::new(
-            "report-review",
-            &format!("scope-advice-{index}"),
-            Some(config),
-        );
-        fixture.write("src/lib.rs", "pub fn value() -> i32 { 1 }\n");
-        let mut args = vec!["check", "--json"];
-        args.extend(flags);
-        let output = run(fixture.as_ref(), &args);
-        assert_status(&output, true, "scope advice");
-        let value = json(&output);
-        let advice = value["advisories"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|v| v.as_str())
-            .find(|s| s.contains("partial gate"))
-            .unwrap();
-        if suggestion.is_empty() {
-            assert!(!advice.contains("add `--"));
-        } else {
-            assert!(advice.contains(suggestion));
-        }
-        assert!(advice.contains("enable `[coverage]`"));
-        assert!(advice.contains("enable `[mutation]`"));
-        assert!(!advice.contains("for complete evidence"));
-    }
 }
 
 fn compare_plans(before: ExecutionPlan, after: ExecutionPlan) -> serde_json::Value {
@@ -281,7 +259,7 @@ fn comparison_distinguishes_policy_scope_command_root_and_required_evidence() {
         |p| p.config.policy_sha256 = "different".into(),
         |p| p.scope.paths.push("src".into()),
         |p| p.scope.mode = "paths".into(),
-        |p| p.command = "verify".into(),
+        |p| p.command = "scan".into(),
         |p| p.config.root = "/other".into(),
         |p| p.engines[0].required_evidence.push("coverage".into()),
     ];

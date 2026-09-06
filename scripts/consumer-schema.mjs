@@ -25,12 +25,12 @@ const GATE_KEYS = [
   ...ENVELOPE_KEYS, "functions", "total", "shown", "omitted", "snippet_bytes", "snippets_truncated", "diagnostics",
   "gate_name", "files_scanned", "functions_analyzed", "duration_ms", "passed", "advisories",
   "budget_violations", "suppression_violations", "complexity_violations", "invariant_violations",
-  "clone_violations", "coverage_violations", "mutation_violations", "dead_code_violations",
+  "clone_violations", "coverage_violations", "mutation_violations",
   "orchestration_violations", "summary", "top_files",
 ];
 const SUMMARY_KEYS = [
   "code_findings", "analysis_blockers", "total_errors", "clones", "ast_violations", "complexity", "file_budgets", "suppressions",
-  "architecture", "coverage", "mutation", "dead_code", "tool", "files_scanned",
+  "architecture", "coverage", "mutation", "tool", "files_scanned",
   "functions_analyzed", "files_with_violations", "passed",
 ];
 const SHAPES = {
@@ -41,16 +41,10 @@ const SHAPES = {
   clone_violations: ["file_a", "lines_a", "file_b", "lines_b", "tokens", "lines", "fingerprint", "message", "recommendation"],
   coverage_violations: ["file", "function_name", "metric", "actual", "limit", "message", "recommendation"],
   mutation_violations: ["report_file", "metric", "actual", "limit", "message", "recommendation"],
-  dead_code_violations: ["file", "line_number", "symbol", "violation_type", "message", "recommendation"],
   orchestration_violations: ["step", "command", "exit_code", "output", "recommendation"],
 };
-const MUTATION_KEYS = [...ENVELOPE_KEYS, "stats", "score", "min_score", "passed", "duration_ms", "results"];
-const STATS_KEYS = ["killed", "survived", "timeout", "compile_error", "runner_error", "equivalent", "unviable", "total"];
-const MUTANT_KEYS = ["id", "file", "line", "column", "start_byte", "end_byte", "original", "replacement", "description"];
-const RESULT_KEYS = ["mutant", "outcome", "duration_ms", "command", "diagnostic", "source_restored"];
 const NULLABLE_BY_SHAPE = {
   function_name: new Set([SHAPES.coverage_violations]),
-  symbol: new Set([SHAPES.dead_code_violations]),
 };
 const FIELD_VALIDATORS = {
   actual: numberValue,
@@ -105,7 +99,6 @@ function validateExitCode(value, label) {
 
 function validateViolationField(value, key, label, shape) {
   if (key === "breakdown") return;
-  if (key === "line_number" && shape === SHAPES.dead_code_violations && value === null) return;
   if (NULLABLE_BY_SHAPE[key]) return stringValue(value, `${label}.${key}`, NULLABLE_BY_SHAPE[key].has(shape));
   const validator = FIELD_VALIDATORS[key] ?? stringValue;
   return validator(value, `${label}.${key}`);
@@ -170,7 +163,7 @@ function validateTopFiles(report) {
 
 function fileViolationCount(report) {
   const files = new Set();
-  const singleFileFields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "coverage_violations", "dead_code_violations"];
+  const singleFileFields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "coverage_violations"];
   for (const field of singleFileFields) for (const violation of report[field]) files.add(violation.file);
   for (const violation of report.clone_violations) [violation.file_a, violation.file_b].forEach((file) => files.add(file));
   return files.size;
@@ -179,7 +172,7 @@ function fileViolationCount(report) {
 function topFileEntries(report) {
   const counts = new Map();
   const add = (file) => counts.set(file, (counts.get(file) ?? 0) + 1);
-  const singleFileFields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "coverage_violations", "dead_code_violations"];
+  const singleFileFields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "coverage_violations"];
   for (const field of singleFileFields) for (const violation of report[field]) add(violation.file);
   for (const violation of report.clone_violations) { add(violation.file_a); add(violation.file_b); }
   return [...counts].map(([file, violations]) => ({ file, violations })).sort((a, b) => b.violations - a.violations || a.file.localeCompare(b.file)).slice(0, 10);
@@ -199,7 +192,6 @@ function expectedGateSummary(report) {
     architecture: counts.invariant_violations,
     coverage: counts.coverage_violations,
     mutation: counts.mutation_violations,
-    dead_code: counts.dead_code_violations,
     tool: counts.orchestration_violations,
     files_scanned: report.files_scanned,
     functions_analyzed: report.functions_analyzed,
@@ -228,84 +220,6 @@ export function validateGateReport(report) {
   validateTopFiles(report);
   validateGateConsistency(report);
   validatePresentation(report);
-  return report;
-}
-
-function validateMutationShape(report) {
-  requiredKeys(report, MUTATION_KEYS, "mutation report");
-  validateEnvelope(report, "mutate");
-  requiredKeys(report.stats, STATS_KEYS, "mutation stats");
-  for (const key of STATS_KEYS) integerValue(report.stats[key], `stats.${key}`);
-  numberValue(report.score, "score");
-  numberValue(report.min_score, "min_score");
-  if (report.score < 0 || report.score > 100 || report.min_score < 0 || report.min_score > 100) fail("report-schema", "mutation scores must be between 0 and 100");
-  booleanValue(report.passed, "mutation.passed");
-  integerValue(report.duration_ms, "mutation.duration_ms");
-  arrayValue(report.results, "mutation.results");
-}
-
-function validateMutant(mutant, label) {
-  requiredKeys(mutant, MUTANT_KEYS, label);
-  for (const key of ["id", "line", "column", "start_byte", "end_byte"]) integerValue(mutant[key], `${label}.${key}`);
-  for (const key of ["file", "original", "replacement", "description"]) stringValue(mutant[key], `${label}.${key}`);
-  if (mutant.end_byte < mutant.start_byte) fail("report-schema", `${label} has a reversed byte range`);
-}
-
-function validateMutationResult(result, index) {
-  const label = `mutation.results[${index}]`;
-  requiredKeys(result, RESULT_KEYS, label);
-  validateMutant(result.mutant, `${label}.mutant`);
-  stringValue(result.outcome, `${label}.outcome`);
-  if (!["Killed", "Survived", "CompileError", "RunnerError", "Timeout", "Equivalent", "Unviable"].includes(result.outcome)) fail("report-schema", `${label} has an unknown outcome`);
-  integerValue(result.duration_ms, `${label}.duration_ms`);
-  stringValue(result.command, `${label}.command`);
-  stringValue(result.diagnostic, `${label}.diagnostic`);
-  booleanValue(result.source_restored, `${label}.source_restored`);
-}
-
-function mutationCounts(report) {
-  const counts = Object.fromEntries(["Killed", "Survived", "Timeout", "CompileError", "RunnerError", "Equivalent", "Unviable"].map((name) => [name, 0]));
-  report.results.forEach((result) => { counts[result.outcome] += 1; });
-  return counts;
-}
-
-function validateMutationOutcomeCounts(report, counts) {
-  const fields = { Killed: "killed", Survived: "survived", Timeout: "timeout", CompileError: "compile_error", RunnerError: "runner_error", Equivalent: "equivalent", Unviable: "unviable" };
-  for (const [outcome, field] of Object.entries(fields)) {
-    if (counts[outcome] !== report.stats[field]) fail("report-status", `stats.${field} does not match mutation results`);
-  }
-  return Object.values(fields);
-}
-
-function validateMutationTotals(report, fields) {
-  const sum = fields.reduce((total, field) => total + report.stats[field], 0);
-  if (report.stats.total !== report.results.length || report.stats.total !== sum) fail("report-status", "mutation totals do not match results");
-}
-
-function validateMutationScore(report) {
-  const viable = report.stats.killed + report.stats.survived;
-  const score = viable === 0 ? 0 : (report.stats.killed / viable) * 100;
-  if (Math.abs(report.score - score) > 1e-9) fail("report-status", "mutation score is not truthful for killed and survived counts");
-  const incomplete = viable === 0 || ["timeout", "compile_error", "runner_error", "unviable"].some((key) => report.stats[key] > 0);
-  validateStatus(report, incomplete);
-  return viable;
-}
-
-function validateMutationPassed(report, viable) {
-  const passed = viable > 0 && report.score >= report.min_score && report.stats.timeout === 0 && report.stats.compile_error === 0 && report.stats.runner_error === 0 && report.stats.unviable === 0;
-  if (report.passed !== passed) fail("report-status", "mutation passed status is inconsistent with score and outcomes");
-}
-
-function validateMutationConsistency(report) {
-  const fields = validateMutationOutcomeCounts(report, mutationCounts(report));
-  validateMutationTotals(report, fields);
-  validateMutationPassed(report, validateMutationScore(report));
-}
-
-export function validateMutationReport(report) {
-  validateMutationShape(report);
-  report.results.forEach(validateMutationResult);
-  validateMutationConsistency(report);
   return report;
 }
 

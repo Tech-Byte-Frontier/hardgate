@@ -1,0 +1,109 @@
+//! Private producer workspace, including dirty and untracked project inputs.
+use anyhow::{Context, Result, bail};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[path = "workspace_copy.rs"]
+mod copy;
+
+static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
+
+pub(super) struct EvidenceWorkspace {
+    root: PathBuf,
+}
+
+impl EvidenceWorkspace {
+    pub(super) fn create(source: &Path, targets: &[PathBuf]) -> Result<Self> {
+        crate::cancellation::install()?;
+        let source = source.canonicalize()?;
+        validate_targets(&source, targets)?;
+        let workspace = Self {
+            root: private_directory()?,
+        };
+        if workspace.root.starts_with(&source) {
+            bail!(
+                "evidence temporary directory must be outside the source workspace; set TMPDIR to an external directory"
+            );
+        }
+        copy::copy_tree(&source, &workspace.root)?;
+        for target in targets {
+            if !workspace.root.join(target).is_file() {
+                bail!(
+                    "evidence target `{}` is outside the supported source snapshot",
+                    target.display()
+                );
+            }
+        }
+        Ok(workspace)
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(super) fn close(self) -> Result<()> {
+        fs::remove_dir_all(&self.root).with_context(|| {
+            format!(
+                "failed to remove evidence workspace `{}`",
+                self.root.display()
+            )
+        })
+    }
+}
+
+impl Drop for EvidenceWorkspace {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.root)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "hardgate: retained evidence workspace {}: {error}",
+                self.root.display()
+            );
+        }
+    }
+}
+
+fn private_directory() -> Result<PathBuf> {
+    for _ in 0..100 {
+        let id = NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("hardgate-evidence-{}-{id}", std::process::id()));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&root) {
+            Ok(()) => return Ok(root),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!("unable to allocate a private evidence workspace")
+}
+
+fn validate_targets(root: &Path, targets: &[PathBuf]) -> Result<()> {
+    for target in targets {
+        let path = root.join(target);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if fs::metadata(&path)?.nlink() > 1 {
+                bail!(
+                    "refusing evidence target `{}`: source has pre-existing hardlinks",
+                    target.display()
+                );
+            }
+        }
+        if !path.canonicalize()?.starts_with(root) {
+            bail!(
+                "evidence target escapes the source workspace: {}",
+                target.display()
+            );
+        }
+    }
+    Ok(())
+}

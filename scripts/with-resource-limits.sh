@@ -5,12 +5,12 @@ if [ "$#" -eq 0 ]; then
   echo 'usage: scripts/with-resource-limits.sh COMMAND [ARG ...]' >&2
   exit 2
 fi
-if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
+if ! node scripts/check-resource-boundary.mjs >/dev/null 2>&1; then
   if [ "${HARDGATE_RESOURCE_SCRIPT_CHILD:-}" = 1 ]; then
     echo 'hardgate: kernel resource limits were not established; command was not started' >&2
     exit 2
   fi
-  limits=$(python3 scripts/check-resource-boundary.py --limits)
+  limits=$(node scripts/check-resource-boundary.mjs --limits)
   quota=${limits%% *}
   memory_and_high=${limits#* }
   memory=${memory_and_high%% *}
@@ -28,10 +28,10 @@ if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
     -- "$0" "$@"
 fi
 . scripts/resource-worker-env.sh
-before=$(python3 scripts/check-resource-boundary.py --events)
+before=$(node scripts/check-resource-boundary.mjs --events)
 status=0
 "$@" || status=$?
-after=$(python3 scripts/check-resource-boundary.py --events)
+after=$(node scripts/check-resource-boundary.mjs --events)
 if [ "$before" != "$after" ]; then
   echo 'hardgate: resource-limit events occurred; maintenance evidence is incomplete' >&2
   exit 2

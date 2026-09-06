@@ -16,6 +16,110 @@ pub(crate) struct DetailValidation<'a> {
 }
 
 impl RecordDetails {
+    pub(crate) fn retain_production(
+        &self,
+        coverage: &mut super::FileCoverage,
+        test_line: impl Fn(usize) -> Result<bool>,
+    ) -> Result<()> {
+        let mut test_lines = HashSet::new();
+        for line in coverage
+            .line_hits
+            .keys()
+            .copied()
+            .chain(self.functions.declarations.values().copied())
+            .chain(self.branches.values.keys().map(|key| key.line))
+        {
+            if test_line(line)? {
+                test_lines.insert(line);
+            }
+        }
+        if test_lines.is_empty() {
+            return Ok(());
+        }
+        // Recompute from complete producer records only. Aggregate-only or
+        // ambiguous details cannot establish production-only denominators.
+        anyhow::ensure!(
+            coverage.lines_found == coverage.line_hits.len()
+                && coverage.lines_hit
+                    == coverage
+                        .line_hits
+                        .values()
+                        .filter(|hits| **hits > 0)
+                        .count(),
+            "mixed production/test LCOV requires complete DA line details"
+        );
+        let functions = self.production_functions(coverage)?;
+        anyhow::ensure!(
+            coverage.branches_found == self.branches.values.len()
+                && coverage.branches_hit
+                    == self
+                        .branches
+                        .values
+                        .values()
+                        .filter(|hits| hits.is_some_and(|hits| hits > 0))
+                        .count(),
+            "mixed production/test LCOV requires complete BRDA branch details"
+        );
+        coverage
+            .line_hits
+            .retain(|line, _| !test_lines.contains(line));
+        coverage.lines_found = coverage.line_hits.len();
+        coverage.lines_hit = coverage
+            .line_hits
+            .values()
+            .filter(|hits| **hits > 0)
+            .count();
+        let functions = functions
+            .iter()
+            .filter(|(line, _)| !test_lines.contains(line))
+            .collect::<Vec<_>>();
+        coverage.functions_found = functions.len();
+        coverage.functions_hit = functions.iter().filter(|(_, hit)| *hit).count();
+        let branches = self
+            .branches
+            .values
+            .iter()
+            .filter(|(key, _)| !test_lines.contains(&key.line))
+            .collect::<Vec<_>>();
+        coverage.branches_found = branches.len();
+        coverage.branches_hit = branches
+            .iter()
+            .filter(|(_, hits)| hits.is_some_and(|hits| hits > 0))
+            .count();
+        Ok(())
+    }
+
+    fn production_functions(&self, coverage: &super::FileCoverage) -> Result<Vec<(usize, bool)>> {
+        let details = self
+            .functions
+            .declarations
+            .iter()
+            .map(|(name, line)| {
+                (
+                    *line,
+                    self.functions.hits.get(name).is_some_and(|hits| *hits > 0),
+                )
+            })
+            .collect::<Vec<_>>();
+        if details.len() == coverage.functions_found
+            && details.iter().filter(|(_, hit)| *hit).count() == coverage.functions_hit
+        {
+            return Ok(details);
+        }
+        // LLVM can list multiple monomorphizations while its aggregate counts
+        // a function once. Accept that grouping only when both totals agree.
+        let mut grouped = std::collections::BTreeMap::<usize, bool>::new();
+        for (line, hit) in details {
+            *grouped.entry(line).or_default() |= hit;
+        }
+        anyhow::ensure!(
+            grouped.len() == coverage.functions_found
+                && grouped.values().filter(|hit| **hit).count() == coverage.functions_hit,
+            "mixed production/test LCOV requires complete unambiguous FN/FNDA function details"
+        );
+        Ok(grouped.into_iter().collect())
+    }
+
     pub(crate) fn ingest_fn(&mut self, rest: &str) -> Result<()> {
         let (line, name) = parse_function_record(rest)?;
         let line = parse_line(line, "FN", rest)?;

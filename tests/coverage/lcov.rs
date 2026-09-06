@@ -17,7 +17,6 @@ fn detail_config(
         min_line_percent: Some(1.0),
         min_function_percent,
         min_branch_percent,
-        max_crap_score: None,
         critical_paths: None,
     }
 }
@@ -51,9 +50,13 @@ fn test_lcov_checksum_and_paths() {
     assert_eq!(cov.line_hits.get(&1), Some(&0));
     assert_eq!(cov.line_hits.get(&2), Some(&0));
 
-    let funcs = vec![metrics::sample_metrics(3, 10, 5.0, 5.0)];
+    let funcs = vec![metrics::sample_metrics(3)];
     let violations = scorer.evaluate(&map, &funcs, Path::new("/repo"));
-    assert!(violations.iter().any(|v| v.metric == "CRAP Score"));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.metric == "Global Line Coverage")
+    );
     assert!(
         violations
             .iter()
@@ -327,7 +330,7 @@ fn lcov_parser_rejects_unbounded_records_and_inconsistent_counts() {
 fn lcov_empty_modules_accept_zero_counts_or_omitted_line_counts() {
     let config = detail_config(None, None);
     for counts in ["", "LF:0\nLH:0\n"] {
-        let body = format!("SF:src/__init__.py\n{counts}end_of_record\n");
+        let body = format!("SF:src/empty.rs\n{counts}end_of_record\n");
         let parsed = parse_valid_lcov(&config, &body, "lcov-empty-module");
         let module = parsed.values().next().unwrap();
         assert_eq!(module.lines_found, 0);

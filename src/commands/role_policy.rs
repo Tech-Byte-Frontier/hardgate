@@ -4,8 +4,8 @@ mod findings;
 
 pub(crate) use clone_analysis::{CloneRun, run_clone_analysis};
 pub(crate) use findings::{
-    apply_budget_findings, apply_complexity_findings, apply_dead_code_findings,
-    apply_invariant_findings, apply_suppression_findings,
+    apply_budget_findings, apply_complexity_findings, apply_invariant_findings,
+    apply_suppression_findings,
 };
 
 use super::evidence::{EvidenceFailure, record_evidence_failure};
@@ -102,15 +102,6 @@ pub(crate) fn effective_function_budgets(
     };
     if let Some(value) = policy.max_cyclomatic {
         budgets.max_cyclomatic = Some(value);
-    }
-    if let Some(value) = policy.max_cognitive {
-        budgets.max_cognitive = Some(value);
-    }
-    if let Some(value) = policy.max_halstead_difficulty {
-        budgets.max_halstead_difficulty = Some(value);
-    }
-    if let Some(value) = policy.max_abc {
-        budgets.max_abc = Some(value);
     }
     if let Some(value) = policy.max_parameters {
         budgets.max_parameters = Some(value);
@@ -249,18 +240,12 @@ mod tests {
         let mut config = HardgateConfig::default();
         config.budgets.functions = FunctionBudgets {
             max_cyclomatic: Some(90),
-            max_cognitive: Some(91),
-            max_halstead_difficulty: Some(92.0),
-            max_abc: Some(93.0),
             max_parameters: Some(94),
             max_lines: Some(95),
             max_statements: Some(96),
             max_nesting_depth: Some(97),
         };
         config.roles.source.max_cyclomatic = Some(1);
-        config.roles.source.max_cognitive = Some(2);
-        config.roles.source.max_halstead_difficulty = Some(3.0);
-        config.roles.source.max_abc = Some(4.0);
         config.roles.source.max_parameters = Some(5);
         config.roles.source.max_function_lines = Some(6);
         config.roles.source.max_statements = Some(7);
@@ -268,9 +253,6 @@ mod tests {
 
         let source = effective_function_budgets(&config, FileRole::Source);
         assert_eq!(source.max_cyclomatic, Some(1));
-        assert_eq!(source.max_cognitive, Some(2));
-        assert_eq!(source.max_halstead_difficulty, Some(3.0));
-        assert_eq!(source.max_abc, Some(4.0));
         assert_eq!(source.max_parameters, Some(5));
         assert_eq!(source.max_lines, Some(6));
         assert_eq!(source.max_statements, Some(7));
@@ -278,9 +260,6 @@ mod tests {
 
         let sibling = effective_function_budgets(&config, FileRole::Test);
         assert_eq!(sibling.max_cyclomatic, Some(90));
-        assert_eq!(sibling.max_cognitive, Some(91));
-        assert_eq!(sibling.max_halstead_difficulty, Some(92.0));
-        assert_eq!(sibling.max_abc, Some(93.0));
         assert_eq!(sibling.max_parameters, Some(94));
         assert_eq!(sibling.max_lines, Some(95));
         assert_eq!(sibling.max_statements, Some(96));

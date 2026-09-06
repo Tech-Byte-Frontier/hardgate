@@ -7,8 +7,6 @@ use std::path::Path;
 const TS_PRAGMA: &str = concat!("// @ts-", "ignore");
 const ESLINT_PRAGMA: &str = concat!("/* eslint-", "disable */");
 const RUST_ATTR: &str = concat!("#[allow", "(unused_variables)]");
-const PY_TYPE_IGNORE: &str = concat!("# type:", " ignore");
-const PY_NOQA: &str = concat!("#", " noqa");
 
 #[test]
 fn test_anti_gaming_scanner() {
@@ -25,10 +23,6 @@ fn test_anti_gaming_scanner() {
     let violations = scanner.scan_content(Path::new("src/test.rs"), &rust_code, root);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].token.contains("allow("));
-
-    let py_code = format!("import sys  {PY_TYPE_IGNORE}\nx = 1  {PY_NOQA}\n");
-    let violations = scanner.scan_content(Path::new("src/test.py"), &py_code, root);
-    assert_eq!(violations.len(), 2);
 }
 
 #[test]
@@ -41,7 +35,6 @@ fn test_anti_gaming_extended_tokens() {
             "b.ts",
             concat!("// biome-", "ignore lint: reason\nconst x = 1;\n"),
         ),
-        ("c.py", concat!("x = 1  # ruff:", " noqa: F401\n")),
         (
             "d.rs",
             concat!("#[cfg(test)] #[allow", "(dead_code)]\nfn f() {}\n"),

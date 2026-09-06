@@ -21,8 +21,6 @@ default = 350
 
 [budgets.functions]
 max_cyclomatic = 10
-max_cognitive = 15
-max_halstead_difficulty = 80.0
 max_parameters = 4
 max_lines = 80
 max_nesting_depth = 4
@@ -36,39 +34,14 @@ min_tokens = 50
 
 [coverage]
 enabled = false
-report = "coverage/lcov.info"
+report = ".hardgate/evidence/coverage.lcov"
 min_line_percent = 95.0
-max_crap_score = 25.0
 
 [mutation]
 enabled = false
 min_score = 85.0
-timeout_secs = 10
-max_mutants = 30
 
 [orchestration]
 format_check = "cargo fmt --check"
 format = "cargo fmt"
 lint = "cargo clippy -- -D warnings"
-
-[analysis.dead_code]
-enabled = false
-entry_points = [
-  "scripts/check-resource-boundary.py",
-  "src/main.rs",
-  "src/lib.rs",
-  "scripts/check-consumer-matrix.mjs",
-  "scripts/check-npm-quality.mjs",
-  "scripts/consumer-process-launcher.mjs",
-  "scripts/publish-npm-package.mjs",
-  "scripts/npm-publisher-preflight.mjs",
-  "scripts/release-checksums.mjs",
-  "scripts/release-package.mjs",
-  "scripts/release-order.mjs",
-  "scripts/release-sbom-verify.mjs",
-  "scripts/release-sbom.mjs",
-  "scripts/release-verify.mjs",
-  "scripts/release-version.mjs",
-  "scripts/sync-npm-version.mjs",
-  "scripts/verify-npm-publication.mjs",
-]

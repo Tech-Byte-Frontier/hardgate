@@ -1,4 +1,5 @@
 use super::*;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
@@ -85,7 +86,11 @@ fn runtime_directory_requires_private_owner_and_a_real_manager_socket() {
     fs::write(&socket, "not a socket").unwrap();
     assert!(validate_runtime(root, uid).is_err());
     fs::remove_file(&socket).unwrap();
-    let listener = UnixListener::bind(&socket).unwrap();
+    // Bind through the directory descriptor so a deeply nested TMPDIR does not
+    // exceed sockaddr_un's path limit. The socket remains in this fixture.
+    let directory = fs::File::open(root.join("systemd")).unwrap();
+    let address = format!("/proc/self/fd/{}/private", directory.as_raw_fd());
+    let listener = UnixListener::bind(address).unwrap();
     validate_runtime(root, uid).unwrap();
     assert!(validate_runtime(root, uid.wrapping_add(1)).is_err());
     fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();

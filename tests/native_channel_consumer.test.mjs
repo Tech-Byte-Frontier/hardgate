@@ -89,23 +89,9 @@ try {
   fs.rmSync(exact.fixture.directory, {recursive: true, force: true});
 }
 
-const parsedWithoutWrapper = parseArgs([
-  "--package", "hardgate-linux-x64-musl",
-  "--version", version,
-  "--source-sha", sourceSha,
-  "--archive", "/tmp/hardgate-linux-x64-musl.tar.gz",
-  "--mode", "exact",
-  "--output", "/tmp/native-proof.json",
-]);
-assert.equal(parsedWithoutWrapper.wrapperSource, undefined, "wrapper source is optional outside the canonical wrapper case");
-assert.throws(() => parseArgs([
-  "--package", "__proto__",
-  "--version", version,
-  "--source-sha", sourceSha,
-  "--archive", "/tmp/__proto__.tar.gz",
-  "--mode", "exact",
-  "--output", "/tmp/native-proof.json",
-]), /six native packages/);
+for (const packageName of ["hardgate-linux-x64-musl", "hardgate-linux-arm64", "hardgate-darwin-x64", "__proto__"]) {
+  assert.throws(() => parseArgs(["--package", packageName, "--version", version, "--source-sha", sourceSha, "--archive", "/tmp/archive.tar.gz", "--mode", "exact", "--output", "/tmp/native-proof.json"]), /supported Linux x64 GNU/);
+}
 
 const defaultRun = await successful("default");
 try {
@@ -114,37 +100,6 @@ try {
   assert.deepEqual(calls.map(({spec}) => spec), ["hardgate-linux-x64@latest", "@tech-byte-frontier/hardgate@latest"]);
 } finally {
   fs.rmSync(defaultRun.fixture.directory, {recursive: true, force: true});
-}
-
-const muslRun = await successful("exact", {
-  packageName: "hardgate-linux-x64-musl",
-  binary: goodBinary,
-  verifyArchive: () => ({sha256: digestBytes(goodBinary)}),
-});
-try {
-  const calls = fs.readFileSync(muslRun.fixture.log, "utf8").trim().split("\n").map(JSON.parse);
-  assert.equal(calls[0].force, true, "intentional musl install on glibc must use --force");
-  assert.equal(Object.hasOwn(muslRun.proof, "wrapper"), false, "musl consumer proof must not claim wrapper verification");
-} finally {
-  fs.rmSync(muslRun.fixture.directory, {recursive: true, force: true});
-}
-
-const muslWrapperSource = fixture("hardgate-linux-x64-musl");
-try {
-  await assert.rejects(
-    verifyNativeChannel({
-      packageName: "hardgate-linux-x64-musl",
-      version,
-      sourceSha,
-      archive: muslWrapperSource.archive,
-      mode: "exact",
-      wrapperSource: muslWrapperSource.wrapperSource,
-    }, verificationOptions(muslWrapperSource)),
-    /only valid for the canonical/,
-  );
-  assert.equal(fs.existsSync(muslWrapperSource.log), false, "musl wrapper boundary must fail before npm");
-} finally {
-  fs.rmSync(muslWrapperSource.directory, {recursive: true, force: true});
 }
 
 const retryRun = await successful("exact", {
@@ -345,6 +300,6 @@ assert.throws(() => validateProof({
   archive: {name: "hardgate-linux-x64-musl.tar.gz", sha256: digestBytes(goodBinary)},
   consumer: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
   wrapper: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
-}), /only valid for the canonical/);
+}), /supported Linux x64 GNU/);
 
 console.log("native_channel_consumer.test: OK (host, exact/default specs, bytes, version, proof, cleanup)");

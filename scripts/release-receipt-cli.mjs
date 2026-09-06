@@ -3,6 +3,8 @@
 // it cannot independently prove a remote registry or GitHub artifact state.
 "use strict";
 
+import { PLATFORM_ASSETS as RELEASE_ASSETS } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,14 +25,7 @@ import {
   writeReceiptAtomicSync,
 } from "./release-receipt.mjs";
 
-const PLATFORM_ASSETS = Object.freeze([
-  "hardgate-linux-x64.tar.gz",
-  "hardgate-linux-x64-musl.tar.gz",
-  "hardgate-linux-arm64.tar.gz",
-  "hardgate-linux-arm64-musl.tar.gz",
-  "hardgate-darwin-x64.tar.gz",
-  "hardgate-darwin-arm64.tar.gz",
-]);
+const PLATFORM_ASSETS = RELEASE_ASSETS;
 const HASH_CHUNK_BYTES = 64 * 1024;
 const MAX_HASH_BYTES = 1024 * 1024 * 1024;
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);

@@ -5,8 +5,8 @@ use legacy::changes;
 use hardgate::GateReport;
 use hardgate::adoption::apply_legacy_ratchet;
 use hardgate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, DeadCodeViolation,
-    InvariantViolation, MutationViolation, OrchestrationViolation, SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, InvariantViolation,
+    MutationViolation, OrchestrationViolation, SuppressionViolation,
 };
 fn report() -> GateReport {
     GateReport::new("legacy".to_string())
@@ -34,7 +34,9 @@ fn complexity(file: &str, line_number: usize, actual: f64) -> ComplexityViolatio
         file: file.into(),
         function_name: "compute".to_string(),
         line_number,
+        column_number: 0,
         end_line: line_number,
+        size: None,
         metric: "Cyclomatic Complexity".to_string(),
         actual,
         limit: 5.0,
@@ -72,16 +74,6 @@ fn clone_violation(
         recommendation: "extract".to_string(),
     }
 }
-fn dead_code(file: &str, kind: &str, symbol: Option<&str>) -> DeadCodeViolation {
-    DeadCodeViolation {
-        file: file.into(),
-        line_number: Some(1),
-        symbol: symbol.map(str::to_string),
-        violation_type: kind.to_string(),
-        message: "dead-code debt".to_string(),
-        recommendation: "remove".to_string(),
-    }
-}
 fn debt_report() -> GateReport {
     let mut report = report();
     report
@@ -102,11 +94,8 @@ fn debt_report() -> GateReport {
         "fingerprint",
     ));
     report
-        .dead_code_violations
-        .push(dead_code("src/a.rs", "Unused Export", Some("old")));
-    report
 }
-fn append_tail(report: &mut GateReport, line: usize, dead_file: &str, symbol: &str) {
+fn append_tail(report: &mut GateReport, line: usize) {
     report
         .invariant_violations
         .push(invariant("src/a.rs", line, "use private/db;"));
@@ -115,9 +104,6 @@ fn append_tail(report: &mut GateReport, line: usize, dead_file: &str, symbol: &s
         ((1, 3), (5, 6)),
         "fingerprint",
     ));
-    report
-        .dead_code_violations
-        .push(dead_code(dead_file, "Unused Export", Some(symbol)));
 }
 fn push_core(
     report: &mut GateReport,
@@ -143,15 +129,15 @@ fn unchanged_or_improved_static_debt_becomes_advisory() {
 
     let mut current = report();
     push_core(&mut current, 90, 10.0, (99, "  //   @ts-ignore  "));
-    append_tail(&mut current, 30, "src/a.rs", "old");
+    append_tail(&mut current, 30);
 
     let outcome = apply_legacy_ratchet(&mut current, &baseline, &changes(&[], &[], &[]));
 
-    assert_eq!(outcome.grandfathered, 6);
+    assert_eq!(outcome.grandfathered, 5);
     assert_eq!(outcome.retained, 0);
     assert!(current.passed);
     assert!(current.budget_violations.is_empty());
-    assert_eq!(current.advisories.len(), 6);
+    assert_eq!(current.advisories.len(), 5);
     assert!(
         outcome
             .advisories
@@ -217,12 +203,12 @@ fn duplicate_multiset_finding_is_new_debt() {
 fn rename_lineage_grandfathers_but_copied_path_does_not() {
     let mut baseline = report();
     baseline
-        .dead_code_violations
-        .push(dead_code("src/old.ts", "Unreferenced File", None));
+        .suppression_violations
+        .push(suppression("src/old.ts", 1, "// @ts-ignore"));
     let mut renamed = report();
     renamed
-        .dead_code_violations
-        .push(dead_code("src/new.ts", "Unreferenced File", None));
+        .suppression_violations
+        .push(suppression("src/new.ts", 1, "// @ts-ignore"));
     let renamed_outcome = apply_legacy_ratchet(
         &mut renamed,
         &baseline,
@@ -233,11 +219,11 @@ fn rename_lineage_grandfathers_but_copied_path_does_not() {
 
     let mut copied = report();
     copied
-        .dead_code_violations
-        .push(dead_code("src/copy.ts", "Unreferenced File", None));
+        .suppression_violations
+        .push(suppression("src/copy.ts", 1, "// @ts-ignore"));
     let copied_outcome = apply_legacy_ratchet(&mut copied, &baseline, &changes(&[], &[], &[]));
     assert_eq!(copied_outcome.grandfathered, 0);
-    assert_eq!(copied.dead_code_violations.len(), 1);
+    assert_eq!(copied.suppression_violations.len(), 1);
     assert!(!copied.passed);
 }
 #[test]
@@ -364,7 +350,7 @@ fn retained_findings_get_deterministic_hunk_context() {
     current
         .complexity_violations
         .push(complexity("src/a.rs", 4, 10.0));
-    append_tail(&mut current, 6, "src/c.ts", "unused");
+    append_tail(&mut current, 6);
 
     apply_legacy_ratchet(
         &mut current,
@@ -392,11 +378,6 @@ fn retained_findings_get_deterministic_hunk_context() {
         current.clone_violations[0]
             .message
             .contains("`src/b.rs`:5-6")
-    );
-    assert!(
-        current.dead_code_violations[0]
-            .message
-            .contains("changed hunk `src/c.ts`:1")
     );
 }
 #[test]

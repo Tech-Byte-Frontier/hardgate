@@ -85,9 +85,9 @@ fn preset_guidance(preset: Preset) -> String {
         Preset::StrictAgent => {
             "# strict-agent keeps the strict structural thresholds (95% line/function,\n\
              # 90% branch coverage, and an 85% mutation floor) and requires evidence.\n\
-             # Provide coverage/lcov.info and [mutation].reports before hardgate verify.\n\
+             # Produce source-bound coverage and [mutation].reports before hardgate check.\n\
              # The policy remains incomplete until real LCOV and mutation reports exist;\n\
-             # generate those reports before using hardgate verify.\n\
+             # generate those reports with hardgate evidence before hardgate check.\n\
              # hardgate check also requires these generated reports under strict policy.\n"
                 .to_string()
         }
@@ -148,12 +148,7 @@ fn reference_comment(status: ReferenceStatus) -> String {
 }
 
 fn append_orchestration(output: &mut String, orchestration: &OrchestrationConfig) {
-    if orchestration.format_check.is_none()
-        && orchestration.format.is_none()
-        && orchestration.lint.is_none()
-        && orchestration.test_cmd.is_none()
-        && orchestration.timeout_secs.is_none()
-    {
+    if orchestration_empty(orchestration) {
         return;
     }
     output.push_str("\n[orchestration]\n");
@@ -165,9 +160,32 @@ fn append_orchestration(output: &mut String, orchestration: &OrchestrationConfig
     append_command(output, "format", orchestration.format.as_deref());
     append_command(output, "lint", orchestration.lint.as_deref());
     append_command(output, "test_cmd", orchestration.test_cmd.as_deref());
+    append_command(output, "typecheck", orchestration.typecheck.as_deref());
+    for (key, commands) in [
+        ("additional_tests", &orchestration.additional_tests),
+        ("feature_checks", &orchestration.feature_checks),
+    ] {
+        if !commands.is_empty() {
+            output.push_str(&format!(
+                "{key} = {}\n",
+                toml::Value::Array(commands.iter().cloned().map(toml::Value::String).collect())
+            ));
+        }
+    }
     if let Some(timeout_secs) = orchestration.timeout_secs {
         output.push_str(&format!("timeout_secs = {timeout_secs}\n"));
     }
+}
+
+fn orchestration_empty(orchestration: &OrchestrationConfig) -> bool {
+    orchestration.format_check.is_none()
+        && orchestration.format.is_none()
+        && orchestration.lint.is_none()
+        && orchestration.test_cmd.is_none()
+        && orchestration.additional_tests.is_empty()
+        && orchestration.typecheck.is_none()
+        && orchestration.feature_checks.is_empty()
+        && orchestration.timeout_secs.is_none()
 }
 
 fn append_command(output: &mut String, key: &str, command: Option<&str>) {

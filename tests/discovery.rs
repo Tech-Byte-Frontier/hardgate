@@ -17,7 +17,7 @@ use trees::{has_suffix, write_tree};
 
 /// Temp project with a real source file plus vendored trees per language
 /// (JS `node_modules`/`dist`/`build`, Rust `target`, Go `vendor`,
-/// Python venvs), including a nested skip dir under `src/`. `tag` must be
+/// dependency caches), including a nested skip dir under `src/`. `tag` must be
 /// unique per test: temp dirs are PID-scoped and tests in one binary run in
 /// parallel threads sharing the dir.
 fn dep_tree(tag: &str) -> PathBuf {
@@ -31,10 +31,10 @@ fn dep_tree(tag: &str) -> PathBuf {
             "target/debug/app.rs",
             "dist/bundle.js",
             "build/out.js",
-            "vendor/lib.go",
-            ".venv/lib/pkg.py",
-            "venv/lib/pkg.py",
-            "__pycache__/cached.py",
+            "vendor/lib.rs",
+            ".venv/lib/pkg.js",
+            "venv/lib/pkg.js",
+            "__pycache__/cached.js",
         ],
     );
     tmp
@@ -60,10 +60,10 @@ fn test_dependency_dirs_skipped_without_config() {
         "target/debug/app.rs",
         "dist/bundle.js",
         "build/out.js",
-        "vendor/lib.go",
-        ".venv/lib/pkg.py",
-        "venv/lib/pkg.py",
-        "__pycache__/cached.py",
+        "vendor/lib.rs",
+        ".venv/lib/pkg.js",
+        "venv/lib/pkg.js",
+        "__pycache__/cached.js",
     ] {
         assert!(
             !has_suffix(&result.files, vendored),

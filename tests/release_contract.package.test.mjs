@@ -20,11 +20,6 @@ const version = "9.9.9";
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const targets = [
   ["x86_64-unknown-linux-gnu", "hardgate-linux-x64"],
-  ["x86_64-unknown-linux-musl", "hardgate-linux-x64-musl"],
-  ["aarch64-unknown-linux-gnu", "hardgate-linux-arm64"],
-  ["aarch64-unknown-linux-musl", "hardgate-linux-arm64-musl"],
-  ["x86_64-apple-darwin", "hardgate-darwin-x64"],
-  ["aarch64-apple-darwin", "hardgate-darwin-arm64"],
 ];
 
 function digest(file) {

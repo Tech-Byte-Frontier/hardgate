@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 
 fn fixture(label: &str) -> std::path::PathBuf {
@@ -16,37 +16,9 @@ fn cleanup(root: std::path::PathBuf) {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
-fn combined_commands_execute_both_tools_and_preserve_second_failure() {
-    let root = fixture("combined-execution");
-    let command = combine_commands(
-        Some("sh -c 'printf first > first.txt'".into()),
-        Some("sh -c 'printf second > second.txt; exit 7'".into()),
-    )
-    .unwrap();
-    let config = OrchestrationConfig {
-        lint: Some(command),
-        ..Default::default()
-    };
-    let failure = crate::engines::OrchestrationEngine::new(&config)
-        .run_lint(&root)
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(failure.exit_code, Some(7));
-    assert_eq!(fs::read_to_string(root.join("first.txt")).unwrap(), "first");
-    assert_eq!(
-        fs::read_to_string(root.join("second.txt")).unwrap(),
-        "second"
-    );
-    cleanup(root);
-}
-
-#[test]
-fn mixed_detection_does_not_drop_a_third_ecosystem_or_one_missing_tool() {
-    assert!(combine_commands(Some("pytest".into()), None).is_none());
-    let root = fixture("three-ecosystems");
-    fs::write(root.join("pyproject.toml"), "[tool.ruff]\n").unwrap();
+fn mixed_supported_ecosystems_require_explicit_commands() {
+    let root = fixture("mixed-ecosystems");
     fs::write(
         root.join("package.json"),
         r#"{"scripts":{"lint":"eslint ."}}"#,
@@ -68,21 +40,11 @@ fn mixed_detection_does_not_drop_a_third_ecosystem_or_one_missing_tool() {
 fn detection_inventory_handles_duplicates_depth_and_symlinks() {
     let root = fixture("inventory");
     let mut inventory = ManifestInventory::default();
-    for name in [
-        "Cargo.toml",
-        "package.json",
-        "pyproject.toml",
-        "setup.py",
-        "requirements.txt",
-        "go.mod",
-        "ignored.txt",
-    ] {
+    for name in ["Cargo.toml", "package.json", "ignored.txt"] {
         record_manifest(&root.join(name), &mut inventory);
     }
     assert_eq!(inventory.cargo.len(), 1);
     assert_eq!(inventory.packages.len(), 1);
-    assert_eq!(inventory.python.len(), 3);
-    assert_eq!(inventory.go.len(), 1);
 
     let file = root.join("file");
     fs::write(&file, "content").unwrap();
@@ -126,7 +88,7 @@ fn detection_messages_are_deduplicated() {
 }
 
 #[test]
-fn classification_and_toml_helpers_cover_each_ecosystem() {
+fn classification_covers_supported_ecosystems() {
     let root = fixture("classification");
     let inventories = [
         (ManifestInventory::default(), Ecosystem::Unknown),
@@ -146,20 +108,6 @@ fn classification_and_toml_helpers_cover_each_ecosystem() {
         ),
         (
             ManifestInventory {
-                python: vec![root.join("pyproject.toml")],
-                ..ManifestInventory::default()
-            },
-            Ecosystem::Python,
-        ),
-        (
-            ManifestInventory {
-                go: vec![root.join("go.mod")],
-                ..ManifestInventory::default()
-            },
-            Ecosystem::Go,
-        ),
-        (
-            ManifestInventory {
                 cargo: vec![root.join("Cargo.toml")],
                 packages: vec![root.join("package.json")],
                 ..ManifestInventory::default()
@@ -171,10 +119,6 @@ fn classification_and_toml_helpers_cover_each_ecosystem() {
         assert_eq!(classify(&inventory), expected);
     }
 
-    let valid = "[tool]\n[tool.ruff]\nline-length = 88\n";
-    assert!(has_toml_table(valid, &["tool", "ruff"]));
-    assert!(!has_toml_table(valid, &["tool", "black"]));
-    assert!(!has_toml_table("[tool\n", &["tool"]));
     cleanup(root);
 }
 
@@ -192,7 +136,10 @@ fn package_metadata_scripts_and_managers_filter_invalid_values() {
     assert!(!package_info.manager_invalid);
     assert_eq!(
         package_info.scripts,
-        BTreeSet::from(["format".to_string(), "test".to_string()])
+        BTreeMap::from([
+            ("format".to_string(), "format".to_string()),
+            ("test".to_string(), "test".to_string())
+        ])
     );
     for invalid in ["[]", "{"] {
         fs::write(&package, invalid).unwrap();
@@ -202,22 +149,22 @@ fn package_metadata_scripts_and_managers_filter_invalid_values() {
     let mut orchestration = OrchestrationConfig::default();
     set_script_commands(
         &mut orchestration,
-        &BTreeSet::from([
-            "format:check".to_string(),
-            "format".to_string(),
-            "lint".to_string(),
-            "test".to_string(),
+        &BTreeMap::from([
+            ("format:check".to_string(), "prettier --check .".to_string()),
+            ("format".to_string(), "prettier --write .".to_string()),
+            ("lint".to_string(), "eslint --fix .".to_string()),
+            ("test".to_string(), "test".to_string()),
         ]),
         "yarn".to_string(),
     );
     assert_eq!(
         orchestration.format_check.as_deref(),
-        Some("yarn run format:check")
+        Some("prettier --check .")
     );
-    assert_eq!(orchestration.format.as_deref(), Some("yarn run format"));
-    assert_eq!(orchestration.lint.as_deref(), Some("yarn run lint"));
+    assert_eq!(orchestration.format.as_deref(), Some("prettier --write ."));
+    assert_eq!(orchestration.lint.as_deref(), Some("eslint --no-fix ."));
     assert_eq!(orchestration.test_cmd.as_deref(), Some("yarn run test"));
-    assert_eq!(first_script(&BTreeSet::new(), &["format", "fmt"]), None);
+    assert_eq!(first_script(&BTreeMap::new(), &["format", "fmt"]), None);
     cleanup(root);
 }
 
@@ -266,11 +213,6 @@ fn command_detection_reports_ambiguity_and_nested_only_projects() {
     add_unconfigured_commands(&mut configured);
     assert!(configured.missing_setup.is_empty());
 
-    let inventory = ManifestInventory {
-        python: vec![root.join("nested/pyproject.toml")],
-        ..ManifestInventory::default()
-    };
-    assert_eq!(root_python_manifest(&root, &inventory), None);
     let mut detection = Detection::new(Ecosystem::JavaScript);
     detect_javascript_without_manifest(&root, &ManifestInventory::default(), &mut detection);
     assert!(

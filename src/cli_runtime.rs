@@ -1,5 +1,5 @@
 use super::{Cli, Commands, Parser, run_cli};
-use hardgate::commands::{CommandOutcome, CommandResult, MutationFailure, outcome::is_broken_pipe};
+use hardgate::commands::{CommandOutcome, CommandResult, outcome::is_broken_pipe};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -48,7 +48,10 @@ fn execute_guarded(
 }
 
 fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources::Admission>> {
-    if matches!(cli.command, Commands::Completions { .. }) {
+    if matches!(
+        cli.command,
+        Commands::Completions { .. } | Commands::Init { .. } | Commands::Config { .. }
+    ) {
         return Ok(None);
     }
     hardgate::runtime_resources::enter().map(Some)
@@ -88,7 +91,6 @@ fn parse_failure(error: clap::Error, json: bool) -> ExitCode {
 }
 
 fn emit_error(stage: &str, error: &anyhow::Error) -> io::Result<()> {
-    let mutation = error.downcast_ref::<MutationFailure>();
     let value = serde_json::json!({
         "schema_version": 1,
         "command": stage,
@@ -96,8 +98,8 @@ fn emit_error(stage: &str, error: &anyhow::Error) -> io::Result<()> {
         "status": "error",
         "exit_code": CommandOutcome::Incomplete.exit_code(),
         "execution": error.downcast_ref::<hardgate::commands::ExecutionFailure>().map(|failure| &failure.plan),
-        "stage": mutation.map_or(stage, |error| error.stage),
-        "kind": mutation.map_or("command-error", |error| error.kind),
+        "stage": stage,
+        "kind": "command-error",
         "message": format!("{error:#}"),
     });
     let mut out = io::BufWriter::new(io::stdout().lock());
@@ -116,10 +118,9 @@ fn wants_json(args: &[std::ffi::OsString]) -> bool {
 
 fn command_json(command: &Commands) -> bool {
     match command {
-        Commands::Check { output, .. }
-        | Commands::Verify { output, .. }
-        | Commands::Scan { output, .. } => output.output_options().is_json(),
-        Commands::Mutate { format, json, .. } => *json || format.as_deref() == Some("json"),
+        Commands::Check { output, .. } | Commands::Scan { output, .. } => {
+            output.output_options().is_json()
+        }
         Commands::Config { format } => format == "json",
         Commands::Report {
             subcommand: Some(super::ReportCommand::Compare { output, .. }),
@@ -138,8 +139,6 @@ fn command_stage(command: &Commands) -> &'static str {
     match command {
         Commands::Check { .. } => "check",
         Commands::Scan { .. } => "scan",
-        Commands::Mutate { .. } => "mutate",
-        Commands::Verify { .. } => "verify",
         Commands::Config { .. } => "config",
         _ => utility_stage(command),
     }
@@ -150,6 +149,7 @@ fn utility_stage(command: &Commands) -> &'static str {
         Commands::Init { .. } => "init",
         Commands::Completions { .. } => "completions",
         Commands::Fmt { .. } => "fmt",
+        Commands::Evidence { .. } => "evidence",
         Commands::Report { .. } => "report",
         _ => "mcp",
     }

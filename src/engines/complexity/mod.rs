@@ -1,5 +1,7 @@
 pub mod languages;
+mod size;
 pub mod walker;
+pub use size::SizeBreakdown;
 
 use crate::config::FunctionBudgets;
 pub use languages::SupportedLanguage;
@@ -7,26 +9,27 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 pub use walker::ComplexityContribution;
-use walker::{AnalysisState, WalkerContext, abc_score, walk_node};
+use walker::{AnalysisState, WalkerContext, walk_visible_node};
 
 /// Tree-sitter-derived metrics for one function: size, parameters, nesting,
-/// cyclomatic/cognitive/Halstead/ABC scores, and per-node breakdowns.
+/// cyclomatic scores, and per-node breakdowns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionMetrics {
     pub name: String,
     pub file: PathBuf,
     pub start_line: usize,
+    #[serde(default)]
+    pub start_column: usize,
     pub end_line: usize,
     pub lines: usize,
     pub parameters: usize,
     pub cyclomatic: u32,
-    pub cognitive: u32,
-    pub halstead_difficulty: f64,
     pub max_nesting_depth: usize,
     pub statements: usize,
     #[serde(default)]
-    pub abc_score: f64,
-    pub cognitive_breakdown: Vec<ComplexityContribution>,
+    pub test_only: bool,
+    #[serde(default)]
+    pub size: Option<SizeBreakdown>,
     pub cyclomatic_breakdown: Vec<ComplexityContribution>,
 }
 
@@ -38,6 +41,8 @@ pub struct ComplexityViolation {
     pub function_name: String,
     pub line_number: usize,
     #[serde(default)]
+    pub column_number: usize,
+    #[serde(default)]
     pub end_line: usize,
     pub metric: String,
     pub actual: f64,
@@ -45,6 +50,13 @@ pub struct ComplexityViolation {
     pub breakdown: Vec<ComplexityContribution>,
     pub message: String,
     pub recommendation: String,
+    #[serde(default)]
+    pub size: Option<SizeBreakdown>,
+}
+
+pub(crate) struct FileStructure {
+    pub functions: Vec<FunctionMetrics>,
+    pub size: Option<SizeBreakdown>,
 }
 
 /// Multi-language Tree-sitter analyzer producing [`FunctionMetrics`].
@@ -52,6 +64,7 @@ pub struct ComplexityAnalyzer;
 
 struct ParseContext<'a> {
     source: &'a [u8],
+    original: &'a [u8],
     lang: SupportedLanguage,
     file_path: &'a Path,
 }
@@ -86,20 +99,49 @@ impl ComplexityAnalyzer {
         content: &str,
         root: &Path,
     ) -> anyhow::Result<Vec<FunctionMetrics>> {
-        let Some((lang, tree)) = SupportedLanguage::parse_file_checked(path, content)? else {
-            return Ok(Vec::new());
+        self.analyze_file_structure(path, content, root)
+            .map(|structure| structure.functions)
+    }
+
+    pub(crate) fn analyze_file_structure(
+        &mut self,
+        path: &Path,
+        content: &str,
+        root: &Path,
+    ) -> anyhow::Result<FileStructure> {
+        self.analyze_role_structure(path, (content, content), root)
+    }
+
+    /// Parse the actual source, then measure the byte-aligned ownership view.
+    /// A projected field or statement need not form a standalone Rust file.
+    pub(crate) fn analyze_role_structure(
+        &mut self,
+        path: &Path,
+        content: (&str, &str),
+        root: &Path,
+    ) -> anyhow::Result<FileStructure> {
+        let (original, visible) = content;
+        let Some((lang, tree)) = SupportedLanguage::parse_file_checked(path, original)? else {
+            return Ok(FileStructure {
+                functions: Vec::new(),
+                size: None,
+            });
         };
 
         let rel_path = path.strip_prefix(root).unwrap_or(path);
         let ctx = ParseContext {
-            source: content.as_bytes(),
+            source: visible.as_bytes(),
+            original: original.as_bytes(),
             lang,
             file_path: rel_path,
         };
 
         let mut functions = Vec::new();
         collect_functions(tree.root_node(), &ctx, &mut functions);
-        Ok(functions)
+        Ok(FileStructure {
+            functions,
+            size: Some(size::measure_file(tree.root_node(), visible.as_bytes())),
+        })
     }
 
     /// Flag every metric in `metrics` that exceeds a `budgets` ceiling.
@@ -111,7 +153,7 @@ impl ComplexityAnalyzer {
         for m in metrics {
             check_control_flow_limits(m, budgets, &mut violations);
             check_size_and_param_limits(m, budgets, &mut violations);
-            check_advanced_limits(m, budgets, &mut violations);
+            check_statement_limit(m, budgets, &mut violations);
         }
         violations
     }
@@ -149,22 +191,6 @@ fn check_control_flow_limits(
             },
         ));
     }
-
-    if let Some(limit) = budgets.max_cognitive
-        && m.cognitive > limit
-    {
-        violations.push(create_violation(
-            m,
-            ViolationSpec {
-                metric: "Cognitive Complexity",
-                actual: m.cognitive as f64,
-                limit: limit as f64,
-                breakdown: &m.cognitive_breakdown,
-                message: None,
-                recommendation: format!("Flatten nested control structures in `{}`.", m.name),
-            },
-        ));
-    }
 }
 
 fn create_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViolation {
@@ -174,6 +200,7 @@ fn create_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViola
         file: m.file.clone(),
         function_name: m.name.clone(),
         line_number: m.start_line,
+        column_number: m.start_column,
         end_line: m.end_line,
         metric: spec.metric.to_string(),
         actual: spec.actual,
@@ -186,6 +213,7 @@ fn create_violation(m: &FunctionMetrics, spec: ViolationSpec) -> ComplexityViola
             )
         }),
         recommendation: spec.recommendation,
+        size: m.size.clone(),
     }
 }
 
@@ -227,10 +255,10 @@ fn check_size_and_param_limits(
                 limit: limit as f64,
                 breakdown: &[],
                 message: Some(format!(
-                    "Function body spans {} lines (budget: {})",
-                    m.lines, limit
+                    "Function body spans {} lines (budget: {}){}",
+                    m.lines, limit, m.size.as_ref().map(|size| format!("; {}", size.description())).unwrap_or_default()
                 )),
-                recommendation: format!("Split `{}` into smaller focused functions.", m.name),
+                recommendation: format!("Review code and documentation in `{}` separately; extract cohesive code only where it improves clarity.", m.name),
             },
         ));
     }
@@ -258,33 +286,11 @@ fn check_size_and_param_limits(
     }
 }
 
-fn check_advanced_limits(
+fn check_statement_limit(
     m: &FunctionMetrics,
     budgets: &FunctionBudgets,
     violations: &mut Vec<ComplexityViolation>,
 ) {
-    if let Some(limit) = budgets.max_halstead_difficulty
-        && m.halstead_difficulty > limit
-    {
-        violations.push(create_violation(
-            m,
-            ViolationSpec {
-                metric: "Halstead Difficulty",
-                actual: m.halstead_difficulty,
-                limit,
-                breakdown: &[],
-                message: Some(format!(
-                    "Halstead difficulty is {:.1} (budget: {:.1})",
-                    m.halstead_difficulty, limit
-                )),
-                recommendation: format!(
-                    "Simplify operators/operands in `{}`: extract helpers, reduce distinct operators.",
-                    m.name
-                ),
-            },
-        ));
-    }
-
     if let Some(limit) = budgets.max_statements
         && m.statements > limit
     {
@@ -300,28 +306,6 @@ fn check_advanced_limits(
                     m.statements, limit
                 )),
                 recommendation: format!("Split `{}` into smaller focused functions.", m.name),
-            },
-        ));
-    }
-
-    if let Some(limit) = budgets.max_abc
-        && m.abc_score > limit
-    {
-        violations.push(create_violation(
-            m,
-            ViolationSpec {
-                metric: "ABC Score",
-                actual: m.abc_score,
-                limit,
-                breakdown: &[],
-                message: Some(format!(
-                    "ABC score is {:.1} (budget: {:.1})",
-                    m.abc_score, limit
-                )),
-                recommendation: format!(
-                    "Reduce assignments/branches/calls in `{}` by extracting helpers.",
-                    m.name
-                ),
             },
         ));
     }
@@ -341,42 +325,34 @@ fn collect_functions(node: Node, ctx: &ParseContext, results: &mut Vec<FunctionM
 }
 
 fn analyze_function_node(node: Node, ctx: &ParseContext) -> Option<FunctionMetrics> {
+    if ctx.source[node.start_byte()].is_ascii_whitespace() {
+        return None;
+    }
     let name = extract_function_name(node, ctx.source, ctx.lang)?;
     let start_line = node.start_position().row + 1;
     let end_line = node.end_position().row + 1;
-    let lines = end_line - start_line + 1;
-    let parameters = count_parameters(node, ctx.lang);
+    let size = size::measure_projection(node, ctx.source, ctx.original);
+    let lines = size.physical_lines;
+    let parameters = count_parameters(node, ctx.lang, ctx.source);
 
-    let walker_ctx = WalkerContext {
-        source: ctx.source,
-        lang: ctx.lang,
-    };
+    let walker_ctx = WalkerContext { lang: ctx.lang };
 
     let mut state = AnalysisState::new();
-    walk_node(node, &walker_ctx, 0, &mut state);
-
-    let distinct_ops = state.operators.len() as f64;
-    let distinct_opds = state.operands.len() as f64;
-    let halstead_difficulty = if distinct_opds > 0.0 {
-        (distinct_ops / 2.0) * (state.total_operands as f64 / distinct_opds)
-    } else {
-        0.0
-    };
+    walk_visible_node(node, (&walker_ctx, ctx.source), 0, &mut state);
 
     Some(FunctionMetrics {
         name,
         file: ctx.file_path.to_path_buf(),
         start_line,
+        start_column: node.start_position().column + 1,
         end_line,
         lines,
         parameters,
         cyclomatic: state.cyclomatic,
-        cognitive: state.cognitive,
-        halstead_difficulty,
         max_nesting_depth: state.max_nesting_depth,
         statements: state.statements,
-        abc_score: abc_score(state.assignments, state.branches, state.calls),
-        cognitive_breakdown: state.cognitive_breakdown,
+        test_only: false,
+        size: Some(size),
         cyclomatic_breakdown: state.cyclomatic_breakdown,
     })
 }
@@ -423,13 +399,12 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
     None
 }
 
-fn count_parameters(node: Node, lang: SupportedLanguage) -> usize {
+fn count_parameters(node: Node, lang: SupportedLanguage, source: &[u8]) -> usize {
     let param_kind = match lang {
-        SupportedLanguage::Rust | SupportedLanguage::Python => "parameters",
+        SupportedLanguage::Rust => "parameters",
         SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript => {
             "formal_parameters"
         }
-        SupportedLanguage::Go => "parameter_list",
     };
 
     let Some(child) = (0..node.child_count()).find_map(|i| {
@@ -447,20 +422,12 @@ fn count_parameters(node: Node, lang: SupportedLanguage) -> usize {
         .filter_map(|j| child.child(j))
         .filter(|param| {
             let kind = param.kind();
-            !matches!(
-                kind,
-                "(" | ")"
-                    | ","
-                    | "{"
-                    | "}"
-                    | "["
-                    | "]"
-                    | "*"
-                    | "/"
-                    | ":"
-                    | "keyword_separator"
-                    | "positional_separator"
-            ) && !kind.contains("comment")
+            !source[param.start_byte()].is_ascii_whitespace()
+                && !matches!(
+                    kind,
+                    "(" | ")" | "," | "{" | "}" | "[" | "]" | "*" | "/" | ":"
+                )
+                && !kind.contains("comment")
         })
         .count()
 }

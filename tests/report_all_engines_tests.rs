@@ -4,7 +4,7 @@ use cli::{Fixture, assert_status, json, run};
 use hardgate::GateReport;
 use serde_json::{Value, json as value};
 
-const FIELDS: [&str; 9] = [
+const FIELDS: [&str; 8] = [
     "budget_violations",
     "suppression_violations",
     "complexity_violations",
@@ -12,7 +12,6 @@ const FIELDS: [&str; 9] = [
     "clone_violations",
     "coverage_violations",
     "mutation_violations",
-    "dead_code_violations",
     "orchestration_violations",
 ];
 
@@ -26,7 +25,6 @@ fn all_findings() -> GateReport {
         value!({"file_a":"src/b.rs","file_b":"src/a.rs","lines_a":[1,2],"lines_b":[1,2],"tokens":30,"lines":2,"fingerprint":"clone","message":"clone","recommendation":"extract"}),
         value!({"file":"src/a.rs","function_name":"work","metric":"coverage keep","actual":50.0,"limit":95.0,"message":"coverage","recommendation":"test"}),
         value!({"report_file":"src/a.rs","metric":"mutation keep","actual":50.0,"limit":85.0,"message":"mutation","recommendation":"test"}),
-        value!({"file":"src/a.rs","line_number":1,"symbol":"work","violation_type":"dead keep","message":"dead code","recommendation":"remove"}),
         value!({"step":"lint","command":"lint","exit_code":1,"output":"lint failed","recommendation":"fix"}),
     ];
     for (field, record) in FIELDS.iter().zip(records) {
@@ -54,7 +52,7 @@ fn inspect(fixture: &Fixture, flag: &str, filter: &str) -> Value {
     assert_status(&output, false, "saved report remains a policy failure");
     assert_eq!(output.status.code(), Some(1));
     let report = json(&output);
-    assert_eq!(report["inspection"]["original_total_errors"], 9);
+    assert_eq!(report["inspection"]["original_total_errors"], 8);
     report
 }
 
@@ -69,7 +67,6 @@ fn every_engine_filter_preserves_only_its_saved_findings_and_original_verdict() 
         "clones",
         "coverage",
         "mutation_report",
-        "dead_code",
         "tool",
     ];
     for (selected, alias) in aliases.iter().enumerate() {
@@ -92,7 +89,6 @@ fn metric_and_top_filters_cover_evidence_and_clone_partner_locations() {
         ("complexity", 2),
         ("coverage", 5),
         ("mutation", 6),
-        ("dead", 7),
     ] {
         let report = inspect(&fixture, "--metric", metric);
         for (index, field) in FIELDS.iter().enumerate() {
@@ -108,7 +104,7 @@ fn metric_and_top_filters_cover_evidence_and_clone_partner_locations() {
         for (index, field) in FIELDS.iter().enumerate() {
             assert_eq!(
                 report[field].as_array().unwrap().len(),
-                usize::from(top != "0" && index != 8),
+                usize::from(top != "0" && index != 7),
                 "top={top}: {field}"
             );
         }
@@ -122,8 +118,8 @@ fn comparison_records_each_engine_without_claiming_equivalent_missing_metadata()
     empty.finalize(2, 1, 1);
     fixture.write("empty.json", &serde_json::to_string(&empty).unwrap());
     for (before, after, added, removed) in [
-        ("input.json", "empty.json", 0, 9),
-        ("empty.json", "input.json", 9, 0),
+        ("input.json", "empty.json", 0, 8),
+        ("empty.json", "input.json", 8, 0),
         ("input.json", "input.json", 0, 0),
     ] {
         let output = run(

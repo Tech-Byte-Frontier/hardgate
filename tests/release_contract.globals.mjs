@@ -2,12 +2,11 @@
 "use strict";
 
 import assert from "node:assert/strict";
-import { releaseJob } from "./release_contract.sources.mjs";
+import { installedConsumers } from "./release_contract.sources.mjs";
 
-const finalConsumerJob = releaseJob("verify-channels");
+const finalConsumerJob = installedConsumers;
 const pnpmGlobalConsumer = finalConsumerJob.slice(
   finalConsumerJob.indexOf('pnpm_global="$consumer_tmp/pnpm-global"'),
-  finalConsumerJob.indexOf('shell_root="$consumer_tmp/shell-install"'),
 );
 assert.ok(pnpmGlobalConsumer.length > 0, "default pnpm global verification block must exist");
 assert.match(

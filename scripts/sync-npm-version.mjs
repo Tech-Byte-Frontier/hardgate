@@ -2,6 +2,8 @@
 // Sync npm/* versions from Cargo.toml [package] version (single source of truth).
 // Usage: node scripts/sync-npm-version.mjs [--check] [--tag vX.Y.Z]
 "use strict";
+
+import { PLATFORM_NAMES } from "./release-platforms.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { projectRoot as root, readCargoVersion } from "./release-support.mjs";
@@ -31,14 +33,7 @@ if (tagVersion && tagVersion !== cargoVersion) {
 }
 const version = tagVersion ?? cargoVersion;
 
-const platformPkgs = [
-  "hardgate-linux-x64",
-  "hardgate-linux-x64-musl",
-  "hardgate-linux-arm64",
-  "hardgate-linux-arm64-musl",
-  "hardgate-darwin-x64",
-  "hardgate-darwin-arm64",
-];
+const platformPkgs = PLATFORM_NAMES;
 
 // Canonical npm metadata. Single source of truth for versions is Cargo.toml;
 // the fields below keep `npm/*` aligned with npm registry quality standards

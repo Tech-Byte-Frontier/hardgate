@@ -1,5 +1,4 @@
 use super::check::CheckOptions;
-use super::dead_code::run_dead_code_analysis;
 use super::evidence::{EvidenceFailure, record_evidence_failure};
 use super::role_policy::classify_files;
 use super::source_snapshot::SharedSource;
@@ -34,75 +33,25 @@ pub(crate) fn empty_discovery_advisory(diff: bool, scoped: bool) -> String {
     }
 }
 
-pub(crate) fn check_scope_advisory(config: &HardgateConfig, opts: &CheckOptions) -> String {
-    let (omitted, recommendations) = collect_scope_omissions(config, opts);
+pub(crate) fn check_scope_advisory(_config: &HardgateConfig, opts: &CheckOptions) -> String {
+    let omitted = [
+        super::CheckKind::Policy,
+        super::CheckKind::Format,
+        super::CheckKind::Lint,
+        super::CheckKind::Tests,
+        super::CheckKind::Typecheck,
+    ]
+    .into_iter()
+    .filter(|kind| !opts.selects(*kind))
+    .map(|kind| format!("{kind:?}").to_ascii_lowercase())
+    .collect::<Vec<_>>();
     if omitted.is_empty() {
-        "This check requested every configured report and static/orchestration engine in its selected scope; consult engine states for completion. Native mutation execution remains a separate `hardgate mutate` command."
-            .to_string()
+        "All configured acceptance requirements were requested in the selected path scope; consult engine states for completion. Mutation reports describe the recorded specialist sample.".into()
     } else {
-        let rec = format_recommendations(&recommendations);
         format!(
-            "This is a partial gate; omitted {}.{} Native mutation execution remains separate from report ingestion.",
-            omitted.join(", "),
-            rec
+            "Partial check: omitted {}. This result does not establish complete project acceptance; run `hardgate check` for all requirements.",
+            omitted.join(", ")
         )
-    }
-}
-
-fn collect_static_omissions(
-    config: &HardgateConfig,
-    opts: &CheckOptions,
-    omitted: &mut Vec<&'static str>,
-    recs: &mut Vec<&'static str>,
-) {
-    let missing_all = !opts.all;
-    let missing_dead_code = !opts.dead_code && !config.analysis.dead_code.enabled;
-
-    if missing_all {
-        omitted.push("configured formatter/linter/test commands");
-    }
-    if missing_dead_code {
-        omitted.push("dead-code analysis");
-    }
-    match (missing_all, missing_dead_code) {
-        (true, true) => recs.push("add `--all --dead-code` to this check command"),
-        (true, false) => recs.push("add `--all` to this check command"),
-        (false, true) => recs.push("add `--dead-code` to this check command"),
-        (false, false) => {}
-    }
-}
-
-fn collect_evidence_omissions(
-    config: &HardgateConfig,
-    omitted: &mut Vec<&'static str>,
-    recs: &mut Vec<&'static str>,
-) {
-    if !config.coverage.enabled {
-        omitted.push("coverage evidence (disabled by policy)");
-        recs.push("enable `[coverage]`, generate LCOV, then run `verify`");
-    }
-    if !config.mutation.enabled {
-        omitted.push("mutation evidence (disabled by policy)");
-        recs.push("enable `[mutation]` and configure mutation reports for ingestion or run `mutate` for native execution");
-    }
-}
-
-fn collect_scope_omissions(
-    config: &HardgateConfig,
-    opts: &CheckOptions,
-) -> (Vec<&'static str>, Vec<&'static str>) {
-    let mut omitted = Vec::new();
-    let mut recs = Vec::new();
-    collect_static_omissions(config, opts, &mut omitted, &mut recs);
-    collect_evidence_omissions(config, &mut omitted, &mut recs);
-    (omitted, recs)
-}
-
-fn format_recommendations(recs: &[&'static str]) -> String {
-    if recs.is_empty() {
-        String::new()
-    } else {
-        format!(" Next: {}.", recs.join("; "))
     }
 }
 
@@ -143,7 +92,6 @@ pub(crate) fn run_legacy_ratchet(
     config: &HardgateConfig,
     root: &Path,
     current: &mut GateReport,
-    include_dead_code: bool,
 ) -> Option<ReferenceEvidence> {
     if !config.legacy.ratchet {
         return None;
@@ -168,10 +116,8 @@ pub(crate) fn run_legacy_ratchet(
             );
             let summary = apply_legacy_baseline(LegacyBaselineRequest {
                 config,
-                root,
                 current,
                 evidence: &loaded,
-                include_dead_code,
             });
             push_legacy_summary(current, &summary);
             Some(loaded)
@@ -210,10 +156,8 @@ impl LegacySummary {
 fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
     let LegacyBaselineRequest {
         config,
-        root,
         current,
         evidence,
-        include_dead_code,
     } = request;
     let mut summary = LegacySummary {
         reference: config
@@ -232,7 +176,7 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
         .map(|(path, content)| (path.clone(), content.clone()))
         .collect();
     let baseline_config = trusted_baseline_config(config);
-    let (mut baseline, _files, baseline_read, _functions) =
+    let (baseline, _files, _baseline_read, _functions) =
         match run_static_gate_snapshot(&baseline_config, &baseline_contents) {
             Ok(result) => result,
             Err(error) => {
@@ -244,16 +188,7 @@ fn apply_legacy_baseline(request: LegacyBaselineRequest<'_>) -> LegacySummary {
                 return summary;
             }
         };
-    if include_dead_code
-        && let Err(error) =
-            run_dead_code_analysis(&baseline_config, &baseline_read, root, &mut baseline)
-    {
-        record_legacy_failure(
-            current,
-            &summary.reference,
-            format!("Unable to analyze the legacy baseline: {error}"),
-        );
-    }
+
     if !baseline.orchestration_violations.is_empty() {
         record_legacy_failure(
             current,
@@ -291,10 +226,8 @@ fn trusted_baseline_config(config: &HardgateConfig) -> HardgateConfig {
 
 struct LegacyBaselineRequest<'a> {
     config: &'a HardgateConfig,
-    root: &'a Path,
     current: &'a mut GateReport,
     evidence: &'a ReferenceEvidence,
-    include_dead_code: bool,
 }
 
 fn record_legacy_failure(report: &mut GateReport, reference: &str, message: String) {
@@ -321,6 +254,7 @@ pub(crate) struct ChangedLineFilter<'a> {
     pub changed_lines: &'a ChangedLineMap,
     pub selected_files: &'a [PathBuf],
     pub read_results: &'a [SharedSource],
+    pub ownership: Option<&'a crate::discovery::rust_ownership::RustOwnership>,
     pub config: &'a HardgateConfig,
     pub root: &'a Path,
 }
@@ -341,6 +275,20 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
     let classified = classify_files(&paths, request.config, request.root)?;
+    let inputs = classified
+        .iter()
+        .zip(request.read_results)
+        .map(|(file, (_, text))| (file, text.as_ref()))
+        .collect::<Vec<_>>();
+    let captured_ownership;
+    let ownership = match request.ownership {
+        Some(ownership) => ownership,
+        None => {
+            captured_ownership =
+                crate::discovery::rust_ownership::RustOwnership::from_inputs(&inputs);
+            &captured_ownership
+        }
+    };
     for ((path, content), classified) in request.read_results.iter().zip(classified) {
         let Some(key) = normalized_repository_key(path, request.root) else {
             continue;
@@ -348,9 +296,15 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
         if !selected.contains(&key) {
             continue;
         }
-        if classified.ast_supported && classified.role == FileRole::Source {
+        if classified.ast_supported && ownership.file_role(&classified) == FileRole::Source {
             source_files.insert(key.clone());
-            source_contents.entry(key).or_insert(content.as_ref());
+            if let Some(view) = ownership
+                .views(&classified, content)
+                .into_iter()
+                .find(|view| view.file.role == FileRole::Source)
+            {
+                source_contents.entry(key).or_insert(view.text);
+            }
         }
     }
 
@@ -392,6 +346,7 @@ mod tests {
             changed_lines,
             selected_files,
             read_results: &shared,
+            ownership: None,
             config: &HardgateConfig::default(),
             root: Path::new("."),
         })
@@ -432,6 +387,26 @@ mod tests {
         assert_eq!(
             filtered,
             BTreeMap::from([(PathBuf::from("src/lib.rs"), BTreeSet::from([3, 5]),)])
+        );
+    }
+    #[test]
+    fn changed_line_coverage_ignores_proven_inline_and_external_test_code() {
+        let changed = ChangedLineMap::from([
+            (PathBuf::from("src/lib.rs"), BTreeSet::from([1, 4])),
+            (PathBuf::from("src/helper.rs"), BTreeSet::from([1])),
+        ]);
+        let selected = vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/helper.rs")];
+        let read = vec![
+            (
+                selected[0].clone(),
+                "pub fn source() {}\n#[cfg(test)]\nmod helper;\n#[test] fn check() {}\n"
+                    .to_string(),
+            ),
+            (selected[1].clone(), "pub fn helper() {}\n".to_string()),
+        ];
+        assert_eq!(
+            filtered(&changed, &selected, &read),
+            ChangedLineMap::from([(PathBuf::from("src/lib.rs"), BTreeSet::from([1]))])
         );
     }
 }

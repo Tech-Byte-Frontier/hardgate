@@ -52,7 +52,10 @@ impl TokenInterner {
 pub(super) fn tokenize(content: &str, interner: &mut TokenInterner) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut filter = RoutineDeclFilter::default();
-    for (index, line) in content.lines().enumerate() {
+    let mut offset = 0;
+    for (index, line) in content.split_inclusive('\n').enumerate() {
+        let remaining = &content[offset..];
+        offset += line.len();
         let trimmed = line.trim();
         if trimmed.is_empty() || is_comment_start(trimmed) {
             continue;
@@ -62,12 +65,34 @@ pub(super) fn tokenize(content: &str, interner: &mut TokenInterner) -> Vec<Token
         if trimmed_code.is_empty() {
             continue;
         }
-        if filter.is_routine_decl(trimmed_code) {
+        if !dynamic_import(remaining) && filter.is_routine_decl(trimmed_code) {
             continue;
         }
         tokenize_line(&code, index + 1, &mut tokens, interner);
     }
     tokens
+}
+
+fn dynamic_import(source: &str) -> bool {
+    let Some(mut rest) = source.trim_start().strip_prefix("import") else {
+        return false;
+    };
+    loop {
+        rest = rest.trim_start();
+        if let Some(comment) = rest.strip_prefix("/*") {
+            let Some((_, after)) = comment.split_once("*/") else {
+                return false;
+            };
+            rest = after;
+        } else if let Some(comment) = rest.strip_prefix("//") {
+            let Some((_, after)) = comment.split_once('\n') else {
+                return false;
+            };
+            rest = after;
+        } else {
+            return rest.starts_with(['(', '.']);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -218,18 +243,11 @@ fn is_use_declaration(trimmed: &str) -> bool {
 }
 
 fn is_import_declaration(trimmed: &str) -> bool {
-    const IMPORT_PREFIXES: &[&str] = &[
-        "import ", "import\t", "import{", "import\"", "import'", "import (",
-    ];
-    if IMPORT_PREFIXES
+    const IMPORT_PREFIXES: &[&str] = &["import ", "import\t", "import{", "import\"", "import'"];
+    IMPORT_PREFIXES
         .iter()
         .any(|prefix| trimmed.starts_with(prefix))
-        || trimmed == "import ("
         || trimmed == "import"
-    {
-        return true;
-    }
-    trimmed.starts_with("from ") && trimmed.contains("import")
 }
 
 fn is_export_reexport_or_type(trimmed: &str) -> bool {

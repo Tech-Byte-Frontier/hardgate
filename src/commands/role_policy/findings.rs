@@ -3,8 +3,7 @@ use super::{Advisory, push_advisory, severity};
 use crate::config::{HardgateConfig, Severity};
 use crate::diagnostics::GateReport;
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
-    SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, InvariantViolation, SuppressionViolation,
 };
 use std::path::PathBuf;
 
@@ -179,38 +178,4 @@ pub(crate) fn apply_clone_findings(
             },
         },
     );
-}
-
-pub(crate) fn apply_dead_code_findings(
-    report: &mut GateReport,
-    config: &HardgateConfig,
-    role: super::FileRole,
-    findings: Vec<DeadCodeViolation>,
-) {
-    match severity(config, role) {
-        Severity::Error => report.dead_code_violations.extend(findings),
-        Severity::Warning => apply_warning(
-            report,
-            WarningBatch {
-                role,
-                category: "dead code",
-                findings,
-                detail: |finding: &DeadCodeViolation| {
-                    (
-                        finding.file.clone(),
-                        format!(
-                            "{}{}: {}",
-                            finding.violation_type,
-                            finding
-                                .line_number
-                                .map(|line| format!(" at line {line}"))
-                                .unwrap_or_default(),
-                            finding.message
-                        ),
-                    )
-                },
-            },
-        ),
-        Severity::Ignore => {}
-    }
 }

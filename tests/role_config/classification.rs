@@ -74,12 +74,7 @@ fn rust_test_module_suffixes_are_test_role_only_for_rust() {
     for path in ["tests.rs", "src/mutate_tests.rs", "src/runner-tests.rs"] {
         assert_eq!(classify(path).role, FileRole::Test, "{path}");
     }
-    for path in [
-        "src/tests.ts",
-        "src/mutate_tests.ts",
-        "src/runner-tests.py",
-        "src/latest.rs",
-    ] {
+    for path in ["src/tests.ts", "src/mutate_tests.ts", "src/latest.rs"] {
         assert_eq!(classify(path).role, FileRole::Source, "{path}");
     }
 }
@@ -125,8 +120,8 @@ fn assert_vendor_conventions() {
         "dist/app.js",
         "build/app.js",
         "vendor/lib.rs",
-        "venv/lib.py",
-        "__pycache__/module.py",
+        "venv/lib.js",
+        "__pycache__/module.js",
     ] {
         assert_eq!(classify(path).role, FileRole::Vendor, "{path}");
     }

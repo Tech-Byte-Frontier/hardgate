@@ -36,8 +36,6 @@ pub struct HardgateConfig {
     pub mutation: MutationConfig,
     #[serde(default)]
     pub orchestration: OrchestrationConfig,
-    #[serde(default)]
-    pub analysis: AnalysisConfig,
     /// Role-specific policy overrides.  Fields omitted here inherit global
     /// engine budgets for backwards-compatible TOML.
     #[serde(default, alias = "role_policies")]
@@ -120,15 +118,12 @@ pub struct ExclusionConfig {
     pub paths: Vec<String>,
 }
 
-/// Per-function ceilings: cyclomatic, cognitive, Halstead, ABC, parameters,
+/// Per-function ceilings: cyclomatic, parameters,
 /// lines, statements, and nesting depth.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FunctionBudgets {
     pub max_cyclomatic: Option<u32>,
-    pub max_cognitive: Option<u32>,
-    pub max_halstead_difficulty: Option<f64>,
-    pub max_abc: Option<f64>,
     pub max_parameters: Option<usize>,
     pub max_lines: Option<usize>,
     pub max_statements: Option<usize>,
@@ -219,7 +214,7 @@ fn default_min_clone_tokens() -> usize {
     50
 }
 
-/// Coverage floors (line/function/branch), CRAP ceiling, and critical paths
+/// Coverage floors (line/function/branch) and critical paths
 /// requiring full coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -230,11 +225,10 @@ pub struct CoverageConfig {
     pub min_line_percent: Option<f64>,
     pub min_function_percent: Option<f64>,
     pub min_branch_percent: Option<f64>,
-    pub max_crap_score: Option<f64>,
     pub critical_paths: Option<Vec<String>>,
 }
 
-/// Mutation testing policy: kill-rate floor, timeout handling, and runner tuning.
+/// Mutation report policy: kill-rate floor and required report paths.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct MutationConfig {
@@ -242,12 +236,9 @@ pub struct MutationConfig {
     pub enabled: bool,
     pub min_score: Option<f64>,
     pub reports: Option<Vec<String>>,
-    pub test_cmd: Option<String>,
-    pub timeout_secs: Option<u64>,
-    pub max_mutants: Option<usize>,
 }
 
-/// External formatter/linter/test commands orchestrated by `fmt` and `check --all`.
+/// External verification commands used by `check`, plus the explicit `fmt` action.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestrationConfig {
@@ -255,28 +246,16 @@ pub struct OrchestrationConfig {
     pub format: Option<String>,
     pub lint: Option<String>,
     pub test_cmd: Option<String>,
+    /// Additional required test scopes, such as workspace doctests.
+    #[serde(default)]
+    pub additional_tests: Vec<String>,
+    /// Required project type check, when configured.
+    pub typecheck: Option<String>,
+    /// Explicit feature/platform compile checks, each required independently.
+    #[serde(default)]
+    pub feature_checks: Vec<String>,
     /// Maximum runtime for an orchestrated command, in seconds.
     pub timeout_secs: Option<u64>,
-}
-
-/// Post-static analyses such as dead-code detection.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct AnalysisConfig {
-    #[serde(default)]
-    pub dead_code: DeadCodeConfig,
-}
-
-/// Dead-code detection: entry points plus exclusion globs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct DeadCodeConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub entry_points: Vec<String>,
-    #[serde(default)]
-    pub exclude: Vec<String>,
 }
 
 impl HardgateConfig {

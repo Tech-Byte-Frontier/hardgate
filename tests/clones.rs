@@ -333,7 +333,7 @@ fn fixture_git(root: &Path, args: &[&str]) {
 
 fn run_fixture_hardgate(root: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_hardgate"))
-        .args(["check", "--diff", "--format", "json"])
+        .args(["check", "--checks", "policy", "--diff", "--format", "json"])
         .current_dir(root)
         .output()
         .unwrap()

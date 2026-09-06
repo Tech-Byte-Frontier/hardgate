@@ -1,8 +1,8 @@
 use hardgate::GateReport;
 use hardgate::engines::{
     BudgetViolation, CloneViolation, ComplexityContribution, ComplexityViolation,
-    CoverageViolation, DeadCodeViolation, InvariantViolation, MutationViolation,
-    OrchestrationViolation, SuppressionViolation,
+    CoverageViolation, InvariantViolation, MutationViolation, OrchestrationViolation,
+    SuppressionViolation,
 };
 use std::path::PathBuf;
 
@@ -37,8 +37,10 @@ fn add_complexity(report: &mut GateReport) {
         file: PathBuf::from("src/flow.rs"),
         function_name: "route_request".to_string(),
         line_number: 10,
+        column_number: 0,
         end_line: 28,
-        metric: "Cognitive Complexity".to_string(),
+        size: None,
+        metric: "Statement Count".to_string(),
         actual: 18.0,
         limit: 10.0,
         breakdown: vec![contribution(14, 7, "nested branch")],
@@ -51,7 +53,9 @@ fn add_complexity(report: &mut GateReport) {
         file: PathBuf::from("src/flow.rs"),
         function_name: "parse_request".to_string(),
         line_number: 32,
+        column_number: 0,
         end_line: 42,
+        size: None,
         metric: "Cyclomatic Complexity".to_string(),
         actual: 12.0,
         limit: 8.0,
@@ -129,25 +133,6 @@ fn add_mutation(report: &mut GateReport) {
     });
 }
 
-fn add_dead_code(report: &mut GateReport) {
-    report.dead_code_violations.push(DeadCodeViolation {
-        file: PathBuf::from("src/orphan.ts"),
-        line_number: Some(3),
-        symbol: Some("orphan".to_string()),
-        violation_type: "Unused Export".to_string(),
-        message: "export is never referenced".to_string(),
-        recommendation: "Remove the export or add a consumer.".to_string(),
-    });
-    report.dead_code_violations.push(DeadCodeViolation {
-        file: PathBuf::from("src/unused.ts"),
-        line_number: None,
-        symbol: None,
-        violation_type: "Unreferenced File".to_string(),
-        message: "file is not part of the active graph".to_string(),
-        recommendation: "Delete the file or import it.".to_string(),
-    });
-}
-
 fn add_orchestration(report: &mut GateReport) {
     report
         .orchestration_violations
@@ -179,7 +164,6 @@ fn every_category_report() -> GateReport {
     add_clone(&mut report);
     add_coverage(&mut report);
     add_mutation(&mut report);
-    add_dead_code(&mut report);
     add_orchestration(&mut report);
     report.finalize(7, 13, 17);
     report
@@ -217,7 +201,7 @@ fn every_category_is_rendered_with_actionable_details() {
     colored::control::set_override(false);
     let report = every_category_report();
     assert!(!report.passed);
-    assert_eq!(report.total_violations(), 13);
+    assert_eq!(report.total_violations(), 11);
 
     let agent = report.render_agent();
     assert_contains_all(
@@ -230,9 +214,8 @@ fn every_category_is_rendered_with_actionable_details() {
             "### 📦 Physical Budget",
             "### 🏛️ Architecture",
             "### 👥 Duplication Clone",
-            "### 🎯 Coverage / CRAP",
+            "### 🎯 Coverage",
             "### 🧬 Mutation Floor",
-            "### 🍂 Dead Code",
             "### 🛠️ Tool Failure",
             "Key AST Contributors:",
             "Line 14: +7 for nested branch",
@@ -255,13 +238,11 @@ fn every_category_is_rendered_with_actionable_details() {
             "error[clone]",
             "error[coverage]",
             "error[mutation]",
-            "error[dead-code]",
             "error[tool]",
             "key contributors:",
             "L14: +7 for nested branch",
-            "src/unused.ts",
             "summary: 7 files, 13 functions in 17ms",
-            "result: fail (13 errors)",
+            "result: fail (11 errors)",
         ],
     );
 
@@ -277,10 +258,8 @@ fn every_category_is_rendered_with_actionable_details() {
             "error[clone]",
             "error[coverage]",
             "error[mutation]",
-            "error[dead-code]",
             "error[tool]",
-            "src/unused.ts",
-            "result: fail (13 errors)",
+            "result: fail (11 errors)",
         ],
     );
     assert!(!compact.contains("help:"));

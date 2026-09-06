@@ -3,6 +3,10 @@
 // Usage: node scripts/release-verify.mjs --dist dist --version <version> --commit <sha> --tag v<version>
 "use strict";
 
+import { detectHost, hostNativePackage } from "./native-channel-support.mjs";
+
+import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,14 +15,7 @@ import { spawnSync } from "node:child_process";
 import { classifyBinaryAbi } from "./release-abi.mjs";
 import { archiveMemberMode, isExecutableMode, option, runCommand } from "./release-support.mjs";
 
-const targets = [
-  ["x86_64-unknown-linux-gnu", "hardgate-linux-x64", /x86-64/, "gnu"],
-  ["x86_64-unknown-linux-musl", "hardgate-linux-x64-musl", /x86-64/, "musl"],
-  ["aarch64-unknown-linux-gnu", "hardgate-linux-arm64", /ARM aarch64/, "gnu"],
-  ["aarch64-unknown-linux-musl", "hardgate-linux-arm64-musl", /ARM aarch64/, "musl"],
-  ["x86_64-apple-darwin", "hardgate-darwin-x64", /x86_64/, null],
-  ["aarch64-apple-darwin", "hardgate-darwin-arm64", /arm64/, null],
-];
+const targets = Object.values(NATIVE_PACKAGES).map(({ target, name, archPattern, abi }) => [target, name, archPattern, abi]);
 
 function fail(message) {
   throw new Error(`release-verify: ${message}`);
@@ -110,10 +107,6 @@ function verifyBinaryAbi(binaryPath, target, abi, packageName) {
     symbols,
     notes,
     abi,
-    // verifyEmbeddedIdentity already rejected a missing exact marker. This
-    // flag lets the classifier preserve stripped static musl binaries while
-    // still requiring positive target evidence rather than absence of glibc.
-    targetMarkerValid: abi === "musl" && target.endsWith("-musl"),
   });
   if (!evidence.ok) {
     fail(`${packageName} ${abi} target ${target} ABI evidence failed: ${evidence.reason}`);
@@ -150,11 +143,7 @@ function verifyArchive({ dist, target, pkg, archPattern, abi, version, commit, d
 }
 
 function hostTarget() {
-  if (process.platform === "darwin" && process.arch === "arm64") return "hardgate-darwin-arm64";
-  if (process.platform === "darwin" && process.arch === "x64") return "hardgate-darwin-x64";
-  if (process.platform === "linux" && process.arch === "arm64") return "hardgate-linux-arm64";
-  if (process.platform === "linux" && process.arch === "x64") return "hardgate-linux-x64";
-  return null;
+  return hostNativePackage(detectHost());
 }
 
 const dist = path.resolve(option("--dist", "dist"));

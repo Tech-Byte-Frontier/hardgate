@@ -236,17 +236,11 @@ fn parse_stryker_json(val: &Value) -> Result<MutationStats> {
     Ok(stats)
 }
 
-fn parse_cargo_mutants_json(val: &Value) -> Result<MutationStats> {
-    let root = require_object(val, "cargo-mutants report root")?;
-    let outcomes = require_array_field(root, "outcomes", "cargo-mutants report")?;
-    if outcomes.is_empty() {
-        bail!("cargo-mutants report contains no outcomes");
-    }
+#[path = "cargo_report.rs"]
+mod cargo_report;
 
-    let stats = parse_status_entries(outcomes, "summary", "cargo-mutants")?;
-    validate_declared_total(root, &stats, "cargo-mutants")?;
-    ensure_nonempty(&stats, "cargo-mutants")?;
-    Ok(stats)
+fn parse_cargo_mutants_json(val: &Value) -> Result<MutationStats> {
+    cargo_report::parse(val)
 }
 
 fn parse_stryker_file(file_name: &str, file_val: &Value) -> Result<MutationStats> {

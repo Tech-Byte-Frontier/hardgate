@@ -29,6 +29,23 @@ pub fn check_content_budgets(
     budgets: &FileBudgets,
     root: &Path,
 ) -> Vec<BudgetViolation> {
+    check_measured_budgets(
+        path,
+        (content.len(), content.lines().count()),
+        budgets,
+        root,
+    )
+}
+
+/// Evaluate measured role portions without counting padding used to retain
+/// original source locations in a mixed source/test file.
+pub(crate) fn check_measured_budgets(
+    path: &Path,
+    dimensions: (usize, usize),
+    budgets: &FileBudgets,
+    root: &Path,
+) -> Vec<BudgetViolation> {
+    let (file_size, physical_lines) = dimensions;
     let mut violations = Vec::new();
 
     let rel_path = path.strip_prefix(root).unwrap_or(path);
@@ -39,22 +56,21 @@ pub fn check_content_budgets(
         return violations;
     }
 
-    if let Some(max_bytes) = budgets.max_bytes {
-        let file_size = content.len();
-        if file_size > max_bytes as usize {
-            violations.push(BudgetViolation {
-                file: rel_path.to_path_buf(),
-                metric: "File Byte Size".to_string(),
-                actual: file_size,
-                limit: max_bytes as usize,
-                message: format!(
-                    "File size {} bytes exceeds hard limit of {} bytes ({:.1} KiB)",
-                    file_size,
-                    max_bytes,
-                    max_bytes as f64 / 1024.0
-                ),
-            });
-        }
+    if let Some(max_bytes) = budgets.max_bytes
+        && file_size > max_bytes as usize
+    {
+        violations.push(BudgetViolation {
+            file: rel_path.to_path_buf(),
+            metric: "File Byte Size".to_string(),
+            actual: file_size,
+            limit: max_bytes as usize,
+            message: format!(
+                "File size {} bytes exceeds hard limit of {} bytes ({:.1} KiB)",
+                file_size,
+                max_bytes,
+                max_bytes as f64 / 1024.0
+            ),
+        });
     }
 
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -64,20 +80,19 @@ pub fn check_content_budgets(
         .copied()
         .or_else(|| budgets.max_lines.get("default").copied());
 
-    if let Some(max_lines) = limit {
-        let physical_lines = content.lines().count();
-        if physical_lines > max_lines {
-            violations.push(BudgetViolation {
-                file: rel_path.to_path_buf(),
-                metric: format!("Physical Lines (.{})", ext),
-                actual: physical_lines,
-                limit: max_lines,
-                message: format!(
-                    "File has {} physical lines, exceeding budget of {} lines for .{}",
-                    physical_lines, max_lines, ext
-                ),
-            });
-        }
+    if let Some(max_lines) = limit
+        && physical_lines > max_lines
+    {
+        violations.push(BudgetViolation {
+            file: rel_path.to_path_buf(),
+            metric: format!("Physical Lines (.{})", ext),
+            actual: physical_lines,
+            limit: max_lines,
+            message: format!(
+                "File has {} physical lines, exceeding budget of {} lines for .{}",
+                physical_lines, max_lines, ext
+            ),
+        });
     }
 
     violations

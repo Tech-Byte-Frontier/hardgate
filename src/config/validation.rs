@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 
-use super::roles::{ensure_positive, ensure_positive_float};
+use super::roles::ensure_positive;
 use super::{
     CloneConfig, CoverageConfig, FileBudgets, FunctionBudgets, GateConfig, HardgateConfig,
     InvariantsConfig, MutationConfig, OrchestrationConfig,
@@ -21,14 +21,6 @@ pub(super) fn validate(config: &HardgateConfig) -> Result<()> {
     if let Some(globs) = &config.clones.excludes {
         validate_exclusion_globs(globs, "clones.excludes")?;
     }
-    validate_exclusion_globs(
-        &config.analysis.dead_code.exclude,
-        "analysis.dead_code.exclude",
-    )?;
-    validate_exclusion_globs(
-        &config.analysis.dead_code.entry_points,
-        "analysis.dead_code.entry_points",
-    )?;
     validate_invariants(&config.invariants)?;
     config.roles.validate()?;
     config.classification.validate()?;
@@ -49,6 +41,14 @@ fn validate_file_budgets(files: &FileBudgets) -> Result<()> {
         ensure_positive(value, "budgets.files.max_bytes")?;
     }
     for (extension, value) in &files.max_lines {
+        if ["py", "go"]
+            .iter()
+            .any(|removed| extension.eq_ignore_ascii_case(removed))
+        {
+            bail!(
+                "budgets.files.max_lines.{extension} is obsolete; analysis supports only Rust and JavaScript/TypeScript"
+            );
+        }
         ensure_positive(*value, &format!("budgets.files.max_lines.{extension}"))?;
     }
     Ok(())
@@ -57,7 +57,6 @@ fn validate_file_budgets(files: &FileBudgets) -> Result<()> {
 fn validate_function_budgets(functions: &FunctionBudgets) -> Result<()> {
     for (value, field) in [
         (functions.max_cyclomatic.map(u64::from), "max_cyclomatic"),
-        (functions.max_cognitive.map(u64::from), "max_cognitive"),
         (
             functions.max_parameters.map(|value| value as u64),
             "max_parameters",
@@ -74,17 +73,6 @@ fn validate_function_budgets(functions: &FunctionBudgets) -> Result<()> {
     ] {
         if let Some(value) = value {
             ensure_positive(value, &format!("budgets.functions.{field}"))?;
-        }
-    }
-    for (value, field) in [
-        (
-            functions.max_halstead_difficulty,
-            "budgets.functions.max_halstead_difficulty",
-        ),
-        (functions.max_abc, "budgets.functions.max_abc"),
-    ] {
-        if let Some(value) = value {
-            ensure_positive_float(value, field)?;
         }
     }
     Ok(())
@@ -109,11 +97,6 @@ fn validate_coverage(coverage: &CoverageConfig) -> Result<()> {
             ensure_percentage(value, field)?;
         }
     }
-    if let Some(value) = coverage.max_crap_score
-        && (!value.is_finite() || value < 0.0)
-    {
-        bail!("coverage.max_crap_score must be finite and non-negative");
-    }
     Ok(())
 }
 
@@ -121,18 +104,23 @@ fn validate_mutation(mutation: &MutationConfig) -> Result<()> {
     if let Some(value) = mutation.min_score {
         ensure_percentage(value, "mutation.min_score")?;
     }
-    if let Some(value) = mutation.timeout_secs {
-        ensure_positive(value, "mutation.timeout_secs")?;
-    }
-    if let Some(value) = mutation.max_mutants {
-        ensure_positive(value, "mutation.max_mutants")?;
-    }
     Ok(())
 }
 
 fn validate_orchestration(orchestration: &OrchestrationConfig) -> Result<()> {
     if let Some(value) = orchestration.timeout_secs {
         ensure_positive(value, "orchestration.timeout_secs")?;
+    }
+    for command in orchestration
+        .additional_tests
+        .iter()
+        .chain(&orchestration.feature_checks)
+    {
+        if command.trim().is_empty() {
+            anyhow::bail!(
+                "orchestration.additional_tests and feature_checks must contain non-empty commands"
+            );
+        }
     }
     Ok(())
 }

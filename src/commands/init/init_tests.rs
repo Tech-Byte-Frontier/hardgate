@@ -39,8 +39,9 @@ fn coverage_setup_helpers_cover_present_and_missing_reports() {
     append_coverage_setup(&mut missing, &root, &config);
     assert!(missing.iter().any(|item| item.contains("coverage report")));
 
-    fs::create_dir_all(root.join("coverage")).unwrap();
-    fs::write(root.join("coverage/lcov.info"), "SF:src/lib.rs\n").unwrap();
+    let report = root.join(config.coverage.report.as_ref().unwrap());
+    fs::create_dir_all(report.parent().unwrap()).unwrap();
+    fs::write(report, "SF:src/lib.rs\n").unwrap();
     missing.clear();
     append_coverage_setup(&mut missing, &root, &config);
     assert!(missing.is_empty());
@@ -172,20 +173,22 @@ fn summary_helpers_cover_all_reference_and_engine_choices() {
 
 #[test]
 fn override_filter_and_deduplication_are_exact() {
-    let mut config = Preset::Balanced.to_default_config();
-    config.orchestration.format = Some("format".to_string());
-    config.orchestration.lint = Some("lint".to_string());
+    let config = InitOptions {
+        format_check: Some("format-check".to_string()),
+        lint: Some("lint".to_string()),
+        ..InitOptions::default()
+    };
     for message in [
         "formatter command is not configured",
-        "Prettier is missing",
-        "Biome is missing",
+        "formatter: Prettier is missing",
+        "formatter: Biome is missing",
     ] {
         assert!(resolved_by_override(message, &config));
     }
     for message in [
         "linter command is not configured",
-        "ESLint is missing",
-        "Oxlint is missing",
+        "linter: ESLint is missing",
+        "linter: Oxlint is missing",
     ] {
         assert!(resolved_by_override(message, &config));
     }

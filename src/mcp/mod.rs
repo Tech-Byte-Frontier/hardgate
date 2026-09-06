@@ -142,7 +142,7 @@ fn get_tools_list() -> serde_json::Value {
         "tools": [
             {
                 "name": "hardgate_check",
-                "description": "Static analysis of budgets, anti-gaming, AST complexity, architectural boundaries and clones. Does not evaluate coverage/mutation reports, dead code, legacy ratchets or run project commands; use CLI check/verify for configured evidence.",
+                "description": "Static analysis of budgets, anti-gaming, AST complexity, architectural boundaries and clones. Does not evaluate coverage/mutation reports, legacy ratchets or run project commands; use CLI check/verify for configured evidence.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -169,7 +169,7 @@ fn get_tools_list() -> serde_json::Value {
             },
             {
                 "name": "hardgate_get_metrics",
-                "description": "Retrieves cyclomatic, cognitive, parameter, and line metrics for a function symbol.",
+                "description": "Retrieves cyclomatic, parameter, and line metrics for a function symbol.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -236,7 +236,6 @@ fn execute_check_with_config(
         root: &context.root,
         paths: &paths,
         diff: diff_only,
-        dead_code: false,
         snippets: false,
     }) {
         Ok(outcome) => outcome,
@@ -445,8 +444,7 @@ fn mcp_plan(
             command,
             paths,
             diff,
-            dead_code: false,
-            all: false,
+            checks: &[crate::commands::CheckKind::Policy],
             coverage_report: None,
             mutation_report: None,
         },

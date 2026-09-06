@@ -1,8 +1,10 @@
+mod output;
+use super::CheckKind;
 use super::gate_evidence::{
     ChangedLineFilter, GateRun, empty_discovery_advisory, filter_changed_lines,
     run_generated_freshness, run_legacy_ratchet, run_static_gate_or_empty,
 };
-use super::outcome::{CommandOutcome, CommandResult, write_stdout};
+use super::outcome::CommandResult;
 use super::static_gate::StaticRequest;
 use super::verify::{
     CoverageScope, CoverageVerification, SourceCoverageRequest, source_files_for_coverage,
@@ -13,6 +15,10 @@ use crate::diagnostics::GateReport;
 use crate::engines::OrchestrationEngine;
 use crate::git_evidence::{ReferenceEvidence, load_reference};
 use anyhow::Result;
+pub(crate) use output::format_report_with_opts;
+pub use output::{
+    Emission, emit_gate_report, output_report, output_report_with_opts, print_empty_discovery,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -22,8 +28,8 @@ use std::time::Instant;
 pub struct CheckOptions {
     pub format: Option<String>,
     pub diff: bool,
-    pub all: bool,
-    pub dead_code: bool,
+    pub checks: Vec<CheckKind>,
+    pub mutation_report: Option<String>,
     pub coverage_report: Option<String>,
     pub json: bool,
     pub compact: bool,
@@ -50,7 +56,7 @@ impl CheckOptions {
     }
 }
 
-/// Resolved output mode shared by `check`, `scan`, and `verify`.
+/// Resolved output mode shared by `check` and `scan`.
 #[derive(Debug, Clone, Default)]
 pub struct OutputOptions {
     pub format: Option<String>,
@@ -79,7 +85,7 @@ impl OutputOptions {
 }
 
 /// Run the fast deterministic static gate: budgets, suppressions,
-/// invariants, complexity, clones, and optional dead-code, coverage, and
+/// invariants, complexity, clones, and optional coverage and
 /// orchestration checks. Exits non-zero when violations are found.
 pub fn cmd_check(opts: CheckOptions) -> CommandResult {
     cmd_check_in(opts, &ConfigContext::load(None)?)
@@ -87,16 +93,18 @@ pub fn cmd_check(opts: CheckOptions) -> CommandResult {
 
 pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandResult {
     context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
+    opts.mutation_report = context.input_report(opts.mutation_report);
+    let resolved = super::check_selection::resolved_context(context, &opts)?;
+    let context = &resolved;
     let plan = super::execution_plan::gate_plan(
         context,
         super::execution_plan::GateSelection {
             command: "check",
             paths: &opts.paths,
             diff: opts.diff,
-            dead_code: opts.dead_code,
-            all: opts.all,
+            checks: &opts.checks,
             coverage_report: opts.coverage_report.as_deref(),
-            mutation_report: None,
+            mutation_report: opts.mutation_report.as_deref(),
         },
     )?;
 
@@ -108,7 +116,7 @@ fn execute_check(
     context: &ConfigContext,
     plan: crate::diagnostics::execution::ExecutionPlan,
 ) -> CommandResult {
-    let ratchet_enabled = context.config.legacy.ratchet;
+    let ratchet_enabled = opts.selects(CheckKind::Policy) && context.config.legacy.ratchet;
     let start_time = Instant::now();
     let root = context.root.as_path();
     let config = &context.config;
@@ -117,10 +125,11 @@ fn execute_check(
         files,
         read_results,
         functions,
+        ownership,
         empty,
     } = run_static_phase(&opts, context, ratchet_enabled)?;
     report.execution = Some(plan);
-    if empty {
+    if empty && opts.selects(CheckKind::Policy) {
         report
             .advisories
             .push(empty_discovery_advisory(opts.diff, !opts.paths.is_empty()));
@@ -134,17 +143,14 @@ fn execute_check(
     );
 
     let reference_evidence = if ratchet_enabled {
-        run_legacy_ratchet(
-            config,
-            root,
-            &mut report,
-            opts.dead_code || config.analysis.dead_code.enabled,
-        )
+        run_legacy_ratchet(config, root, &mut report)
     } else {
         None
     };
 
-    run_generated_freshness(config, root, &mut report);
+    if opts.selects(CheckKind::Policy) {
+        run_generated_freshness(config, root, &mut report);
+    }
 
     run_verification_phase(
         VerificationPhaseContext {
@@ -156,6 +162,7 @@ fn execute_check(
                 cli_report: opts.coverage_report.clone(),
                 files: &files,
                 read_results: &read_results,
+                ownership: &ownership,
                 functions: &functions,
                 reference_evidence: reference_evidence.as_ref(),
                 root,
@@ -183,13 +190,22 @@ fn run_static_phase(
     context: &ConfigContext,
     ratchet_enabled: bool,
 ) -> Result<GateRun> {
+    if !opts.selects(CheckKind::Policy) {
+        return Ok(GateRun {
+            report: GateReport::new(context.config.gate.name.clone()),
+            files: Vec::new(),
+            read_results: Vec::new(),
+            functions: Vec::new(),
+            ownership: Default::default(),
+            empty: true,
+        });
+    }
     let static_diff = opts.diff && !ratchet_enabled;
     run_static_gate_or_empty(StaticRequest {
         config: &context.config,
         root: context.root.as_path(),
         paths: &opts.paths,
         diff: static_diff,
-        dead_code: opts.dead_code || context.config.analysis.dead_code.enabled,
         snippets: opts.display.snippets,
     })
 }
@@ -210,21 +226,19 @@ fn run_verification_phase(
     let root = phase.context.root.as_path();
     let config = &phase.context.config;
 
-    if opts.all {
-        emit_progress(
-            progress,
-            "orchestration",
-            phase.start_time.elapsed().as_millis(),
-        );
-        run_orchestration(config, root, report);
-    }
-
-    emit_progress(progress, "coverage", phase.start_time.elapsed().as_millis());
-    run_check_coverage(&phase.coverage, report)?;
-
-    if config.mutation.enabled {
-        emit_progress(progress, "mutation", phase.start_time.elapsed().as_millis());
-        verify_mutation_at(config, None, report, root);
+    emit_progress(
+        progress,
+        "orchestration",
+        phase.start_time.elapsed().as_millis(),
+    );
+    run_orchestration(config, root, report, opts);
+    if opts.selects(CheckKind::Policy) {
+        emit_progress(progress, "coverage", phase.start_time.elapsed().as_millis());
+        run_check_coverage(&phase.coverage, report)?;
+        if config.mutation.enabled {
+            emit_progress(progress, "mutation", phase.start_time.elapsed().as_millis());
+            verify_mutation_at(config, opts.mutation_report.clone(), report, root);
+        }
     }
 
     report
@@ -242,16 +256,72 @@ fn emit_progress(progress: Option<&str>, stage: &str, elapsed_ms: u128) {
     }
 }
 
-fn run_orchestration(config: &HardgateConfig, root: &Path, report: &mut GateReport) {
+fn run_orchestration(
+    config: &HardgateConfig,
+    root: &Path,
+    report: &mut GateReport,
+    options: &CheckOptions,
+) {
     let engine = OrchestrationEngine::new(&config.orchestration);
-    let (results, violations) = engine.run_all_checks(root);
-    for result in results {
-        report.observe_engine(
-            crate::diagnostics::execution::evidence_engine(&result.step),
-            crate::diagnostics::execution::EngineState::Completed,
-        );
+    let policy = &config.orchestration;
+    let groups = [
+        (
+            CheckKind::Format,
+            "format_check",
+            policy.format_check.iter().collect::<Vec<_>>(),
+            true,
+        ),
+        (CheckKind::Lint, "lint", policy.lint.iter().collect(), true),
+        (
+            CheckKind::Tests,
+            "test",
+            policy
+                .test_cmd
+                .iter()
+                .chain(&policy.additional_tests)
+                .collect(),
+            false,
+        ),
+        (
+            CheckKind::Typecheck,
+            "typecheck",
+            policy
+                .typecheck
+                .iter()
+                .chain(&policy.feature_checks)
+                .collect(),
+            false,
+        ),
+    ];
+    let mut steps = Vec::new();
+    for (kind, step, commands, required) in groups {
+        if !options.selects(kind) {
+            continue;
+        }
+        if required && commands.is_empty() {
+            super::evidence::record_evidence_failure(
+                report,
+                true,
+                super::evidence::EvidenceFailure {
+                    step,
+                    target: root,
+                    message: format!(
+                        "Required {step} command could not be resolved. Run `hardgate init --preview` for tool-specific setup, or configure [orchestration]."
+                    ),
+                },
+            );
+        }
+        for command in commands {
+            steps.push(crate::engines::orchestration::OrchestrationStep {
+                step,
+                command,
+                recommendation: "Resolve the reported project check before acceptance.",
+            });
+        }
     }
-    report.orchestration_violations.extend(violations);
+    for result in engine.run_sequence(&steps, root) {
+        super::specialist::record(report, result, root);
+    }
 }
 
 struct CheckCoverage<'a> {
@@ -260,6 +330,7 @@ struct CheckCoverage<'a> {
     cli_report: Option<String>,
     files: &'a [PathBuf],
     read_results: &'a [super::source_snapshot::SharedSource],
+    ownership: &'a crate::discovery::rust_ownership::RustOwnership,
     functions: &'a [crate::engines::FunctionMetrics],
     reference_evidence: Option<&'a ReferenceEvidence>,
     root: &'a Path,
@@ -303,6 +374,7 @@ fn run_check_coverage(request: &CheckCoverage<'_>, report: &mut GateReport) -> R
             changed_lines: &evidence.change_set.changed_lines,
             selected_files: request.files,
             read_results: request.read_results,
+            ownership: Some(request.ownership),
             config: request.config,
             root: request.root,
         })?),
@@ -337,6 +409,7 @@ fn load_changed_lines_for_coverage(
             changed_lines: &evidence.change_set.changed_lines,
             selected_files: request.files,
             read_results: request.read_results,
+            ownership: Some(request.ownership),
             config: request.config,
             root: request.root,
         })?)),
@@ -355,104 +428,4 @@ fn load_changed_lines_for_coverage(
             Ok(Some(Default::default()))
         }
     }
-}
-
-/// Print the "nothing to check" note, distinguishing scoped runs from diffs.
-pub fn print_empty_discovery(diff: bool, scoped: bool) -> Result<()> {
-    let note = super::gate_evidence::empty_discovery_advisory(diff, scoped);
-    write_stdout(&format!("{note}\n"))?;
-    Ok(())
-}
-
-/// Render `report` with a legacy `format` name (`agent`, `json`, terminal).
-/// Prefer [`output_report_with_opts`] for the full flag matrix.
-pub fn output_report(report: &GateReport, format: Option<&str>) -> Result<()> {
-    output_report_with_opts(
-        report,
-        &OutputOptions {
-            format: format.map(|s| s.to_string()),
-            json: false,
-            compact: false,
-            no_snippets: false,
-            summary: false,
-            display: Default::default(),
-            ..Default::default()
-        },
-    )
-}
-
-/// Render `report` honoring JSON, agent, summary, compact, and terminal modes.
-pub fn output_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<()> {
-    let output = format_report_with_opts(report, opts)?;
-    if let Some(ref path) = opts.output_file {
-        super::outcome::write_atomic_file(path, &output)?;
-    }
-    write_stdout(&output)?;
-    Ok(())
-}
-
-pub(crate) fn format_report_with_opts(report: &GateReport, opts: &OutputOptions) -> Result<String> {
-    let mut owned;
-    let report = if report.display.snippets != opts.display.snippets
-        || report.display.max_diagnostics != opts.display.max_diagnostics
-    {
-        owned = report.clone();
-        owned.display = opts.display.clone();
-        &owned
-    } else {
-        report
-    };
-    let mut output = if opts.is_json() {
-        json_report(report, opts)?
-    } else {
-        human_report(report, opts)
-    };
-    if !opts.is_json() {
-        super::outcome::append_scan_metrics(&mut output, &report.functions);
-    }
-    Ok(output)
-}
-
-fn human_report(report: &GateReport, opts: &OutputOptions) -> String {
-    if !opts.is_summary() && (opts.display.max_diagnostics.is_some() || opts.display.snippets) {
-        let display = crate::diagnostics::display::diagnostics(report);
-        return format!(
-            "{}{}",
-            report.render_summary(),
-            crate::diagnostics::display::render_diagnostics(&display)
-        );
-    }
-    match opts.format.as_deref() {
-        Some("agent") => report.render_agent(),
-        _ if opts.is_summary() => report.render_summary(),
-        _ if opts.is_compact() => report.render_compact(),
-        _ => report.render_terminal(),
-    }
-}
-
-fn json_report(report: &GateReport, opts: &OutputOptions) -> Result<String> {
-    let json = if opts.is_summary() {
-        report.render_summary_json()?
-    } else {
-        report.render_json()?
-    };
-    Ok(format!("{json}\n"))
-}
-
-/// Finalize counts, render via [`OutputOptions`], and exit non-zero on
-/// failure through a typed outcome. Shared by `check`, `scan`, and `verify` so the tail of every
-/// gate command stays a single call instead of a duplicated clone block.
-pub struct Emission<'a> {
-    pub read_len: usize,
-    pub fn_len: usize,
-    pub elapsed: u128,
-    pub opts: &'a OutputOptions,
-}
-
-/// Finalize and render without terminating the caller process.
-pub fn emit_gate_report(report: &mut GateReport, emission: Emission) -> CommandResult {
-    report.display = emission.opts.display.clone();
-    report.finalize(emission.read_len, emission.fn_len, emission.elapsed);
-    output_report_with_opts(report, emission.opts)?;
-    Ok(CommandOutcome::from_report(report))
 }

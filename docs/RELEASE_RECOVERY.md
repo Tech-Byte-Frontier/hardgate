@@ -1,128 +1,97 @@
 # Release recovery
 
-**Status:** review-only runbook for the proposed staged release workflow. It
-does not prove remote workflow deployment, publisher activation, or GitHub,
-npm, or crates.io state. Publication still requires explicit maintainer
-authorization.
+This runbook describes the checked-in 0.6 workflow. Local tests do not prove a
+remote release, publisher activation, or registry state. Recovery uses the
+existing authorization for the same signed release; unrelated publication or
+external configuration needs its own authorized scope.
 
-## Identity and retained evidence
+## Identity and checkpoints
 
-The signed annotated release tag is the payload identity. `source_sha` is the
-tag commit and `tooling_sha` is the separate CI-validated `github.sha` checkout
-used by recovery helpers. A tooling fix may repair orchestration, but it must
-not silently replace signed source files. Every receipt binds the version,
-source and tooling commits, signed tag object, build run, bundle artifact, and
-archive digests.
+The signed annotated tag identifies the payload commit. Recovery tooling comes
+from the separately CI-validated `github.sha` checkout in `release-tooling/`.
+Every receipt binds the version, source SHA, tooling SHA, signed tag object,
+run ID, immutable bundle artifact ID, and archive digests. A tooling repair
+cannot silently replace signed source or launcher bytes.
 
-The verified `release-bundle` is retained for 30 days. Seeded and per-channel
-receipts, native proofs, and failure records are retained for 90 days. Receipt
-artifacts include the GitHub Actions run attempt in their names, so a rerun can
-produce a newer candidate for one platform without deleting older evidence.
-The central collector selects the newest valid attempt per native package and
-preserves the older artifacts for audit.
+The six stages are:
 
-The nine receipt channels are:
+| Stage | Required result |
+| --- | --- |
+| `version-check` | Signed tag, source versions, main-tip/recovery authorization, successful exact-source CI and artifact identity |
+| `package` | Reused Linux x64 GNU binary, reproducible archive, checksums, SBOM, and real offline npm/pnpm installs |
+| `publish` | Checksum/SBOM attestations, receipt identity, authenticated prerequisites, publication of missing GitHub/crate/npm artifacts, and exact Cargo installation |
+| `verify-exact` | Real npm/pnpm project/global checks and direct downloaded-binary checks for the exact release |
+| `promote-channels` | All exact consumers verified, immutable versions unchanged, and independent readback of default selectors |
+| `verify-channels` | Real default consumers for every channel and a complete receipt |
+
+The bundle upload is the final packaging checkpoint. Attestation or publication
+failures can therefore reuse it without rebuilding. `release-bundle` lasts 30
+days. Attempt-specific publication, exact-consumer, promotion, and final
+receipts last 90 days. Stages pass exact artifact IDs directly; there is no
+platform matrix or newest-artifact collector.
+
+Four channels must progress through `pending` → `staged` →
+`immutable_verified` → `exact_consumer_verified` → `promoted` →
+`default_consumer_verified`:
 
 ```text
-hardgate-linux-x64, hardgate-linux-x64-musl, hardgate-linux-arm64,
-hardgate-linux-arm64-musl, hardgate-darwin-x64, hardgate-darwin-arm64,
-@tech-byte-frontier/hardgate, hardgate, github-assets
+hardgate-linux-x64
+@tech-byte-frontier/hardgate
+hardgate
+github-assets
 ```
 
-Their intended progression is `pending` → `staged` → `immutable_verified` →
-`exact_consumer_verified` → `promoted` → `default_consumer_verified`.
-Receipt transitions are adjacent, identity-bound, and replay-safe. A failure is
-retained on the affected channel; it does not erase earlier evidence.
+Transitions are adjacent, identity-bound, and replay-safe. Failures retain the
+previous verified state. The final stage requires every channel to complete;
+a failed, cancelled, or skipped dependency prevents it from succeeding.
+Installed consumers verify binary bytes and full version/source identity,
+then run actual `hardgate check`, including a real failing-test case and
+input preservation. A version response alone is insufficient.
 
-## Intended staged flow
+## Retry or resume
 
-1. `version-check`, CI, build, package, and attestation establish one verified
-   six-archive bundle, checksums, SBOM, and source identity. The seed receipt
-   is created only after the bundle is verified.
-2. GitHub publishes the public prerelease assets with `latest=false`. The crate
-   is established at its immutable exact version. npm publishes all six
-   platform packages and then the wrapper under `hardgate-candidate`.
-3. Six native exact jobs run on matching CPUs and ABIs. Linux musl jobs execute
-   static-musl binaries on matching GNU Linux native-CPU runners; they inspect
-   the static-musl ABI and native CPU rather than requiring a musl userspace.
-   The jobs verify the archive and exact candidate consumer; the x64 GNU proof
-   also covers the wrapper source. Each job applies its proof to a receipt and
-   uploads its receipt and native proof under a run-attempt-specific name.
-4. The collector merges the latest valid receipts until all nine channels are
-   `exact_consumer_verified`. A missing or divergent identity blocks promotion.
-5. Each npm candidate is promoted to `latest` once, with an independent
-   exact-version/default-channel readback. The promotion uses the existing
-   `secrets.NPM_TOKEN` even when candidate publication used trusted npm OIDC.
-6. The crate publication remains an independent required channel. Verify its
-   intended `max_stable_version` and exact installed identity; npm or GitHub
-   success cannot hide a missing or ambiguous crate publication.
-7. GitHub changes the verified prerelease to the stable/latest release state,
-   then independently verifies the stable assets and latest pointer.
-8. Six native default jobs verify the default channel on the matching runners.
-   The canonical GNU x64 job also checks the shell installer with an unset
-   version for `latest`; exact mode uses the signed `vX.Y.Z` explicitly. The
-   installed bytes and full `hardgate VERSION (COMMIT)` identity must match.
-9. Independent default consumers run for the crate, npm, pnpm, Yarn, Bun,
-   shell installer, and global command paths. The final receipt merge uses
-   `require-complete` and succeeds only when all nine channels reach
-   `default_consumer_verified`.
+Use **Re-run failed jobs** for ordinary recovery. The successful package job
+and its immutable artifact remain available. Publication probes exact registry
+versions first, verifies any existing bytes, and publishes only absent
+artifacts. An ambiguous write requires an independent readback before another
+attempt; mismatched or unresolved state blocks dependent actions.
 
-The proposed workflow uses the receipt and staging helpers under `scripts/`.
-Do not report this sequence as deployed until the signed `main` workflow, its
-successful CI run, retained artifacts, and public readbacks prove each
-checkpoint.
+If the workflow itself needs repair, dispatch the CI-validated workflow from
+current `main` with the original `tag` and failed run's `resume_run_id`. The
+workflow requires a completed failed tag-triggered run for that same signed
+source, successful tag-validation and packaging checkpoints, exactly one
+unexpired matching bundle, and successful CI for both source and recovery
+tooling commits. It downloads that bundle instead of rebuilding its binary.
+The new run records its own run/artifact identity and re-establishes channel
+state from verified public bytes; previous receipts remain retained.
 
-## Ordinary recovery
+The 0.6 workflow rejects pre-0.6 payloads. Recover historical releases with
+their original signed workflow and platform contract. Do not feed a historical
+six-platform bundle into the new one-platform workflow, delete its published
+assets, republish an existing version, or move its signed tag.
 
-For a failed job, inspect the retained receipt and failure event, then rerun the
-failed job when the same immutable inputs remain available. Native reruns may
-replace the collector's selected attempt for that package, but older receipts
-and proofs remain retained. Do not republish an immutable npm version, overwrite
-matching GitHub assets, or roll back a channel. Independently reconcile an
-ambiguous write from its receipt and public state within the authorized recovery
-scope; stop only when identity, integrity, or authorization remains unresolved.
+## Publication and promotion
 
-`resume_run_id` is a narrow same-tag recovery input. The current workflow binds
-it to a completed failed tag-triggered run, the same signed tag and source
-commit, the required successful checkpoints, an unexpired matching
-`release-bundle`, and successful CI for the current main commit. It reuses the
-verified bytes and the same signed source. A recovery run may use a new
-CI-validated tooling commit, which must be recorded and checked separately; it
-does not authorize a different signed source or a rebuild of the verified
-payload.
+GitHub stages a public prerelease without changing Latest. npm publishes the
+platform package, verifies it, then publishes the wrapper under
+`hardgate-candidate`. crates.io exposes its immutable version independently;
+this process does not make publication atomic across registries.
 
-## Expired-artifact recovery
+Promotion requires all four exact-consumer checkpoints. npm's `latest` update
+uses the separate token credential even when publication used trusted OIDC.
+The crate's intended `max_stable_version` is verified without a registry
+mutation. GitHub promotes only its byte-verified release. Default consumers
+then independently verify the selected version and installed behavior.
 
-When the 30-day bundle has expired, the current `resume_run_id` path cannot
-reconstruct it automatically. Do not rebuild from the tag and assume the bytes
-are equivalent. Stop the automated recovery and assemble manual evidence for
-maintainer review:
+## Missing or expired evidence
 
-- the same signed tag and source commit, plus the CI-validated tooling commit;
-- retained same-tag GitHub assets and their checksums, SBOM, attestations, and
-  release metadata;
-- retained seed/channel receipts, native proofs, and failure history;
-- exact public crate and npm metadata/bytes, candidate/default dist-tags, and
-  GitHub release state; and
-- independent consumer evidence showing the requested version and full binary
-  source identity.
+An expired bundle cannot be reconstructed automatically by `resume_run_id`.
+Do not rebuild the tag and assume byte equality. Retain and reconcile the
+original signed tag, same-tag public assets, checksums, SBOM, attestations,
+receipts, exact registry metadata/bytes, and independent consumer evidence.
+Missing identity, divergent bytes, ambiguous registry state, a moved default,
+or an unverifiable signature blocks automated recovery. Preserve the evidence
+and resolve that specific mismatch before further publication.
 
-If any required identity, digest, receipt, or public-state evidence is missing
-or ambiguous, do not blind-rebuild or overwrite the channel. A maintainer must
-choose a documented evidence-based recovery or start a new signed release path.
-
-## Stop conditions
-
-Stop before the next publication or promotion when the signed tag cannot be
-verified, either the signed source identity or the CI tooling identity fails
-its recorded expected binding, an artifact is expired or has unexpected bytes,
-a receipt merge diverges, a registry state remains ambiguous after independent
-reconciliation, the crate
-`max_stable_version` does not match, or a default consumer fails. Preserve all
-receipts and failure artifacts and record the public state that caused the
-stop.
-
-For npm credential boundaries, see [Publisher setup](PUBLISHER_SETUP.md). For
-the checked-in workflow's existing recovery guards, see the
-[maintainer guide](MAINTAINERS.md); neither document turns the local proposal
-into deployed behavior.
+See [Publisher setup](PUBLISHER_SETUP.md) for credential boundaries and
+[Maintainers](MAINTAINERS.md) for release preparation.

@@ -1,13 +1,6 @@
-use super::check::{Emission, OutputOptions, emit_gate_report};
 use super::evidence::{EvidenceFailure, record_evidence_failure};
-use super::gate_evidence::{
-    GateRun, empty_discovery_advisory, run_generated_freshness, run_legacy_ratchet,
-    run_static_gate_or_empty,
-};
-use super::outcome::CommandResult;
 use super::role_policy::classify_files;
-use super::static_gate::StaticRequest;
-use crate::config::{ConfigContext, HardgateConfig};
+use crate::config::HardgateConfig;
 use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
 use crate::engines::coverage::{CoverageEvaluationScope, normalized_repository_key};
@@ -15,141 +8,6 @@ use crate::engines::{CoverageScorer, FunctionMetrics, MutationGatekeeper};
 use crate::git_evidence::ChangedLineMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
-
-/// CLI options for `hardgate verify`, including output modes and path scoping.
-#[derive(Debug, Clone, Default)]
-pub struct VerifyOptions {
-    pub coverage_report: Option<String>,
-    pub mutation_report: Option<String>,
-    pub format: Option<String>,
-    pub json: bool,
-    pub compact: bool,
-    pub no_snippets: bool,
-    pub summary: bool,
-    pub paths: Vec<PathBuf>,
-    pub display: crate::diagnostics::display::DisplayOptions,
-    pub output_file: Option<PathBuf>,
-}
-
-/// Run static gates plus coverage and mutation report evaluation.
-/// Exits non-zero when violations are found.
-pub fn cmd_verify(opts: VerifyOptions) -> CommandResult {
-    cmd_verify_in(opts, &ConfigContext::load(None)?)
-}
-
-pub fn cmd_verify_in(mut opts: VerifyOptions, context: &ConfigContext) -> CommandResult {
-    context.resolve_gate_paths(&mut opts.paths, &mut opts.coverage_report);
-    opts.mutation_report = context.input_report(opts.mutation_report);
-    let plan = super::execution_plan::gate_plan(
-        context,
-        super::execution_plan::GateSelection {
-            command: "verify",
-            paths: &opts.paths,
-            diff: false,
-            dead_code: false,
-            all: false,
-            coverage_report: opts.coverage_report.as_deref(),
-            mutation_report: opts.mutation_report.as_deref(),
-        },
-    )?;
-
-    super::execution_failure::run_planned(plan, |plan| execute_verify(opts, context, plan))
-}
-
-fn execute_verify(
-    opts: VerifyOptions,
-    context: &ConfigContext,
-    plan: crate::diagnostics::execution::ExecutionPlan,
-) -> CommandResult {
-    let start_time = Instant::now();
-    let root = context.root.as_path();
-    let config = &context.config;
-    let scoped = !opts.paths.is_empty();
-    let GateRun {
-        mut report,
-        files,
-        empty,
-        read_results,
-        functions,
-        ..
-    } = run_static_gate_or_empty(StaticRequest {
-        config,
-        root,
-        paths: &opts.paths,
-        diff: false,
-        dead_code: config.analysis.dead_code.enabled,
-        snippets: opts.display.snippets,
-    })?;
-    report.execution = Some(plan);
-    if empty {
-        report
-            .advisories
-            .push(empty_discovery_advisory(false, scoped));
-    }
-
-    run_legacy_ratchet(config, root, &mut report, config.analysis.dead_code.enabled);
-    run_generated_freshness(config, root, &mut report);
-
-    let source_files = if config.coverage.enabled {
-        source_files_for_coverage(SourceCoverageRequest {
-            files: &files,
-            functions: &functions,
-            root,
-            config,
-            report: &mut report,
-        })
-    } else {
-        Vec::new()
-    };
-    verify_coverage_with_scope(
-        CoverageVerification {
-            config,
-            cli_report: opts.coverage_report.clone(),
-            functions: &functions,
-            changed_lines: None,
-            report: &mut report,
-        },
-        CoverageScope {
-            source_files: &source_files,
-            root,
-        },
-    );
-    verify_mutation_at(config, opts.mutation_report.clone(), &mut report, root);
-
-    emit_gate_report(
-        &mut report,
-        Emission {
-            read_len: read_results.len(),
-            fn_len: functions.len(),
-            elapsed: start_time.elapsed().as_millis(),
-            opts: &OutputOptions {
-                format: opts.format.clone(),
-                json: opts.json,
-                compact: opts.compact,
-                no_snippets: opts.no_snippets,
-                summary: opts.summary,
-                display: opts.display.clone(),
-                output_file: opts.output_file.clone(),
-                ..Default::default()
-            },
-        },
-    )
-}
-
-/// Backwards-compatible shim for callers using the pre-struct signature.
-pub fn cmd_verify_legacy(
-    coverage_report: Option<String>,
-    mutation_report: Option<String>,
-    format: Option<&str>,
-) -> CommandResult {
-    cmd_verify(VerifyOptions {
-        coverage_report,
-        mutation_report,
-        format: format.map(|s| s.to_string()),
-        ..Default::default()
-    })
-}
 
 /// Request data for a coverage verification run.
 pub struct CoverageVerification<'a> {
@@ -167,7 +25,7 @@ pub struct CoverageScope<'a> {
     pub root: &'a Path,
 }
 
-/// Ingest an lcov report and flag functions breaching coverage/CRAP floors.
+/// Ingest an lcov report and flag functions breaching coverage floors.
 /// Enabled coverage is required evidence regardless of static gate strictness.
 pub fn verify_coverage(
     config: &HardgateConfig,
@@ -193,8 +51,8 @@ pub fn verify_coverage_with_diff(mut request: CoverageVerification<'_>) {
     evaluate_coverage_report(&mut request, None);
 }
 
-/// Internal root/inventory-aware coverage verification used by `check` and
-/// `verify`. The compatibility wrappers above intentionally remain unchanged.
+/// Root/inventory-aware coverage verification used by `check`. Low-level
+/// scoring wrappers above do not establish source-bound acceptance.
 pub fn verify_coverage_with_scope(mut request: CoverageVerification<'_>, scope: CoverageScope<'_>) {
     if !request.config.coverage.enabled {
         return;
@@ -240,7 +98,30 @@ fn evaluate_coverage_report(
         return;
     }
     let scorer = CoverageScorer::new(&request.config.coverage);
-    match scorer.parse_lcov(p) {
+    if let Some(ref scope) = scope
+        && let Err(error) = crate::evidence::verify(
+            scope.root,
+            p,
+            crate::evidence::EvidenceKind::Coverage,
+            request.config,
+        )
+    {
+        record_evidence_failure(
+            request.report,
+            true,
+            EvidenceFailure {
+                step: "coverage-report",
+                target: p,
+                message: format!("Required coverage source identity is invalid: {error:#}"),
+            },
+        );
+        return;
+    }
+    let parsed = match scope.as_ref() {
+        Some(scope) => scorer.parse_lcov_for_project(p, scope.root, request.config),
+        None => scorer.parse_lcov(p),
+    };
+    match parsed {
         Ok(cov_map) => append_coverage_violations(request, &scorer, &cov_map, scope),
         Err(e) => {
             record_evidence_failure(
@@ -332,6 +213,7 @@ pub(crate) fn source_files_for_coverage(request: SourceCoverageRequest<'_>) -> V
     let executable_rust_files: BTreeSet<String> = request
         .functions
         .iter()
+        .filter(|function| !function.test_only)
         .filter_map(|function| normalized_repository_key(&function.file, request.root))
         .collect();
     let rust_scope = RustCoverageScope {
@@ -399,7 +281,15 @@ pub fn verify_mutation(
     cli_report: Option<String>,
     report: &mut GateReport,
 ) {
-    verify_mutation_at(config, cli_report, report, Path::new("."));
+    evaluate_mutation_reports(
+        config,
+        cli_report,
+        report,
+        MutationScope {
+            root: Path::new("."),
+            bind_source: false,
+        },
+    );
 }
 
 pub fn verify_mutation_at(
@@ -407,6 +297,28 @@ pub fn verify_mutation_at(
     cli_report: Option<String>,
     report: &mut GateReport,
     root: &Path,
+) {
+    evaluate_mutation_reports(
+        config,
+        cli_report,
+        report,
+        MutationScope {
+            root,
+            bind_source: true,
+        },
+    );
+}
+
+struct MutationScope<'a> {
+    root: &'a Path,
+    bind_source: bool,
+}
+
+fn evaluate_mutation_reports(
+    config: &HardgateConfig,
+    cli_report: Option<String>,
+    report: &mut GateReport,
+    scope: MutationScope<'_>,
 ) {
     if !config.mutation.enabled {
         return;
@@ -440,41 +352,57 @@ pub fn verify_mutation_at(
         );
         return;
     }
-    let gatekeeper = MutationGatekeeper::new(&config.mutation);
-    for r_str in reports {
-        let resolved = root.join(&r_str);
-        let p = resolved.as_path();
-        if !p.exists() {
-            record_evidence_failure(
-                report,
-                true,
-                EvidenceFailure {
-                    step: "mutation-report",
-                    target: Path::new(&r_str),
-                    message: "Required mutation report was not found.".to_string(),
-                },
-            );
-            continue;
-        }
-        match gatekeeper.evaluate_report(p) {
-            Ok(m_violations) => {
-                report.observe_engine(
-                    crate::diagnostics::execution::EngineId::MutationReport,
-                    crate::diagnostics::execution::EngineState::Completed,
-                );
-                report.mutation_violations.extend(m_violations);
-            }
-            Err(e) => {
-                record_evidence_failure(
-                    report,
-                    true,
-                    EvidenceFailure {
-                        step: "mutation-report",
-                        target: Path::new(&r_str),
-                        message: format!("Failed to parse required mutation report: {e}"),
-                    },
-                );
-            }
-        }
+    for path in reports {
+        evaluate_mutation_report(config, &path, report, &scope);
     }
+}
+
+fn evaluate_mutation_report(
+    config: &HardgateConfig,
+    path: &str,
+    report: &mut GateReport,
+    scope: &MutationScope<'_>,
+) {
+    let resolved = scope.root.join(path);
+    let result = validate_mutation_report(config, &resolved, scope);
+    match result {
+        Ok(violations) => {
+            report.observe_engine(
+                crate::diagnostics::execution::EngineId::MutationReport,
+                crate::diagnostics::execution::EngineState::Completed,
+            );
+            report.mutation_violations.extend(violations);
+        }
+        Err(message) => record_evidence_failure(
+            report,
+            true,
+            EvidenceFailure {
+                step: "mutation-report",
+                target: &resolved,
+                message,
+            },
+        ),
+    }
+}
+
+fn validate_mutation_report(
+    config: &HardgateConfig,
+    path: &Path,
+    scope: &MutationScope<'_>,
+) -> Result<Vec<crate::engines::mutation::MutationViolation>, String> {
+    if !path.exists() {
+        return Err("Required mutation report was not found.".to_string());
+    }
+    if scope.bind_source {
+        crate::evidence::verify(
+            scope.root,
+            path,
+            crate::evidence::EvidenceKind::Mutation,
+            config,
+        )
+        .map_err(|error| format!("Required mutation source identity is invalid: {error:#}"))?;
+    }
+    MutationGatekeeper::new(&config.mutation)
+        .evaluate_report(path)
+        .map_err(|error| format!("Failed to parse required mutation report: {error}"))
 }

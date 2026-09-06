@@ -19,8 +19,14 @@ fn fixture(tag: &str) -> Fixture {
 #[test]
 fn nested_invocations_share_policy_scope_and_diagnostic_paths() {
     let fixture = fixture("nested");
-    let root = json(&run(&fixture, &["check", "--json", "src/value.ts"]));
-    let nested = json(&run(&fixture.join("src"), &["check", "--json", "value.ts"]));
+    let root = json(&run(
+        &fixture,
+        &["check", "--checks", "policy", "--json", "src/value.ts"],
+    ));
+    let nested = json(&run(
+        &fixture.join("src"),
+        &["check", "--checks", "policy", "--json", "value.ts"],
+    ));
     assert_eq!(root["passed"], false);
     assert_eq!(
         root["complexity_violations"],
@@ -118,16 +124,28 @@ fn report_paths_follow_policy_but_cli_overrides_follow_invocation() {
     );
     fixture.write("mutation.json", "{\"killed\":1}");
     let nested = fixture.join("src");
-    assert_status(
-        &run(&nested, &["verify", "--json", "value.ts"]),
-        true,
-        "policy-relative reports",
+    let unbound = run(
+        &nested,
+        &["check", "--checks", "policy", "--json", "value.ts"],
     );
+    assert_status(&unbound, false, "unbound policy-relative reports");
+    let report = json(&unbound);
+    for name in ["coverage.info", "mutation.json"] {
+        assert!(
+            report["orchestration_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure["command"] == fixture.join(name).display().to_string())
+        );
+    }
     fixture.write("src/override.json", "{\"survived\":1}");
     let failed = run(
         &nested,
         &[
-            "verify",
+            "check",
+            "--checks",
+            "policy",
             "--json",
             "value.ts",
             "--mutation-report",
@@ -138,10 +156,12 @@ fn report_paths_follow_policy_but_cli_overrides_follow_invocation() {
     );
     assert_status(&failed, false, "invocation-relative override");
     assert!(
-        !json(&failed)["mutation_violations"]
+        json(&failed)["orchestration_violations"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .any(|failure| failure["step"] == "mutation-report"
+                && failure["command"] == fixture.join("src/override.json").display().to_string())
     );
 }
 

@@ -87,7 +87,7 @@ fn verify_diff_mode_respects_disabled_policy() {
 }
 
 #[test]
-fn scoped_verify_keeps_source_inventory_and_root() {
+fn root_aware_coverage_requires_source_identity_before_scoring() {
     let tmp = fs::tempdir("verify-scoped");
     let report_path = tmp.join("lcov.info");
     write_verify_report(&report_path);
@@ -106,11 +106,13 @@ fn scoped_verify_keeps_source_inventory_and_root() {
             root: Path::new("."),
         },
     );
+    assert!(report.coverage_violations.is_empty());
     assert!(
         report
-            .coverage_violations
+            .orchestration_violations
             .iter()
-            .any(|violation| violation.metric == "Global Line Coverage")
+            .any(|failure| failure.step == "coverage-report"
+                && failure.output.contains("source identity is invalid"))
     );
     let _ = std::fs::remove_dir_all(tmp);
 }

@@ -1,6 +1,8 @@
 // Strict state transitions for staging an immutable public GitHub release.
 "use strict";
 
+import { PLATFORM_ASSETS as RELEASE_ASSETS } from "./release-platforms.mjs";
+
 import { performance } from "node:perf_hooks";
 import { assertExactKeys as assertKeys, assertPlainObject as assertObject } from "./release-receipt-validation.mjs";
 import {
@@ -10,14 +12,7 @@ import {
   validateProbeEnvelope,
 } from "./release-state-validation.mjs";
 
-const GITHUB_ARCHIVES = Object.freeze([
-  "hardgate-linux-x64.tar.gz",
-  "hardgate-linux-x64-musl.tar.gz",
-  "hardgate-linux-arm64.tar.gz",
-  "hardgate-linux-arm64-musl.tar.gz",
-  "hardgate-darwin-x64.tar.gz",
-  "hardgate-darwin-arm64.tar.gz",
-]);
+const GITHUB_ARCHIVES = RELEASE_ASSETS;
 
 const SAFE_ASSET = /^[A-Za-z0-9][A-Za-z0-9._+@-]*$/;
 const OPERATION_METHODS = ["probe", "create", "upload", "verify"];

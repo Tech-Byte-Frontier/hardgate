@@ -24,6 +24,7 @@ include = [
   "/LICENSE-APACHE",
   "/docs/INSTALLATION.md",
   "/docs/GETTING_STARTED.md",
+  "/docs/TRIALS_0_6.md",
   "/docs/MUTATION_RESOURCES.md",
   "/docs/ARCHITECTURE.md",
   "/docs/CLI_AND_INTEGRATION.md",
@@ -69,10 +70,11 @@ tree-sitter = "=0.27.0"
 tree-sitter-rust = "=0.24.2"
 tree-sitter-typescript = "=0.23.2"
 tree-sitter-javascript = "=0.25.0"
-tree-sitter-python = "=0.25.0"
-tree-sitter-go = "=0.25.0"
 globset = "=0.4.20"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "=1.1.4", features = ["process", "fs"] }
 signal-hook = { version = "=0.4.4", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "=0.2.189"

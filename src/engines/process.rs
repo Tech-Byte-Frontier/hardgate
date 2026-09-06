@@ -7,10 +7,15 @@ use std::time::{Duration, Instant};
 
 #[path = "process/capture.rs"]
 mod capture;
+#[path = "process/cargo_stream.rs"]
+mod cargo_stream;
 #[path = "process/cleanup.rs"]
 mod cleanup;
 #[path = "process/mutation.rs"]
 mod mutation;
+#[cfg(target_os = "linux")]
+#[path = "process/write_guard.rs"]
+mod write_guard;
 
 use capture::{CaptureResult, CapturedOutput};
 use cleanup::terminate_process_tree;
@@ -33,6 +38,7 @@ pub(crate) struct CommandRoots<'a> {
     pub working_dir: &'a Path,
     pub package_root: &'a Path,
     pub workspace_root: &'a Path,
+    pub protected_root: Option<&'a Path>,
 }
 
 impl<'a> CommandRoots<'a> {
@@ -41,8 +47,20 @@ impl<'a> CommandRoots<'a> {
             working_dir: root,
             package_root: root,
             workspace_root: root,
+            protected_root: None,
         }
     }
+}
+
+pub(crate) fn run_command_in_copy(
+    tokens: &[String],
+    locations: (&Path, &Path),
+    timeout: Duration,
+    operation: &str,
+) -> ProcessOutcome {
+    let mut roots = CommandRoots::single(locations.0);
+    roots.protected_root = Some(locations.1);
+    run_command_with_roots(tokens, roots, timeout, operation)
 }
 
 pub(crate) fn run_command(
@@ -85,7 +103,7 @@ pub(crate) fn run_command_with_roots(
         Ok(child) => child,
         Err(error) => return spawn_failure(program, error),
     };
-    let mut captured = CapturedOutput::from_child(&mut child);
+    let mut captured = CapturedOutput::from_command(&mut child, tokens);
     finish_process_wait(
         wait_for_child(&mut child, timeout, operation),
         &mut child,
@@ -125,10 +143,14 @@ fn spawn_command(
     roots: CommandRoots<'_>,
     operation: &str,
 ) -> std::io::Result<Child> {
-    command_for_tokens(tokens, roots, operation).spawn()
+    command_for_tokens(tokens, roots, operation)?.spawn()
 }
 
-fn command_for_tokens(tokens: &[String], roots: CommandRoots<'_>, operation: &str) -> Command {
+fn command_for_tokens(
+    tokens: &[String],
+    roots: CommandRoots<'_>,
+    operation: &str,
+) -> std::io::Result<Command> {
     let mut command = Command::new(&tokens[0]);
     command
         .args(&tokens[1..])
@@ -136,7 +158,7 @@ fn command_for_tokens(tokens: &[String], roots: CommandRoots<'_>, operation: &st
         .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if operation == "mutation" {
+    if matches!(operation, "mutation" | "evidence") {
         command.env("CARGO_TARGET_DIR", roots.workspace_root.join("target"));
     }
     crate::resources::runtime::constrain_command(&mut command);
@@ -151,7 +173,18 @@ fn command_for_tokens(tokens: &[String], roots: CommandRoots<'_>, operation: &st
     }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
-    command
+    if let Some(original) = roots.protected_root {
+        #[cfg(target_os = "linux")]
+        write_guard::configure(&mut command, roots.workspace_root, original)?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = original;
+            return Err(std::io::Error::other(
+                "read-only checks require Linux with Landlock ABI 3 or newer",
+            ));
+        }
+    }
+    Ok(command)
 }
 
 /// Bounded manager queries and cleanup must still work after cancellation.

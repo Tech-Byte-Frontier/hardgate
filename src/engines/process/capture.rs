@@ -14,23 +14,33 @@ pub(super) struct CapturedOutput {
     stdout_result: Option<CapturedStream>,
     stderr_result: Option<CapturedStream>,
     cancel: Arc<AtomicBool>,
+    cargo: bool,
 }
 
 impl CapturedOutput {
     pub(super) fn from_child(child: &mut Child) -> Self {
+        Self::with_cargo(child, false)
+    }
+
+    pub(super) fn from_command(child: &mut Child, tokens: &[String]) -> Self {
+        Self::with_cargo(child, crate::engines::cargo_diagnostics::is_clippy(tokens))
+    }
+
+    fn with_cargo(child: &mut Child, cargo: bool) -> Self {
         let cancel = Arc::new(AtomicBool::new(false));
         Self {
             stdout: child
                 .stdout
                 .take()
-                .map(|reader| spawn_reader(reader, Arc::clone(&cancel))),
+                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), cargo)),
             stderr: child
                 .stderr
                 .take()
-                .map(|reader| spawn_reader(reader, Arc::clone(&cancel))),
+                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), false)),
             stdout_result: None,
             stderr_result: None,
             cancel,
+            cargo,
         }
     }
 
@@ -48,6 +58,7 @@ impl CapturedOutput {
             output: combine_streams(
                 self.stdout_result.clone().unwrap_or_default(),
                 self.stderr_result.clone().unwrap_or_default(),
+                self.cargo,
             ),
             incomplete: self.stdout.is_some() || self.stderr.is_some(),
         }
@@ -74,33 +85,34 @@ pub(super) struct CaptureResult {
 }
 
 #[cfg(unix)]
-fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>) -> Receiver<CapturedStream>
+fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>, cargo: bool) -> Receiver<CapturedStream>
 where
     R: Read + std::os::fd::AsRawFd + Send + 'static,
 {
     let nonblocking = super::set_nonblocking(reader.as_raw_fd()).is_ok();
-    spawn_reader_loop(reader, cancel, nonblocking)
+    spawn_reader_loop(reader, cancel, nonblocking, cargo)
 }
 
 #[cfg(not(unix))]
-fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>) -> Receiver<CapturedStream>
+fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>, cargo: bool) -> Receiver<CapturedStream>
 where
     R: Read + Send + 'static,
 {
-    spawn_reader_loop(reader, cancel, false)
+    spawn_reader_loop(reader, cancel, false, cargo)
 }
 
 fn spawn_reader_loop<R>(
     reader: R,
     cancel: Arc<AtomicBool>,
     nonblocking: bool,
+    cargo: bool,
 ) -> Receiver<CapturedStream>
 where
     R: Read + Send + 'static,
 {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let (bytes, truncated) = read_stream(reader, &cancel, nonblocking);
+        let (bytes, truncated) = read_stream(reader, &cancel, nonblocking, cargo);
         let _ = sender.send(CapturedStream { bytes, truncated });
     });
     receiver
@@ -110,18 +122,26 @@ fn read_stream<R: Read>(
     mut reader: R,
     cancel: &Arc<AtomicBool>,
     nonblocking: bool,
+    cargo: bool,
 ) -> (Vec<u8>, bool) {
     let mut bytes = Vec::with_capacity(super::MAX_STREAM_BYTES);
     let mut truncated = false;
+    let mut cargo_stream = cargo.then(super::cargo_stream::CargoStream::default);
     let mut buffer = [0_u8; 4096];
     while !cancel.load(Ordering::Relaxed) {
         match read_step(&mut reader, &mut buffer, nonblocking) {
             ReaderStep::Done => break,
-            ReaderStep::Chunk(read) => append_chunk(&mut bytes, &mut truncated, &buffer[..read]),
+            ReaderStep::Chunk(read) => {
+                if let Some(stream) = &mut cargo_stream {
+                    stream.push(&buffer[..read]);
+                } else {
+                    append_chunk(&mut bytes, &mut truncated, &buffer[..read]);
+                }
+            }
             ReaderStep::Wait => thread::sleep(Duration::from_millis(10)),
         }
     }
-    (bytes, truncated)
+    cargo_stream.map_or((bytes, truncated), |stream| stream.finish())
 }
 
 enum ReaderStep {
@@ -168,7 +188,7 @@ fn receive_stream(
     }
 }
 
-fn combine_streams(stdout: CapturedStream, stderr: CapturedStream) -> String {
+fn combine_streams(stdout: CapturedStream, stderr: CapturedStream, cargo: bool) -> String {
     let stdout = stream_text(stdout);
     let stderr = stream_text(stderr);
     let combined = match (stdout.is_empty(), stderr.is_empty()) {
@@ -177,13 +197,17 @@ fn combine_streams(stdout: CapturedStream, stderr: CapturedStream) -> String {
         (true, false) => stderr,
         (false, false) => format!("{stdout}\n{stderr}"),
     };
-    super::truncate_output(combined)
+    if cargo {
+        combined
+    } else {
+        super::truncate_output(combined)
+    }
 }
 
 fn stream_text(stream: CapturedStream) -> String {
     let mut text = String::from_utf8_lossy(&stream.bytes).trim().to_string();
     if stream.truncated {
-        text.push_str("\n[output truncated after 32768 bytes]");
+        text.push_str("\n[output truncated at the capture limit]");
     }
     text
 }

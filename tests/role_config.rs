@@ -127,14 +127,6 @@ fn invalid_role_config_fails_during_load() {
             "[invariants]\n[[invariants.rules]]\nfrom = \"src/**\"\ndisallow_imports = [\"[bad\"]",
             "disallow_imports",
         ),
-        (
-            "[analysis.dead_code]\nentry_points = [\"\"]",
-            "entry_points",
-        ),
-        (
-            "[analysis.dead_code]\nentry_points = [\"[bad\"]",
-            "entry_points",
-        ),
     ];
     for (content, message) in cases {
         let root = fs::tempdir("role-invalid");
@@ -190,8 +182,6 @@ report = "reports/custom-lcov.info"
 [mutation]
 min_score = 72.0
 
-[analysis.dead_code]
-enabled = true
 "#,
     )
     .unwrap();
@@ -217,10 +207,6 @@ enabled = true
         expected.coverage.min_branch_percent
     );
     assert_eq!(
-        config.coverage.max_crap_score,
-        expected.coverage.max_crap_score
-    );
-    assert_eq!(
         config.coverage.critical_paths,
         expected.coverage.critical_paths
     );
@@ -228,19 +214,6 @@ enabled = true
     assert!(config.mutation.enabled);
     assert_eq!(config.mutation.min_score, Some(72.0));
     assert_eq!(config.mutation.reports, expected.mutation.reports);
-    assert_eq!(config.mutation.test_cmd, expected.mutation.test_cmd);
-    assert_eq!(config.mutation.timeout_secs, expected.mutation.timeout_secs);
-    assert_eq!(config.mutation.max_mutants, expected.mutation.max_mutants);
-
-    assert!(config.analysis.dead_code.enabled);
-    assert_eq!(
-        config.analysis.dead_code.entry_points,
-        expected.analysis.dead_code.entry_points
-    );
-    assert_eq!(
-        config.analysis.dead_code.exclude,
-        expected.analysis.dead_code.exclude
-    );
 }
 
 #[test]
@@ -261,12 +234,7 @@ critical_paths = []
 [mutation]
 enabled = false
 reports = []
-test_cmd = ""
 
-[analysis.dead_code]
-enabled = false
-entry_points = []
-exclude = []
 "#,
     )
     .unwrap();
@@ -281,21 +249,10 @@ exclude = []
         config.coverage.min_line_percent,
         expected.coverage.min_line_percent
     );
-    assert_eq!(
-        config.coverage.max_crap_score,
-        expected.coverage.max_crap_score
-    );
 
     assert!(!config.mutation.enabled);
     assert_eq!(config.mutation.reports, Some(Vec::new()));
-    assert_eq!(config.mutation.test_cmd.as_deref(), Some(""));
     assert_eq!(config.mutation.min_score, expected.mutation.min_score);
-    assert_eq!(config.mutation.timeout_secs, expected.mutation.timeout_secs);
-    assert_eq!(config.mutation.max_mutants, expected.mutation.max_mutants);
-
-    assert!(!config.analysis.dead_code.enabled);
-    assert!(config.analysis.dead_code.entry_points.is_empty());
-    assert!(config.analysis.dead_code.exclude.is_empty());
 }
 
 #[test]
@@ -344,22 +301,4 @@ fn generated_presets_and_runtime_defaults_have_matching_semantics() {
     assert_eq!(legacy.reference_branch.as_deref(), Some("origin/main"));
     assert!(legacy.ratchet);
     assert!(LegacyConfig::for_preset(false).reference_branch.is_none());
-}
-
-#[test]
-fn removed_timeout_knob_is_rejected_instead_of_ignored() {
-    assert!(!HardgateConfig::generate_toml_template(Preset::Custom).contains("reject_timeouts"));
-    let root = fs::tempdir("custom-mutation-default");
-    let path = root.join("hardgate.toml");
-    std::fs::write(
-        &path,
-        "[gate]\npreset = \"custom\"\n\n[mutation]\nenabled = true\nreject_timeouts = false\n",
-    )
-    .unwrap();
-    let error = HardgateConfig::load_or_default(Some(&path)).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("reject_timeouts"),
-        "{error:#}"
-    );
-    let _ = std::fs::remove_dir_all(&root);
 }

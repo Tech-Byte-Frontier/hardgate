@@ -5,8 +5,7 @@ use legacy::changes;
 use hardgate::GateReport;
 use hardgate::adoption::apply_legacy_ratchet;
 use hardgate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, DeadCodeViolation, InvariantViolation,
-    SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, InvariantViolation, SuppressionViolation,
 };
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -49,7 +48,9 @@ fn complexity_span(
         file: file.into(),
         function_name: "compute".into(),
         line_number,
+        column_number: 0,
         end_line,
+        size: None,
         metric: "Cyclomatic Complexity".into(),
         actual,
         limit: 5.0,
@@ -90,28 +91,6 @@ fn clone_violation(
     }
 }
 
-fn dead_code(file: &str, line_number: Option<usize>) -> DeadCodeViolation {
-    DeadCodeViolation {
-        file: file.into(),
-        line_number,
-        symbol: Some("old".into()),
-        violation_type: "Unused Export".into(),
-        message: "dead-code debt".into(),
-        recommendation: "remove".into(),
-    }
-}
-
-fn unreferenced_file(file: &str) -> DeadCodeViolation {
-    DeadCodeViolation {
-        file: file.into(),
-        line_number: Some(1),
-        symbol: None,
-        violation_type: "Unreferenced File".into(),
-        message: "dead-code debt".into(),
-        recommendation: "remove".into(),
-    }
-}
-
 fn static_debt_report() -> GateReport {
     let mut baseline = report();
     baseline.budget_violations.push(budget("src/a.rs", 100));
@@ -125,9 +104,6 @@ fn static_debt_report() -> GateReport {
     baseline
         .clone_violations
         .push(clone_violation("src/a.rs", (1, 5), "src/b.rs", (8, 12)));
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/a.rs", Some(1)));
     baseline
 }
 
@@ -147,7 +123,7 @@ fn changed_hunks_block_matching_debt_in_every_static_vector() {
     );
 
     assert_eq!(outcome.grandfathered, 0);
-    assert_eq!(outcome.retained, 6);
+    assert_eq!(outcome.retained, 5);
     assert!(!current.passed);
 }
 
@@ -162,7 +138,7 @@ fn unrelated_changed_file_does_not_block_untouched_equal_debt() {
         &legacy::changes(&[("src/other.rs", &[9])], &["src/other.rs"], &[]),
     );
 
-    assert_eq!(outcome.grandfathered, 6);
+    assert_eq!(outcome.grandfathered, 5);
     assert_eq!(outcome.retained, 0);
     assert!(current.passed);
 }
@@ -177,9 +153,6 @@ fn equal_debt_edited_on_its_line_remains_blocking() {
         .complexity_violations
         .push(complexity("src/a.rs", 4, 10.0));
     baseline.invariant_violations.push(invariant("src/a.rs", 3));
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/a.rs", Some(1)));
 
     let mut current = baseline.clone();
     let outcome = apply_legacy_ratchet(
@@ -189,7 +162,7 @@ fn equal_debt_edited_on_its_line_remains_blocking() {
     );
 
     assert_eq!(outcome.grandfathered, 0);
-    assert_eq!(outcome.retained, 4);
+    assert_eq!(outcome.retained, 3);
     assert!(!current.passed);
 }
 
@@ -254,18 +227,12 @@ fn clone_debt_blocks_when_either_current_range_is_touched() {
 }
 
 #[test]
-fn line_less_dead_code_and_budget_block_on_renamed_file_without_hunks() {
+fn budget_blocks_on_renamed_file_without_hunks() {
     let mut baseline = report();
     baseline.budget_violations.push(budget("src/old.rs", 100));
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/old.rs", None));
 
     let mut current = report();
     current.budget_violations.push(budget("src/new.rs", 100));
-    current
-        .dead_code_violations
-        .push(dead_code("src/new.rs", None));
     let outcome = apply_legacy_ratchet(
         &mut current,
         &baseline,
@@ -277,43 +244,8 @@ fn line_less_dead_code_and_budget_block_on_renamed_file_without_hunks() {
     );
 
     assert_eq!(outcome.grandfathered, 0);
-    assert_eq!(outcome.retained, 2);
+    assert_eq!(outcome.retained, 1);
     assert!(!current.passed);
-}
-
-#[test]
-fn unreferenced_file_debt_blocks_when_any_file_line_changes() {
-    let mut baseline = report();
-    baseline
-        .dead_code_violations
-        .push(unreferenced_file("src/a.rs"));
-    let mut current = baseline.clone();
-    let outcome = apply_legacy_ratchet(
-        &mut current,
-        &baseline,
-        &changes(&[("src/a.rs", &[5])], &["src/a.rs"], &[]),
-    );
-
-    assert_eq!(outcome.grandfathered, 0);
-    assert_eq!(current.dead_code_violations.len(), 1);
-    assert!(!current.passed);
-}
-
-#[test]
-fn symbol_dead_code_uses_its_exact_changed_line() {
-    let mut baseline = report();
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/a.rs", Some(1)));
-    let mut current = baseline.clone();
-    let outcome = apply_legacy_ratchet(
-        &mut current,
-        &baseline,
-        &changes(&[("src/a.rs", &[5])], &["src/a.rs"], &[]),
-    );
-
-    assert_eq!(outcome.grandfathered, 1);
-    assert!(current.passed);
 }
 
 #[test]
@@ -328,9 +260,6 @@ fn pure_rename_without_hunks_preserves_line_and_clone_grandfathering() {
     baseline
         .invariant_violations
         .push(invariant("src/old.rs", 3));
-    baseline
-        .dead_code_violations
-        .push(dead_code("src/old.rs", Some(1)));
     baseline.clone_violations.push(clone_violation(
         "src/old.rs",
         (1, 5),
@@ -348,9 +277,6 @@ fn pure_rename_without_hunks_preserves_line_and_clone_grandfathering() {
     current
         .invariant_violations
         .push(invariant("src/new.rs", 3));
-    current
-        .dead_code_violations
-        .push(dead_code("src/new.rs", Some(1)));
     current.clone_violations.push(clone_violation(
         "src/new.rs",
         (1, 5),
@@ -375,7 +301,7 @@ fn pure_rename_without_hunks_preserves_line_and_clone_grandfathering() {
         ),
     );
 
-    assert_eq!(outcome.grandfathered, 5);
+    assert_eq!(outcome.grandfathered, 4);
     assert_eq!(outcome.retained, 0);
     assert!(current.passed);
 }

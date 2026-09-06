@@ -13,47 +13,23 @@ import {
   CONSUMER_CASES,
   CONSUMER_CASE_IDS,
 } from "../scripts/consumer-fixtures.mjs";
-import { evaluateBehavior } from "../scripts/consumer-behavior.mjs";
 import {
   parseExactJson,
   runCase,
   runCheck,
   runConsumerMatrix,
-  runMutation,
   runProcess,
   validateGateReport,
-  validateMutationReport,
 } from "../scripts/consumer-runner.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runner = path.join(root, "scripts", "check-consumer-matrix.mjs");
 const expectedIds = [
-  "vite-react-vitest", "next-monorepo-package-local", "jest-fixtures-snapshots", "playwright-suite",
-  "package-manager-npm", "package-manager-pnpm", "package-manager-yarn", "package-manager-bun",
+  "vite-react-vitest", "next-monorepo-package-local", "jest-fixtures-snapshots",
+  "package-manager-npm", "package-manager-pnpm",
   "supabase-roles", "greenfield-strict", "legacy-reference-ratchet",
 ];
-const expectedPackageManagers = {
-  "vite-react-vitest": "pnpm@11.25.0",
-  "next-monorepo-package-local": "pnpm@11.25.0",
-  "jest-fixtures-snapshots": "npm@12.0.2",
-  "playwright-suite": "yarn@4.18.0",
-  "package-manager-npm": "npm@12.0.2",
-  "package-manager-pnpm": "pnpm@11.25.0",
-  "package-manager-yarn": "yarn@4.18.0",
-  "package-manager-bun": "bun@1.4.0",
-};
-
 function assertKeys(value, keys, label) { assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), `${label} schema`); }
-
-function assertPinnedPackageManagers() {
-  for (const testCase of CONSUMER_CASES.filter((item) => item.mutation)) {
-    const packageRoot = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.packageRoot);
-    const workspaceRoot = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.workspaceRoot);
-    const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    const workspaceJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, "package.json"), "utf8"));
-    assert.equal(packageJson.packageManager ?? workspaceJson.packageManager, expectedPackageManagers[testCase.id], `pinned manager ${testCase.id}`);
-  }
-}
 
 function assertReactFixtureCoverage() {
   const fixture = path.join(root, "tests/fixtures/consumers/vite-react-vitest");
@@ -74,29 +50,20 @@ function emptyReport(overrides = {}) {
   const report = {
     gate_name: "negative-fixture", files_scanned: 1, functions_analyzed: 1, duration_ms: 0, passed: true,
     advisories: [], budget_violations: [], suppression_violations: [], complexity_violations: [], invariant_violations: [],
-    clone_violations: [], coverage_violations: [], mutation_violations: [], dead_code_violations: [], orchestration_violations: [],
+    clone_violations: [], coverage_violations: [], mutation_violations: [], orchestration_violations: [],
     summary: {}, top_files: [], ...overrides,
   };
-  const fields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "clone_violations", "coverage_violations", "mutation_violations", "dead_code_violations", "orchestration_violations"];
+  const fields = ["budget_violations", "suppression_violations", "complexity_violations", "invariant_violations", "clone_violations", "coverage_violations", "mutation_violations", "orchestration_violations"];
   const files = new Set();
-  for (const item of [...report.budget_violations, ...report.suppression_violations, ...report.complexity_violations, ...report.invariant_violations, ...report.coverage_violations, ...report.dead_code_violations]) files.add(item.file);
+  for (const item of [...report.budget_violations, ...report.suppression_violations, ...report.complexity_violations, ...report.invariant_violations, ...report.coverage_violations]) files.add(item.file);
   for (const item of report.clone_violations) [item.file_a, item.file_b].forEach((file) => files.add(file));
-  report.summary = { total_errors: fields.reduce((sum, field) => sum + report[field].length, 0), clones: report.clone_violations.length, ast_violations: report.complexity_violations.length, complexity: report.complexity_violations.length, file_budgets: report.budget_violations.length, suppressions: report.suppression_violations.length, architecture: report.invariant_violations.length, coverage: report.coverage_violations.length, mutation: report.mutation_violations.length, dead_code: report.dead_code_violations.length, tool: report.orchestration_violations.length, files_scanned: report.files_scanned, functions_analyzed: report.functions_analyzed, files_with_violations: files.size, passed: report.passed };
+  report.summary = { total_errors: fields.reduce((sum, field) => sum + report[field].length, 0), clones: report.clone_violations.length, ast_violations: report.complexity_violations.length, complexity: report.complexity_violations.length, file_budgets: report.budget_violations.length, suppressions: report.suppression_violations.length, architecture: report.invariant_violations.length, coverage: report.coverage_violations.length, mutation: report.mutation_violations.length, tool: report.orchestration_violations.length, files_scanned: report.files_scanned, functions_analyzed: report.functions_analyzed, files_with_violations: files.size, passed: report.passed };
   Object.assign(report, envelope("check", report.passed, report.orchestration_violations.some((item) => item.exit_code === null || [126, 127].includes(item.exit_code))));
   Object.assign(report, { functions: [], total: report.summary.total_errors, shown: report.summary.total_errors, omitted: 0, snippet_bytes: 0, snippets_truncated: false, diagnostics: [] });
   report.summary.analysis_blockers = report.orchestration_violations.length;
   report.summary.code_findings = report.summary.total_errors - report.summary.analysis_blockers;
   report.top_files = [...files].map((file) => ({ file, violations: 1 }));
   return report;
-}
-
-function mutationReport(overrides = {}) {
-  const report = {
-    stats: { killed: 1, survived: 0, timeout: 0, compile_error: 0, runner_error: 0, equivalent: 0, unviable: 0, total: 1 }, score: 100, min_score: 85, passed: true, duration_ms: 0,
-    results: [{ mutant: { id: 1, file: "src/value.ts", line: 1, column: 1, start_byte: 0, end_byte: 1, original: "+", replacement: "-", description: "operator" }, outcome: "Killed", duration_ms: 0, command: "npm test -- tests/value.test.ts", diagnostic: "", source_restored: true }],
-    ...overrides,
-  };
-  return { ...report, ...envelope("mutate", report.passed, report.stats.total === 0 || ["timeout", "compile_error", "runner_error", "unviable"].some((key) => report.stats[key] > 0)) };
 }
 
 function orchestrationRecord(step, command, output) {
@@ -121,11 +88,6 @@ function writeFakeBinary(dir, mode = "check", requireDiff = false) {
     "legacy-missing": emptyReport({ passed: false, complexity_violations: [legacyViolation] }),
     "legacy-malformed": emptyReport({ passed: false, advisories: ["legacy ratchet: malformed"] , complexity_violations: [legacyViolation] }),
   };
-  const mutationReports = {
-    default: mutationReport(),
-    zero: mutationReport({ stats: { killed: 0, survived: 0, timeout: 0, compile_error: 0, runner_error: 0, equivalent: 0, unviable: 0, total: 0 }, score: 0, passed: false, results: [] }),
-    "runner-error": mutationReport({ stats: { killed: 0, survived: 0, timeout: 0, compile_error: 0, runner_error: 1, equivalent: 0, unviable: 0, total: 1 }, score: 0, passed: false, results: [{ mutant: { id: 1, file: "src/value.ts", line: 1, column: 1, start_byte: 0, end_byte: 1, original: "+", replacement: "-", description: "operator" }, outcome: "RunnerError", duration_ms: 0, command: "npm test -- tests/value.test.ts", diagnostic: "runner failed", source_restored: true }] }),
-  };
   const script = `#!/usr/bin/env node
 const mode = process.env.FAKE_MODE || ${JSON.stringify(mode)};
 const requireDiff = ${JSON.stringify(requireDiff)};
@@ -133,9 +95,6 @@ if (requireDiff && !process.argv.includes("--diff")) { process.stderr.write("dif
 if (mode === "signal") process.kill(process.pid, "SIGTERM");
 if (mode === "timeout") setTimeout(() => {}, 10000);
 if (mode === "descendant-timeout") { const { spawn } = require("node:child_process"); const fs = require("node:fs"); const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], { stdio: "ignore" }); fs.writeFileSync(process.env.DESCENDANT_PID, String(descendant.pid)); setTimeout(() => {}, 10000); }
-if (process.argv[2] === "mutate" && mode === "no-target") { process.stderr.write("Error: no source files found for mutation testing: no production source files are eligible\\n"); process.exit(1); }
-if (process.argv[2] === "mutate" && mode === "baseline") { process.stderr.write("unmutated baseline failed before mutants\\n"); process.exit(1); }
-if (process.argv[2] === "mutate") { const reports = ${JSON.stringify(mutationReports)}; process.stdout.write(JSON.stringify(reports[mode] || reports.default)); process.exit(0); }
 const reports = ${JSON.stringify(gateReports)}; const report = reports[mode] || reports.check; process.stdout.write(JSON.stringify(report)); if (mode !== "timeout" && mode !== "descendant-timeout") process.exit(report.exit_code);
 `;
   fs.writeFileSync(binary, script, { mode: 0o755 });
@@ -182,34 +141,6 @@ function assertProcessFailures(temp, cwd) {
   assert.deepEqual({ status: mismatch.status, reasonCode: mismatch.reasonCode, exitCode: mismatch.exitCode }, { status: "fail", reasonCode: "exit-status-mismatch", exitCode: 2 });
 }
 
-function fixtureRoot(temp, name) {
-  const target = path.join(temp, name);
-  fs.cpSync(path.join(root, "tests/fixtures/consumers/package-managers/npm"), target, { recursive: true });
-  return target;
-}
-
-function assertMutationFailures(temp) {
-  const spec = CONSUMER_CASES.find((item) => item.id === "package-manager-npm").mutation;
-  const cases = [["baseline", "baseline-failure"], ["no-target", "no-target"], ["zero", "mutation-report-failed"], ["runner-error", "mutation-report-failed"]];
-  for (const [mode, reasonCode] of cases) {
-    const target = fixtureRoot(temp, `mutation-${mode}`);
-    const result = runMutation(writeFakeBinary(temp, mode), target, spec);
-    assert.equal(result.status, "fail");
-    assert.equal(result.reasonCode, reasonCode, `${mode} must block with its exact reason`);
-    fs.rmSync(target, { recursive: true, force: true });
-  }
-}
-
-function assertBehaviorNegativeControl() {
-  const testCase = CONSUMER_CASES.find((item) => item.id === "package-manager-npm");
-  const sourcePath = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.sourcePath);
-  const testPath = path.join(root, "tests/fixtures/consumers", testCase.fixture, testCase.mutation.testPath);
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const test = fs.readFileSync(testPath, "utf8");
-  const result = evaluateBehavior(`${source}\n// unrelated source change\n`, test, testCase.mutation.behavior);
-  assert.equal(result.passed, true, "irrelevant source changes must not fail the behavior assertion");
-}
-
 function assertReportFailures() {
   for (const text of ["junk{}", "{}{}", "[]", "{bad}"]) assert.throws(() => parseExactJson(text), (error) => error.code === "malformed-report");
   const schema = emptyReport(); schema.extra = true;
@@ -223,8 +154,6 @@ function assertReportFailures() {
   assert.throws(() => validateGateReport(missing), (error) => error.code === "report-schema");
   const status = emptyReport({ passed: false });
   assert.throws(() => validateGateReport(status), (error) => error.code === "report-status");
-  const malformedMutation = mutationReport({ score: 0 });
-  assert.throws(() => validateMutationReport(malformedMutation), (error) => error.code === "report-status");
   const clone = emptyReport({ passed: false, clone_violations: [cloneViolation] });
   validateGateReport(clone);
 }
@@ -269,9 +198,7 @@ function runAdversarialChecks() {
   const cwd = path.join(temp, "cwd");
   fs.mkdirSync(cwd);
   try {
-    assertBehaviorNegativeControl();
     assertProcessFailures(temp, cwd);
-    assertMutationFailures(temp);
     assertReportFailures();
     assertEvidenceFailures(temp, cwd);
     assertTempCleanup(temp);
@@ -281,7 +208,6 @@ function runAdversarialChecks() {
   }
 }
 
-assertPinnedPackageManagers();
 const result = spawnSync(process.execPath, [runner, "--json"], { cwd: root, encoding: "utf8", env: { ...process.env, HARDGATE_CONSUMER_MATRIX: "ci" } });
 if (result.error) assert.fail(`consumer matrix could not spawn: ${result.error.message}`);
 assert.equal(result.status, 0, `consumer acceptance matrix is not green (status=${result.status})\n${result.stdout}\n${result.stderr}`);
@@ -294,21 +220,12 @@ assertReactFixtureCoverage();
 assert.equal(report.cases.length, expectedIds.length, "matrix must cover every stabilization case exactly once");
 assert.deepEqual(report.cases.map((item) => item.id), expectedIds, "matrix case order must remain deterministic");
 for (const item of report.cases) {
-  assertKeys(item, ["id", "fixture", "status", "requirement", "check", "mutation", "diagnostics"], `case ${item.id}`);
+  assertKeys(item, ["id", "fixture", "status", "requirement", "check", "diagnostics"], `case ${item.id}`);
   assert.ok(["pass", "fail"].includes(item.status)); assert.equal(item.diagnostics, null);
   assert.ok(item.check && item.check.status === "pass", `check contract failed for ${item.id}`);
   assertKeys(item.check, ["status", "reasonCode", "diagnostics", "exitCode", "signal", "timedOut", "report"], `check ${item.id}`);
   validateGateReport(item.check.report);
-  if (item.mutation) {
-    const mutationContract = CONSUMER_CASES.find((testCase) => testCase.id === item.id).mutation;
-    assertKeys(item.mutation, ["status", "reasonCode", "diagnostics", "exitCode", "signal", "timedOut", "report", "commands"], `mutation ${item.id}`);
-    assert.equal(item.mutation.status, "pass");
-    assert.deepEqual(item.mutation.commands.map((command) => command.manager), [mutationContract.manager, mutationContract.manager], `detected manager ${item.id}`);
-    validateMutationReport(item.mutation.report);
-    assert.equal(item.mutation.report.passed, true);
-    assert.equal(item.mutation.report.stats.killed, 1);
-    assert.equal(item.mutation.report.stats.survived, 0);
-  }
+
 }
 assert.equal(report.summary.pending, 0, "pending consumer capabilities are blocking");
 assert.equal(report.summary.fail, 0, "failed consumer fixtures are blocking");

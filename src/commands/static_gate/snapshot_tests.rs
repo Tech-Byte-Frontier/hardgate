@@ -3,8 +3,7 @@ use crate::config::Preset;
 use std::fs;
 use std::sync::Arc;
 
-#[path = "../../../tests/support/fs.rs"]
-mod support;
+use crate::fs_tests as support;
 
 #[test]
 fn all_engines_keep_captured_bytes_after_the_worktree_changes() {
@@ -41,7 +40,6 @@ fn all_engines_keep_captured_bytes_after_the_worktree_changes() {
             root: &root,
             paths: &[],
             diff: true,
-            dead_code: true,
             snippets: false,
         },
         files.clone(),
@@ -51,7 +49,6 @@ fn all_engines_keep_captured_bytes_after_the_worktree_changes() {
     .unwrap();
     assert_eq!(outcome.functions.len(), 2);
     assert_eq!(outcome.report.clone_violations.len(), 1);
-    assert!(outcome.report.dead_code_violations.is_empty());
     assert!(outcome.report.orchestration_violations.is_empty());
     for ((path, text), (expected_path, expected_text)) in outcome.read_results.iter().zip(&captured)
     {

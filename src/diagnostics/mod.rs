@@ -4,13 +4,15 @@ pub mod display;
 pub mod execution;
 pub(crate) mod execution_observations;
 mod machine;
+mod review;
+pub use review::FunctionReview;
 pub mod rules;
 mod summary;
 mod terminal;
 
 use crate::engines::{
-    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, DeadCodeViolation,
-    InvariantViolation, MutationViolation, OrchestrationViolation, SuppressionViolation,
+    BudgetViolation, CloneViolation, ComplexityViolation, CoverageViolation, InvariantViolation,
+    MutationViolation, OrchestrationViolation, SuppressionViolation,
 };
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,8 @@ pub struct GateReport {
     #[serde(default)]
     pub functions: Vec<crate::engines::FunctionMetrics>,
     #[serde(default)]
+    pub file_sizes: Vec<FileSizeMetrics>,
+    #[serde(default)]
     pub advisories: Vec<String>,
     pub budget_violations: Vec<BudgetViolation>,
     pub suppression_violations: Vec<SuppressionViolation>,
@@ -49,8 +53,17 @@ pub struct GateReport {
     pub clone_violations: Vec<CloneViolation>,
     pub coverage_violations: Vec<CoverageViolation>,
     pub mutation_violations: Vec<MutationViolation>,
-    pub dead_code_violations: Vec<DeadCodeViolation>,
     pub orchestration_violations: Vec<OrchestrationViolation>,
+    #[serde(default)]
+    pub tool_diagnostics: Vec<crate::engines::cargo_diagnostics::ToolDiagnostic>,
+}
+
+/// Syntax-aware size observations for a selected file and policy role.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSizeMetrics {
+    pub file: std::path::PathBuf,
+    pub role: crate::discovery::FileRole,
+    pub size: crate::engines::complexity::SizeBreakdown,
 }
 
 impl GateReport {
@@ -74,14 +87,14 @@ impl GateReport {
             self.clone_violations.len(),
             self.coverage_violations.len(),
             self.mutation_violations.len(),
-            self.dead_code_violations.len(),
             self.orchestration_violations.len(),
+            self.tool_findings_count(),
         ]
         .iter()
         .sum()
     }
 
-    /// Count of genuine code findings (complexity, budgets, suppressions, invariants, clones, dead-code, coverage, mutation).
+    /// Count of genuine code findings (complexity, budgets, suppressions, invariants, clones, coverage, mutation).
     pub fn code_findings_count(&self) -> usize {
         self.budget_violations.len()
             + self.suppression_violations.len()
@@ -90,7 +103,28 @@ impl GateReport {
             + self.clone_violations.len()
             + self.coverage_violations.len()
             + self.mutation_violations.len()
-            + self.dead_code_violations.len()
+            + self.tool_findings_count()
+    }
+
+    pub fn tool_findings_count(&self) -> usize {
+        self.tool_diagnostics
+            .iter()
+            .filter(|finding| finding.blocking)
+            .count()
+    }
+
+    pub(crate) fn render_specialist_findings(&self, out: &mut String) {
+        for finding in &self.tool_diagnostics {
+            out.push_str(&format!(
+                "{}[{}]: {}\n  --> {}:{}:{}\n",
+                finding.level,
+                finding.rule,
+                finding.message,
+                finding.file.display(),
+                finding.line,
+                finding.column
+            ));
+        }
     }
 
     /// Count of analysis blockers and tool/evidence failures (orchestration / report failures).

@@ -121,7 +121,7 @@ enum Commands {
         #[arg(long)]
         lint: Option<String>,
     },
-    /// Run fast deterministic static gate checks
+    /// Run combined policy, formatting, linting, and configured acceptance checks
     Check {
         #[command(flatten)]
         output: OutputArgs,
@@ -131,12 +131,12 @@ enum Commands {
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
-        /// Run configured format-check, linter, and test commands before verifying static gates, coverage, and mutation
-        #[arg(short, long)]
-        all: bool,
-        /// Run dead code and unused export analysis
+        /// Select check groups explicitly; omitted requirements are labeled partial
+        #[arg(long, value_enum, value_delimiter = ',')]
+        checks: Vec<commands::CheckKind>,
+        /// Require a source-bound mutation report
         #[arg(long)]
-        dead_code: bool,
+        mutation_report: Option<String>,
         /// Path to coverage report to verify against AST budgets
         #[arg(long)]
         coverage_report: Option<String>,
@@ -156,36 +156,6 @@ enum Commands {
         /// Check only without writing changes to disk
         #[arg(long)]
         check: bool,
-    },
-    /// Run native AST mutation testing against test runner
-    Mutate {
-        /// Mutate only git-modified files
-        #[arg(short, long)]
-        diff: bool,
-        /// Scoped file or directory path to mutate
-        #[arg(short, long)]
-        scoped: Option<PathBuf>,
-        /// Custom test command (e.g. "cargo test {stem}" or "pnpm test {file}")
-        #[arg(long)]
-        test_cmd: Option<String>,
-        /// Timeout in seconds per mutant
-        #[arg(long)]
-        timeout: Option<u64>,
-        /// Maximum number of mutants to evaluate
-        #[arg(long)]
-        max_mutants: Option<usize>,
-        /// Format output (terminal | agent | json | summary)
-        #[arg(long, value_parser = ["terminal", "agent", "json", "summary"])]
-        format: Option<String>,
-        /// Shorthand for --format json
-        #[arg(long)]
-        json: bool,
-        /// Print concise summary only (totals, score, and survivors)
-        #[arg(long)]
-        summary: bool,
-        /// Write output directly to a file atomically
-        #[arg(long = "output", value_name = "PATH")]
-        output_file: Option<PathBuf>,
     },
     /// Inspect or compare saved gate reports without rescanning
     #[command(args_conflicts_with_subcommands = true)]
@@ -207,24 +177,27 @@ enum Commands {
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Evaluate static policy and verify configured coverage/mutation evidence reports without executing tools (report ingestion only)
-    Verify {
-        /// Path to coverage report (e.g., coverage/lcov.info)
-        #[arg(long)]
-        coverage_report: Option<String>,
-        /// Path to mutation report (e.g., mutants.json or stryker-mutation.json)
-        #[arg(long)]
-        mutation_report: Option<String>,
-        #[command(flatten)]
-        output: OutputArgs,
-        /// Optional path filter(s): only verify files under these paths
-        #[arg(value_name = "PATH")]
-        paths: Vec<PathBuf>,
-    },
     /// Show the fully merged and validated effective policy and its authority
     Config {
         #[arg(long, default_value = "toml", value_parser = ["toml", "json"])]
         format: String,
+    },
+    /// Run an optional specialist producer and bind fresh evidence to its source inputs
+    Evidence {
+        #[arg(value_enum)]
+        producer: hardgate::evidence::Producer,
+        /// Artifact name under .hardgate/evidence (default: coverage or mutation)
+        #[arg(long)]
+        name: Option<String>,
+        /// Installed Rust toolchain; required for LLVM branch/doctest coverage
+        #[arg(long)]
+        toolchain: Option<String>,
+        /// Maximum wall-clock runtime for the producer
+        #[arg(long, default_value_t = 1200)]
+        timeout_secs: u64,
+        /// Explicit supported package/target/feature scope options after --
+        #[arg(last = true)]
+        args: Vec<String>,
     },
     /// Launch as a Model Context Protocol (MCP) server over stdio
     Mcp,
@@ -251,9 +224,6 @@ fn run_cli(cli: Cli) -> commands::CommandResult {
     let _ = build_info::identity();
     let _ = std::hint::black_box(build_info::TARGET);
     let _ = std::hint::black_box(build_info::BUILD_TARGET_MARKER);
-    if matches!(cli.command, Commands::Mutate { .. }) {
-        hardgate::cancellation::install()?;
-    }
     let threads = hardgate::runtime_resources::worker_limit(cli.threads.map(usize::from))?;
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -347,6 +317,22 @@ fn execute_resolved_command(
 ) -> commands::CommandResult {
     match cmd {
         Commands::Fmt { check } => commands::cmd_fmt_in(check, context),
+        Commands::Evidence {
+            producer,
+            name,
+            toolchain,
+            timeout_secs,
+            args,
+        } => hardgate::evidence::produce(
+            hardgate::evidence::EvidenceOptions {
+                producer,
+                name,
+                toolchain,
+                timeout_secs,
+                args,
+            },
+            context,
+        ),
         Commands::Config { format } => commands::inspect::cmd_config(context, &format)
             .map(|()| commands::CommandOutcome::Passed),
         gate => execute_gate_command(gate, context),
@@ -362,8 +348,6 @@ fn execute_gate_command(
         Commands::Scan { file, output } => {
             commands::cmd_scan_in(&file, output.output_options(), context)
         }
-        Commands::Mutate { .. } => execute_mutate_command(cmd, context),
-        Commands::Verify { .. } => execute_verify_command(cmd, context),
         _ => anyhow::bail!("internal command routing error"),
     }
 }
@@ -376,8 +360,8 @@ fn execute_check_command(
         output,
         progress,
         diff,
-        all,
-        dead_code,
+        checks,
+        mutation_report,
         coverage_report,
         paths,
     } = cmd
@@ -389,8 +373,8 @@ fn execute_check_command(
         commands::CheckOptions {
             format: opts.format,
             diff,
-            all,
-            dead_code,
+            checks,
+            mutation_report,
             coverage_report,
             json: opts.json,
             compact: opts.compact,
@@ -403,75 +387,4 @@ fn execute_check_command(
         },
         context,
     )
-}
-
-fn execute_mutate_command(
-    cmd: Commands,
-    context: &hardgate::config::ConfigContext,
-) -> commands::CommandResult {
-    let Commands::Mutate {
-        diff,
-        scoped,
-        test_cmd,
-        timeout,
-        max_mutants,
-        format,
-        json,
-        summary,
-        output_file,
-    } = cmd
-    else {
-        anyhow::bail!("expected mutate command");
-    };
-    commands::cmd_mutate_in(
-        commands::MutateOptions {
-            diff,
-            scoped,
-            test_cmd,
-            timeout_secs: timeout,
-            max_mutants,
-            format: resolve_mutate_format(format, json),
-            summary,
-            output_file,
-        },
-        context,
-    )
-}
-
-fn execute_verify_command(
-    cmd: Commands,
-    context: &hardgate::config::ConfigContext,
-) -> commands::CommandResult {
-    let Commands::Verify {
-        coverage_report,
-        mutation_report,
-        output,
-        paths,
-    } = cmd
-    else {
-        anyhow::bail!("expected verify command");
-    };
-    let opts = output.output_options();
-    commands::cmd_verify_in(
-        commands::VerifyOptions {
-            coverage_report,
-            mutation_report,
-            format: opts.format,
-            json: opts.json,
-            compact: opts.compact,
-            no_snippets: opts.no_snippets,
-            summary: opts.summary,
-            display: opts.display,
-            paths,
-            output_file: opts.output_file,
-        },
-        context,
-    )
-}
-
-fn resolve_mutate_format(format: Option<String>, json: bool) -> Option<String> {
-    if json {
-        return Some("json".to_string());
-    }
-    format
 }

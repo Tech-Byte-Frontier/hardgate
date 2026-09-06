@@ -1,6 +1,5 @@
-//! Resource admission and containment for native mutation workloads.
+//! Resource admission and containment for external mutation workloads.
 mod budget;
-pub(crate) mod input;
 mod lease;
 #[cfg(target_os = "linux")]
 #[path = "resources/managed/linux.rs"]
@@ -13,9 +12,6 @@ use std::io;
 use std::time::{Duration, Instant};
 
 pub(crate) use budget::MutationBudget;
-
-pub(crate) const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const MAX_SNAPSHOT_BYTES: usize = MAX_SOURCE_BYTES + 64 * 1024;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 

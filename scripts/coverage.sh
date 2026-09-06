@@ -3,7 +3,7 @@
 set -eu
 
 # Environment hints alone do not cap a compiler or its descendants.
-if ! python3 scripts/check-resource-boundary.py >/dev/null 2>&1; then
+if ! node scripts/check-resource-boundary.mjs >/dev/null 2>&1; then
   exec scripts/with-resource-limits.sh "$0" "$@"
 fi
 . scripts/resource-worker-env.sh
@@ -21,6 +21,7 @@ if [ "$installed_version" != "$COV_VERSION" ]; then
   fi
   cargo install cargo-llvm-cov --version "=$COV_VERSION" --locked --force
 fi
-mkdir -p coverage
-cargo "+$COV_TOOLCHAIN" llvm-cov --all-targets --all-features --locked --branch --include-build-script --lcov --output-path coverage/lcov.info
-test -s coverage/lcov.info
+BINARY="${HARDGATE_BINARY:-target/release/hardgate}"
+"$BINARY" evidence cargo-llvm-cov --toolchain "$COV_TOOLCHAIN" -- --all-features
+test -s .hardgate/evidence/coverage.lcov
+test -s .hardgate/evidence/coverage.lcov.hardgate.json

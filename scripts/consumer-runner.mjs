@@ -1,7 +1,6 @@
 "use strict";
 
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +11,6 @@ import {
   fail,
   parseExactJson,
   validateGateReport,
-  validateMutationReport,
 } from "./consumer-schema.mjs";
 import {
   failureResult,
@@ -21,13 +19,11 @@ import {
   runProcess,
 } from "./consumer-process.mjs";
 import { initializeFixture } from "./consumer-init.mjs";
-import { invocationIdentityFailures } from "./consumer-invocation.mjs";
 
 export {
   ConsumerMatrixError,
   parseExactJson,
   validateGateReport,
-  validateMutationReport,
 } from "./consumer-schema.mjs";
 export { resolveBinary, runProcess } from "./consumer-process.mjs";
 
@@ -144,141 +140,6 @@ function prepareLegacyReference(root) {
   fs.writeFileSync(source, fs.readFileSync(source, "utf8").replace("legacy(first: string, second: string)", "legacy(first: string, second: string, third: string)"));
 }
 
-function enableMutation(root) {
-  const configPath = path.join(root, "hardgate.toml");
-  const config = fs.readFileSync(configPath, "utf8");
-  const enabled = config.replace(/(\[mutation\]\s*\n\s*enabled\s*=\s*)false/, "$1true");
-  if (enabled === config) fail("fixture-config", "fixture config has no disabled mutation section");
-  fs.writeFileSync(configPath, enabled);
-}
-
-function sourceSnapshot(root, relative) {
-  const file = path.join(root, relative);
-  try {
-    const bytes = fs.readFileSync(file);
-    return { file, bytes, hash: crypto.createHash("sha256").update(bytes).digest("hex"), mode: fs.statSync(file).mode & 0o7777 };
-  } catch (error) {
-    fail("source-missing", `mutation source is missing: ${relative} (${error.message})`);
-  }
-}
-
-function installHarness(root, spec, snapshot, testSnapshot) {
-  const packageRoot = path.resolve(root, spec.packageRoot);
-  const workspaceRoot = path.resolve(root, spec.workspaceRoot);
-  const packageBin = path.join(packageRoot, "node_modules", ".bin");
-  const workspaceBin = path.join(workspaceRoot, "node_modules", ".bin");
-  fs.mkdirSync(packageBin, { recursive: true });
-  fs.mkdirSync(workspaceBin, { recursive: true });
-  const inheritedPath = (process.env.PATH ?? "").split(path.delimiter)
-    .filter((entry) => !path.resolve(entry).endsWith(path.join("node_modules", ".bin")));
-  const pathValue = (packageBin === workspaceBin ? [] : [workspaceBin]).concat(inheritedPath).join(path.delimiter);
-  const expectedPathBins = packageBin === workspaceBin ? [packageBin] : [packageBin, workspaceBin];
-  const harness = path.join(root, ".consumer-harness.mjs");
-  fs.writeFileSync(harness, `import fs from "node:fs"; import crypto from "node:crypto"; import path from "node:path"; import { evaluateBehavior } from ${JSON.stringify(path.resolve(ROOT, "scripts/consumer-behavior.mjs"))};\nconst hash=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");\nconst isolatedRoot=path.resolve(process.cwd(),path.relative(process.env.CONSUMER_PACKAGE_ROOT,process.env.CONSUMER_ROOT)); const rebase=value=>path.resolve(isolatedRoot,path.relative(process.env.CONSUMER_ROOT,value)); const source=rebase(process.env.CONSUMER_SOURCE); const test=rebase(process.env.CONSUMER_TEST); const sourceText=fs.readFileSync(source,"utf8"); const testText=fs.readFileSync(test,"utf8"); const sourceHash=hash(source); const testHash=hash(test); const behavior=evaluateBehavior(sourceText,testText,JSON.parse(process.env.CONSUMER_BEHAVIOR)); const argv=process.argv.slice(2); const expected=JSON.parse(process.env.CONSUMER_ARGV); const executable=fs.realpathSync(process.env.CONSUMER_EXECUTABLE); const pathEntries=(process.env.PATH??"").split(path.delimiter).filter(Boolean).map(entry=>path.resolve(entry)); const pathBins=pathEntries.filter(entry=>entry.endsWith(path.join("node_modules",".bin"))); const expectedPathBins=JSON.parse(process.env.CONSUMER_EXPECTED_PATH_BINS).map(rebase); if(process.env.CONSUMER_PACKAGE_ROOT!==process.env.CONSUMER_WORKSPACE_ROOT) expectedPathBins.push(path.join(process.env.CONSUMER_WORKSPACE_ROOT,"node_modules",".bin")); const record={cwd:process.cwd(), manager:path.basename(executable), managerEnv:process.env.CONSUMER_MANAGER, argv, executable, isolatedRoot, packageRoot:rebase(process.env.CONSUMER_PACKAGE_ROOT), workspaceRoot:rebase(process.env.CONSUMER_WORKSPACE_ROOT), originalSourceHash:hash(process.env.CONSUMER_SOURCE), originalTestHash:hash(process.env.CONSUMER_TEST), path:process.env.PATH??"", pathEntries, pathBins, pathBinsExpected:JSON.stringify(pathBins)===JSON.stringify(expectedPathBins), sourceHash, testHash, sourceMarker:sourceText.includes(process.env.CONSUMER_SOURCE_MARKER), behaviorExpected:JSON.parse(process.env.CONSUMER_BEHAVIOR).expected, behaviorActual:behavior.actual, behaviorPassed:behavior.passed, behaviorReason:behavior.reason, testExists:fs.statSync(test).isFile(), argvExpected:JSON.stringify(argv)===JSON.stringify(expected)}; fs.appendFileSync(process.env.CONSUMER_LOG, JSON.stringify(record)+"\\n"); process.exitCode=record.testExists && testHash===process.env.CONSUMER_TEST_HASH && record.argvExpected && record.pathBinsExpected && record.managerEnv===record.manager && record.behaviorPassed ? 0 : 1;\n`);
-  const managerPath = path.join(packageBin, spec.manager);
-  fs.writeFileSync(managerPath, `#!/bin/sh\nset -eu\nCONSUMER_EXECUTABLE="$0" CONSUMER_MANAGER="${spec.manager}" exec node "$CONSUMER_HARNESS" "$@"\n`, { mode: 0o755 });
-  return {
-    log: path.join(root, ".consumer-command-log"),
-    env: {
-      CONSUMER_ROOT: root, CONSUMER_HARNESS: harness, CONSUMER_LOG: path.join(root, ".consumer-command-log"),
-      CONSUMER_SOURCE: snapshot.file, CONSUMER_TEST: testSnapshot.file,
-      CONSUMER_SOURCE_HASH: snapshot.hash, CONSUMER_TEST_HASH: testSnapshot.hash,
-      CONSUMER_SOURCE_MARKER: spec.sourceMarker, CONSUMER_ARGV: JSON.stringify(spec.argv),
-      CONSUMER_PACKAGE_ROOT: packageRoot, CONSUMER_WORKSPACE_ROOT: workspaceRoot,
-      CONSUMER_EXPECTED_PATH_BINS: JSON.stringify(expectedPathBins), CONSUMER_BEHAVIOR: JSON.stringify(spec.behavior), PATH: pathValue,
-    },
-    root, packageRoot, workspaceRoot, packageBin, workspaceBin, managerPath,
-  };
-}
-
-function readCommands(log) {
-  if (!fs.existsSync(log)) return [];
-  const lines = fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
-  try { return lines.map((line) => JSON.parse(line)); } catch (error) { fail("command-log", `consumer command log is malformed: ${error.message}`); }
-}
-
-function mutationProcessFailure(result) {
-  if (result.status === 1 && /no source files found for mutation testing|no viable AST mutation points/i.test(result.stderr)) return ["no-target", "mutation run found no eligible production target"];
-  if (result.status === 1 && /unmutated baseline/i.test(result.stderr)) return ["baseline-failure", "mutation baseline failed before mutants were executed"];
-  return processFailure(result, 0, "mutation");
-}
-
-function earlyMutationFailure(processError, result, commands) {
-  if (!processError) return null;
-  const immediate = ["baseline-failure", "no-target", "spawn-error", "signal", "timeout", "no-exit-status"];
-  return immediate.includes(processError[0]) ? failureResult(processError[0], processError[1], result, { commands }) : null;
-}
-
-function parseMutationReport(result, commands) {
-  try {
-    return { report: validateMutationReport(parseExactJson(result.stdout, "mutation")), failure: null };
-  } catch (error) {
-    return { report: null, failure: failureResult(error.code ?? "malformed-report", error.message, result, { commands }) };
-  }
-}
-
-function mutationSummaryFailure(report, result, commands) {
-  const truthful = report.exit_code === result.status && report.passed && report.stats.killed === 1 && report.stats.survived === 0 && report.stats.total === 1 && report.score === 100;
-  return truthful ? null : failureResult("mutation-report-failed", "mutation report did not record one truthful killed mutant", result, { commands });
-}
-
-function mutationResultFailures(report, spec) {
-  const mutationResult = report.results[0];
-  const mutant = mutationResult?.mutant;
-  const failures = [];
-  if (!mutationResult || mutationResult.outcome !== "Killed") failures.push("representative mutant was not killed");
-  if (!mutant || mutant.file !== spec.sourcePath) failures.push(`mutation target must be exactly ${spec.sourcePath}`);
-  if (mutationResult?.command !== `${spec.manager} ${spec.argv.join(" ")}`) failures.push("mutation command does not match the resolved selector");
-  if (!mutationResult?.source_restored) failures.push("mutation report did not confirm source restoration");
-  return failures;
-}
-
-function invocationAssertionFailures(command, index, testSnapshot, snapshot) {
-  const failures = [];
-  const position = index + 1;
-  if (command.originalSourceHash !== snapshot.hash || command.originalTestHash !== testSnapshot.hash) failures.push(`invocation ${position} modified original workspace files`);
-  if (command.testHash !== testSnapshot.hash) failures.push(`invocation ${position} test source changed during mutation`);
-  if (command.behaviorPassed !== (index === 0)) failures.push(`invocation ${position} behavior assertion outcome was unexpected`);
-  if (!command.testExists || !command.argvExpected) failures.push(`invocation ${position} fixture assertion failed`);
-  return failures;
-}
-
-function invocationFailures(command, index, context) {
-  return [
-    ...invocationIdentityFailures(command, index + 1, context.harness, context.spec),
-    ...invocationAssertionFailures(command, index, context.testSnapshot, context.snapshot),
-  ];
-}
-
-function mutationEvidenceFailures(report, commands, context) {
-  const failures = mutationResultFailures(report, context.spec);
-  if (commands.length !== 2) failures.push(`expected exactly two test invocations, got ${commands.length}`);
-  commands.forEach((command, index) => failures.push(...invocationFailures(command, index, context)));
-  const restored = sourceSnapshot(context.root, context.spec.sourcePath);
-  if (restored.hash !== context.snapshot.hash || !restored.bytes.equals(context.snapshot.bytes) || restored.mode !== context.snapshot.mode) failures.push("production source bytes/hash/mode were not restored exactly");
-  return failures;
-}
-
-export function runMutation(binary, root, spec) {
-  enableMutation(root);
-  const snapshot = sourceSnapshot(root, spec.sourcePath);
-  const testSnapshot = sourceSnapshot(root, spec.testPath);
-  const harness = installHarness(root, spec, snapshot, testSnapshot);
-  const result = runProcess({ binary, args: ["mutate", "--scoped", spec.scope, "--max-mutants", "1", "--timeout", "10", "--format", "json"], cwd: root, env: harness.env, timeout: 30_000 });
-  const commands = readCommands(harness.log);
-  const processError = mutationProcessFailure(result);
-  const earlyFailure = earlyMutationFailure(processError, result, commands);
-  if (earlyFailure) return earlyFailure;
-  const parsed = parseMutationReport(result, commands);
-  if (parsed.failure) return parsed.failure;
-  if (processError) return failureResult("mutation-report-failed", `mutation process/report status mismatch: ${processError[1]}`, result, { commands });
-  const summaryFailure = mutationSummaryFailure(parsed.report, result, commands);
-  if (summaryFailure) return summaryFailure;
-  const failures = mutationEvidenceFailures(parsed.report, commands, { harness, snapshot, testSnapshot, spec, root });
-  if (failures.length) return failureResult("mutation-evidence-mismatch", failures.join("; "), result, { commands });
-  return { status: "pass", reasonCode: "ok", diagnostics: "", exitCode: result.status, signal: null, timedOut: false, report: parsed.report, commands };
-}
-
 function prepareCase(binary, testCase) {
   const root = copyFixture(testCase);
   try {
@@ -301,7 +162,7 @@ function cleanupCaseRoot(root, outcome) {
     fs.rmSync(root, { recursive: true, force: true });
     return outcome;
   } catch (error) {
-    const previous = outcome.diagnostics || outcome.mutation?.diagnostics || outcome.check?.diagnostics || "";
+    const previous = outcome.diagnostics || outcome.check?.diagnostics || "";
     const detail = `fixture temp cleanup failed: ${error.message}`;
     return { ...outcome, status: "fail", diagnostics: bounded(previous ? `${previous}; ${detail}` : detail) };
   }
@@ -313,11 +174,10 @@ export function runCase(binary, testCase, keepTemp = false) {
   try {
     root = prepareCase(binary, testCase);
     const check = runCheck(binary, root, testCase.check, Boolean(testCase.legacy));
-    const mutation = testCase.mutation ? runMutation(binary, root, testCase.mutation) : null;
-    const status = [check, mutation].some((item) => item?.status === "fail") ? "fail" : "pass";
-    outcome = { id: testCase.id, fixture: testCase.fixture, status, requirement: testCase.mutation?.requirement ?? testCase.check?.requirement ?? null, check, mutation, diagnostics: null };
+    const status = check.status;
+    outcome = { id: testCase.id, fixture: testCase.fixture, status, requirement: testCase.check?.requirement ?? null, check, diagnostics: null };
   } catch (error) {
-    outcome = { id: testCase.id, fixture: testCase.fixture, status: "fail", requirement: testCase.mutation?.requirement ?? testCase.check?.requirement ?? null, check: null, mutation: null, diagnostics: bounded(error.message) };
+    outcome = { id: testCase.id, fixture: testCase.fixture, status: "fail", requirement: testCase.check?.requirement ?? null, check: null, diagnostics: bounded(error.message) };
   }
   return keepTemp ? outcome : cleanupCaseRoot(root, outcome);
 }
@@ -336,7 +196,7 @@ export function runConsumerMatrix(options = {}) {
 
 export function renderHuman(report) {
   for (const result of report.cases) {
-    const detail = result.diagnostics || result.mutation?.diagnostics || result.check?.diagnostics || "";
+    const detail = result.diagnostics || result.check?.diagnostics || "";
     console.log(`${result.status.toUpperCase().padEnd(7)} ${caseLabel(result)}${detail ? ` — ${bounded(detail)}` : ""}`);
   }
   console.log(`consumer matrix: ${report.summary.pass} pass, ${report.summary.pending} pending, ${report.summary.fail} fail`);
