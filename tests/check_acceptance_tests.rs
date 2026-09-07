@@ -11,7 +11,12 @@ fn fixture_command(program: &str) -> Command {
     let mut command = Command::new(program);
     // Fixture projects exercise the supported stable specialists, even when
     // this test executable was built by the branch-coverage nightly.
-    command.env("RUSTUP_TOOLCHAIN", env!("CARGO_PKG_RUST_VERSION"));
+    // The package MSRV is a compatibility floor, not the tested specialist
+    // toolchain. CI supplies its pin; local runs use rust-toolchain.toml's pin.
+    command.env(
+        "RUSTUP_TOOLCHAIN",
+        option_env!("RUST_TOOLCHAIN").unwrap_or("1.98.1"),
+    );
     for variable in [
         "RUSTC",
         "RUSTDOC",

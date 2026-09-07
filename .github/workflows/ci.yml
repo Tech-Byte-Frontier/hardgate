@@ -70,11 +70,11 @@ jobs:
           sudo systemctl start "user@$(id -u).service"
       - run: cargo fmt --all --check
       - run: scripts/with-resource-limits.sh cargo clippy --all-targets --all-features --locked -- -D warnings
-      - run: scripts/with-resource-limits.sh cargo test --all-targets --all-features --locked
+      - run: scripts/with-resource-limits.sh cargo test --all-targets --all-features --locked --no-fail-fast
       - name: Install the minimum supported Rust compiler
         run: rustup toolchain install "$RUST_MSRV" --profile minimal
       - name: Test locked dependencies and all targets on the MSRV
-        run: scripts/with-resource-limits.sh cargo "+${RUST_MSRV}" test --all-targets --all-features --locked
+        run: scripts/with-resource-limits.sh cargo "+${RUST_MSRV}" test --all-targets --all-features --locked --no-fail-fast
       - name: Resource boundary and supervisor concurrency regressions
         run: |
           node tests/resource_boundary.test.mjs
