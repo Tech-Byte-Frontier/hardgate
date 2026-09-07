@@ -28,6 +28,7 @@ await import("./github_package_mirror.test.mjs");
 await import("./native_channel_consumer.test.mjs");
 await import("./native_receipt.test.mjs");
 await import("./portable_release.test.mjs");
+await import("./release_direct_consumer.test.mjs");
 await import("./crate_publication.test.mjs");
 
 console.log("release_contract.test: OK");

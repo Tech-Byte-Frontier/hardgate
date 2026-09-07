@@ -12,7 +12,10 @@ case "${1:-}" in
 esac
 install_root=$(mktemp -d)
 trap 'rm -rf -- "$install_root"' EXIT
-for asset in hardgate-linux-x64.tar.gz SHA256SUMS "hardgate-${RELEASE_VERSION}.sbom.cdx.json"; do
+# The shared checksum manifest covers every platform, so download and compare
+# the entire verified bundle before checking it and running the host binary.
+for expected_asset in dist/*; do
+  asset=${expected_asset##*/}
   gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$install_root"
   cmp -- "dist/$asset" "$install_root/$asset"
 done
