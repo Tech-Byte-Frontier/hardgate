@@ -23,6 +23,7 @@ const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-packed-consu
 
 try {
   const fixture = makeFixtureArchives({ fixtureRoot, root });
+  const { version } = fixture;
   const archiveFiles = fs.readdirSync(fixture.packagesDir).filter((name) => name.endsWith(".tgz"));
   const archiveHashes = new Map(archiveFiles.map((name) => [name, hash(path.join(fixture.packagesDir, name))]));
   const previousOverride = process.env.HARDGATE_BINARY;
@@ -32,7 +33,7 @@ try {
     report = await checkPackedConsumers({
       packagesDir: fixture.packagesDir,
       binary: fixture.nativeBinary,
-      version: "0.6.0",
+      version,
     });
   } finally {
     if (previousOverride === undefined) delete process.env.HARDGATE_BINARY;
@@ -42,16 +43,17 @@ try {
   assert.equal(report.consumers.map((consumer) => `${consumer.manager}:${consumer.scope}`).join(","), "npm:project,pnpm:project,npm:global,pnpm:global");
   assert.equal(report.consumers.every((consumer) => consumer.nativeSha256 === report.binarySha256), true);
   assert.equal(report.consumers.every((consumer) => consumer.acceptance.passed && consumer.acceptance.testFailurePropagated && consumer.acceptance.inputsPreserved), true);
-  assert.match(report.expectedVersionOutput, /^hardgate 0\.6\.0 \([0-9a-f]+\)$/);
+  assert.ok(report.expectedVersionOutput.startsWith(`hardgate ${version} (`));
+  assert.match(report.expectedVersionOutput.slice(`hardgate ${version} `.length), /^\([0-9a-f]+\)$/);
   for (const [name, expected] of archiveHashes) assert.equal(hash(path.join(fixture.packagesDir, name)), expected, `${name} was rewritten`);
 
   const missingHost = path.join(fixtureRoot, "missing-host");
   fs.mkdirSync(missingHost);
   for (const name of archiveFiles) {
-    if (!name.startsWith("hardgate-linux-x64-0.6.0")) fs.copyFileSync(path.join(fixture.packagesDir, name), path.join(missingHost, name));
+    if (!name.startsWith(`hardgate-linux-x64-${version}`)) fs.copyFileSync(path.join(fixture.packagesDir, name), path.join(missingHost, name));
   }
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: missingHost, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: missingHost, binary: fixture.nativeBinary, version }),
     /missing host optional dependency hardgate-linux-x64/,
   );
 
@@ -62,18 +64,18 @@ try {
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: badUrl, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: badUrl, binary: fixture.nativeBinary, version }),
     /optionalDependency fixture-redirect must be a registry version/,
   );
 
   const badPlatformDeps = packModified({ fixtureRoot }, {
     sourceName: "hardgate-linux-x64", label: "platform-deps",
     mutate: (manifest) => {
-      manifest.optionalDependencies = { "fixture-extra": "0.6.0" };
+      manifest.optionalDependencies = { "fixture-extra": version };
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: badPlatformDeps, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: badPlatformDeps, binary: fixture.nativeBinary, version }),
     /hardgate-linux-x64 must not declare optionalDependencies/,
   );
 
@@ -84,7 +86,7 @@ try {
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: badHook, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: badHook, binary: fixture.nativeBinary, version }),
     /must not declare npm lifecycle hook postinstall/,
   );
 
@@ -95,7 +97,7 @@ try {
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: badDescriptor, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: badDescriptor, binary: fixture.nativeBinary, version }),
     /hardgate-linux-x64 manifest cpu=\["arm64"\] expected \["x64"\]/,
   );
 
@@ -106,8 +108,8 @@ try {
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: missingNative, binary: fixture.nativeBinary, version: "0.6.0" }),
-    /hardgate-linux-x64@0\.6\.0\.tgz is missing package\/bin\/hardgate/,
+    checkPackedConsumers({ packagesDir: missingNative, binary: fixture.nativeBinary, version }),
+    (error) => error.message.includes(`hardgate-linux-x64@${version}.tgz is missing package/bin/hardgate`),
   );
 
   const badBin = packModified({ fixtureRoot }, {
@@ -117,26 +119,26 @@ try {
     },
   });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: badBin, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: badBin, binary: fixture.nativeBinary, version }),
     /manifest bin\.hardgate must be exactly bin\/hardgate\.js/,
   );
 
   const duplicate = makeDuplicateManifestArchives({ fixtureRoot });
   await assert.rejects(
-    checkPackedConsumers({ packagesDir: duplicate.packagesDir, binary: fixture.nativeBinary, version: "0.6.0" }),
+    checkPackedConsumers({ packagesDir: duplicate.packagesDir, binary: fixture.nativeBinary, version }),
     /duplicate member: package\/package\.json/,
   );
   assert.equal(fs.existsSync(duplicate.marker), false, "duplicate manifest hook must not execute");
 
   assert.throws(
-    () => inspectPackedArtifacts(makeUnsafeArchive({ fixtureRoot }), "0.6.0", fixture.nativeBinary),
+    () => inspectPackedArtifacts(makeUnsafeArchive({ fixtureRoot }), version, fixture.nativeBinary),
     /member path is not canonical/,
   );
 
-  const inspected = inspectPackedArtifacts(fixture.packagesDir, "0.6.0", fixture.nativeBinary);
+  const inspected = inspectPackedArtifacts(fixture.packagesDir, version, fixture.nativeBinary);
   const registry = await startLocalRegistry(inspected.artifacts);
   try {
-    const skipped = await makeSkippedOptionalRoot({ fixtureRoot, nativeBinary: fixture.nativeBinary, registry });
+    const skipped = await makeSkippedOptionalRoot({ fixtureRoot, nativeBinary: fixture.nativeBinary, registry, version });
     assert.throws(
       () => resolveInstalledPackage(skipped.root, "hardgate-linux-x64"),
       /installed optional dependency hardgate-linux-x64 is not resolvable/,
@@ -163,7 +165,7 @@ try {
   fs.mkdirSync(path.join(ancestorRoot, "node_modules", "hardgate-linux-x64"), { recursive: true });
   fs.mkdirSync(path.join(ancestorRoot, "child", "node_modules"), { recursive: true });
   fs.writeFileSync(path.join(ancestorRoot, "child", "package.json"), "{}\n");
-  fs.writeFileSync(path.join(ancestorRoot, "node_modules", "hardgate-linux-x64", "package.json"), JSON.stringify({ name: "hardgate-linux-x64", version: "0.6.0" }));
+  fs.writeFileSync(path.join(ancestorRoot, "node_modules", "hardgate-linux-x64", "package.json"), JSON.stringify({ name: "hardgate-linux-x64", version }));
   await assert.rejects(
     Promise.resolve().then(() => resolveInstalledPackage(path.join(ancestorRoot, "child"), "hardgate-linux-x64")),
     /escaped fresh consumer node_modules/,
@@ -176,7 +178,7 @@ try {
   fs.ftruncateSync(fd, MAX_ARCHIVE_BYTES + 1);
   fs.closeSync(fd);
   assert.throws(
-    () => inspectPackedArtifacts(oversizedDir, "0.6.0", fixture.nativeBinary),
+    () => inspectPackedArtifacts(oversizedDir, version, fixture.nativeBinary),
     /archive exceeds 67108864 bytes/,
   );
 

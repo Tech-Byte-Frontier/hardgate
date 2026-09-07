@@ -5,8 +5,11 @@ if [ "$#" -eq 0 ]; then
   echo 'usage: scripts/with-resource-limits.sh COMMAND [ARG ...]' >&2
   exit 2
 fi
-if ! node scripts/check-resource-boundary.mjs >/dev/null 2>&1; then
+if boundary_error=$(node scripts/check-resource-boundary.mjs 2>&1); then
+  :
+else
   if [ "${HARDGATE_RESOURCE_SCRIPT_CHILD:-}" = 1 ]; then
+    printf '%s\n' "$boundary_error" >&2
     echo 'hardgate: kernel resource limits were not established; command was not started' >&2
     exit 2
   fi

@@ -9,6 +9,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 
+import { readCargoVersion } from "../scripts/release-support.mjs";
+
 import { runReleaseProcess } from "../scripts/release-process.mjs";
 
 function run(command, args, options = {}) {
@@ -44,6 +46,8 @@ function fixtureEnvironment(fixtureRoot) {
 }
 
 export function makeFixtureArchives({ fixtureRoot, root }) {
+  const version = readCargoVersion(root);
+  assert.ok(version, "Cargo.toml must declare the fixture version");
   const packagesDir = path.join(fixtureRoot, "packages");
   fs.mkdirSync(packagesDir, { recursive: true });
   const nativeBinary = path.resolve(process.env.HARDGATE_BINARY ?? path.join(root, "target/release/hardgate"));
@@ -56,8 +60,8 @@ export function makeFixtureArchives({ fixtureRoot, root }) {
     // execute real Rust formatting, Clippy, and tests.
     const manifestPath = path.join(packageDirectory, "package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    manifest.version = "0.6.0";
-    for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = "0.6.0";
+    manifest.version = version;
+    for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = version;
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     if (name !== "hardgate") {
       fs.copyFileSync(nativeBinary, path.join(packageDirectory, "bin", "hardgate"));
@@ -67,7 +71,7 @@ export function makeFixtureArchives({ fixtureRoot, root }) {
       cwd: packageDirectory, env: fixtureEnvironment(fixtureRoot),
     });
   }
-  return { packagesDir, nativeBinary };
+  return { packagesDir, nativeBinary, version };
 }
 
 export function packModified({ fixtureRoot }, { sourceName, label, mutate, mutateFiles = () => {} }) {
@@ -133,7 +137,7 @@ export function httpStatus(url) {
   });
 }
 
-export async function makeSkippedOptionalRoot({ fixtureRoot, nativeBinary, registry }) {
+export async function makeSkippedOptionalRoot({ fixtureRoot, nativeBinary, registry, version }) {
   const root = path.join(fixtureRoot, "skipped-optional");
   const ambient = path.join(fixtureRoot, "ambient-bin");
   const sentinel = path.join(fixtureRoot, "sentinel-bin");
@@ -156,7 +160,7 @@ export async function makeSkippedOptionalRoot({ fixtureRoot, nativeBinary, regis
   fs.mkdirSync(cache, { recursive: true });
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(userConfig, `registry=${registry.baseUrl}\ncache=${cache}\nomit=optional\nignore-scripts=false\naudit=false\nfund=false\n`);
-  await runAsync("npm", ["install", "--no-audit", "--no-fund", "--omit=optional", "--registry", registry.baseUrl, "@tech-byte-frontier/hardgate@0.6.0"], { cwd: root, env });
+  await runAsync("npm", ["install", "--no-audit", "--no-fund", "--omit=optional", "--registry", registry.baseUrl, `@tech-byte-frontier/hardgate@${version}`], { cwd: root, env });
   fs.copyFileSync(nativeBinary, path.join(ambient, "hardgate"));
   fs.chmodSync(path.join(ambient, "hardgate"), 0o755);
   fs.writeFileSync(path.join(sentinel, "hardgate"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
