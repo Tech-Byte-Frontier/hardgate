@@ -15,6 +15,9 @@ pub(super) fn main_exit() -> ExitCode {
 
 fn run_parsed(cli: super::Cli) -> ExitCode {
     configure_color(cli.color);
+    hardgate::engines::configure_progress_jsonl(
+        matches!(&cli.command, Commands::Check { progress: Some(mode), .. } if mode == "jsonl"),
+    );
     let stage = command_stage(&cli.command);
     let json = command_json(&cli.command);
     let timing = cli.timing;
@@ -151,6 +154,7 @@ fn command_json(command: &Commands) -> bool {
             output.output_options().is_json()
         }
         Commands::Config { format } => format == "json",
+        Commands::Doctor { json } => *json,
         Commands::Report {
             subcommand: Some(super::ReportCommand::Compare { output, .. }),
             ..
@@ -178,6 +182,7 @@ fn utility_stage(command: &Commands) -> &'static str {
         Commands::Init { .. } => "init",
         Commands::Completions { .. } => "completions",
         Commands::Fmt { .. } => "fmt",
+        Commands::Doctor { .. } => "doctor",
         Commands::Evidence { .. } => "evidence",
         Commands::Report { .. } => "report",
         _ => "mcp",

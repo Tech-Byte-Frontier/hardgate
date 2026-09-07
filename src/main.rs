@@ -175,11 +175,23 @@ Saved-report --top ranks files; --max-diagnostics limits findings after filterin
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Format code using orchestrated project formatter (e.g. oxfmt)
+    /// Inspect tool launchers, evidence readiness, and host requirements
+    Doctor {
+        /// Emit a structured preflight report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Format the whole project or explicitly selected files
     Fmt {
         /// Check only without writing changes to disk
         #[arg(long)]
         check: bool,
+        /// Format staged, unstaged, and untracked files
+        #[arg(long, conflicts_with = "files")]
+        changed: bool,
+        /// Files to format; requires orchestration.format_files (format_check_files with --check)
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
     },
     /// Inspect or compare saved gate reports without rescanning
     #[command(args_conflicts_with_subcommands = true)]
@@ -340,7 +352,12 @@ fn execute_resolved_command(
     context: &hardgate::config::ConfigContext,
 ) -> commands::CommandResult {
     match cmd {
-        Commands::Fmt { check } => commands::cmd_fmt_in(check, context),
+        Commands::Fmt {
+            check,
+            changed,
+            files,
+        } => commands::fmt::cmd_fmt_scoped(check, changed, &files, context),
+        Commands::Doctor { json } => commands::doctor::cmd_doctor(context, json),
         Commands::Evidence {
             producer,
             name,

@@ -15,6 +15,7 @@ pub(super) struct CapturedOutput {
     stderr_result: Option<CapturedStream>,
     cancel: Arc<AtomicBool>,
     cargo: bool,
+    pub(super) latest: super::progress::Latest,
 }
 
 impl CapturedOutput {
@@ -28,19 +29,21 @@ impl CapturedOutput {
 
     fn with_cargo(child: &mut Child, cargo: bool) -> Self {
         let cancel = Arc::new(AtomicBool::new(false));
+        let latest = super::progress::Latest::default();
         Self {
             stdout: child
                 .stdout
                 .take()
-                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), cargo)),
+                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), cargo, latest.clone())),
             stderr: child
                 .stderr
                 .take()
-                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), false)),
+                .map(|reader| spawn_reader(reader, Arc::clone(&cancel), false, latest.clone())),
             stdout_result: None,
             stderr_result: None,
             cancel,
             cargo,
+            latest,
         }
     }
 
@@ -85,45 +88,80 @@ pub(super) struct CaptureResult {
 }
 
 #[cfg(unix)]
-fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>, cargo: bool) -> Receiver<CapturedStream>
+fn spawn_reader<R>(
+    reader: R,
+    cancel: Arc<AtomicBool>,
+    cargo: bool,
+    latest: super::progress::Latest,
+) -> Receiver<CapturedStream>
 where
     R: Read + std::os::fd::AsRawFd + Send + 'static,
 {
     let nonblocking = super::set_nonblocking(reader.as_raw_fd()).is_ok();
-    spawn_reader_loop(reader, cancel, nonblocking, cargo)
+    spawn_reader_loop(
+        reader,
+        cancel,
+        ReaderOptions {
+            nonblocking,
+            cargo,
+            latest,
+        },
+    )
 }
 
 #[cfg(not(unix))]
-fn spawn_reader<R>(reader: R, cancel: Arc<AtomicBool>, cargo: bool) -> Receiver<CapturedStream>
+fn spawn_reader<R>(
+    reader: R,
+    cancel: Arc<AtomicBool>,
+    cargo: bool,
+    latest: super::progress::Latest,
+) -> Receiver<CapturedStream>
 where
     R: Read + Send + 'static,
 {
-    spawn_reader_loop(reader, cancel, false, cargo)
+    spawn_reader_loop(
+        reader,
+        cancel,
+        ReaderOptions {
+            nonblocking: false,
+            cargo,
+            latest,
+        },
+    )
 }
 
 fn spawn_reader_loop<R>(
     reader: R,
     cancel: Arc<AtomicBool>,
-    nonblocking: bool,
-    cargo: bool,
+    options: ReaderOptions,
 ) -> Receiver<CapturedStream>
 where
     R: Read + Send + 'static,
 {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let (bytes, truncated) = read_stream(reader, &cancel, nonblocking, cargo);
+        let (bytes, truncated) = read_stream(reader, &cancel, options);
         let _ = sender.send(CapturedStream { bytes, truncated });
     });
     receiver
 }
 
+struct ReaderOptions {
+    nonblocking: bool,
+    cargo: bool,
+    latest: super::progress::Latest,
+}
+
 fn read_stream<R: Read>(
     mut reader: R,
     cancel: &Arc<AtomicBool>,
-    nonblocking: bool,
-    cargo: bool,
+    options: ReaderOptions,
 ) -> (Vec<u8>, bool) {
+    let ReaderOptions {
+        nonblocking,
+        cargo,
+        latest,
+    } = options;
     let mut bytes = Vec::with_capacity(super::MAX_STREAM_BYTES);
     let mut truncated = false;
     let mut cargo_stream = cargo.then(super::cargo_stream::CargoStream::default);
@@ -132,6 +170,7 @@ fn read_stream<R: Read>(
         match read_step(&mut reader, &mut buffer, nonblocking) {
             ReaderStep::Done => break,
             ReaderStep::Chunk(read) => {
+                latest.observe(&buffer[..read]);
                 if let Some(stream) = &mut cargo_stream {
                     stream.push(&buffer[..read]);
                 } else {

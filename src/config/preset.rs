@@ -96,6 +96,8 @@ fn make_orchestration() -> OrchestrationConfig {
         require_isolation: false,
         format_check: None,
         format: None,
+        format_files: None,
+        format_check_files: None,
         lint: None,
         test_cmd: None,
         additional_tests: Vec::new(),

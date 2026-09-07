@@ -108,6 +108,23 @@ fn validate_mutation(mutation: &MutationConfig) -> Result<()> {
 }
 
 fn validate_orchestration(orchestration: &OrchestrationConfig) -> Result<()> {
+    for (key, command) in [
+        ("format_files", &orchestration.format_files),
+        ("format_check_files", &orchestration.format_check_files),
+    ] {
+        if let Some(command) = command {
+            let tokens = crate::engines::orchestration::shell_words_split(command);
+            anyhow::ensure!(
+                tokens
+                    .iter()
+                    .filter(|token| token.as_str() == "{files}")
+                    .count()
+                    == 1
+                    && tokens.first().is_some_and(|token| token != "{files}"),
+                "orchestration.{key} requires exactly one standalone {{files}} argument"
+            );
+        }
+    }
     if let Some(value) = orchestration.timeout_secs {
         ensure_positive(value, "orchestration.timeout_secs")?;
     }

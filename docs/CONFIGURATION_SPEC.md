@@ -404,6 +404,9 @@ additional_tests = ["cargo test --workspace --doc --locked"]
 # Explicit project feature contract, for example:
 feature_checks = ["cargo check --workspace --no-default-features --locked"]
 # JS/TS: typecheck = "npm run typecheck"
+# Optional file-aware commands for hardgate fmt <files> / --changed:
+# format_files = "oxfmt {files}"
+# format_check_files = "oxfmt --check {files}"
 timeout_secs = 300
 ```
 
@@ -444,3 +447,23 @@ freshness and integrity regardless of disposable test output. Coverage tools
 must not overwrite source/test/config inputs. Commands needing temporary files
 should use their runtime `$TMPDIR`, for example
 `mktemp -d "${TMPDIR:-/tmp}/finance-hardgate.XXXXXXXX"`.
+
+### Browser output during checks
+
+Screenshots and traces are generated output, but writing them beside tests or
+other protected inputs still fails verification. Hardgate supplies a disposable
+`TMPDIR` inside the private workspace on both macOS and Linux. For Playwright:
+
+```ts
+// playwright.config.ts
+export default defineConfig({
+  outputDir: `${process.env.TMPDIR}/playwright-results`,
+});
+// Inside a test: do not hard-code a source-relative screenshot path.
+await page.screenshot({ path: testInfo.outputPath('screenshot.png') });
+```
+
+These files are removed with the check workspace. Snapshot baselines remain
+protected inputs; update them intentionally outside `hardgate check`. Merely
+ignoring a path in Git or labeling source as generated does not permit writes.
+No arbitrary output-path exemptions are added by scoped formatting.

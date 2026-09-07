@@ -92,41 +92,52 @@ impl SupportedLanguage {
         let tree = lang
             .parse_tree(content)
             .ok_or_else(|| anyhow::anyhow!("Tree-sitter did not return a syntax tree"))?;
-        if has_syntax_errors(&tree, lang, content.as_bytes()) {
-            anyhow::bail!("Tree-sitter found syntax errors in {}", path.display());
+        if let Some(node) = first_syntax_error(tree.root_node(), lang, content.as_bytes()) {
+            let point = node.start_position();
+            let column = content
+                .lines()
+                .nth(point.row)
+                .map_or(point.column + 1, |line| {
+                    line.get(..point.column)
+                        .map_or(point.column + 1, |prefix| prefix.chars().count() + 1)
+                });
+            let compiler = if lang == Self::Rust {
+                "cargo check"
+            } else {
+                "the project TypeScript/JavaScript compiler"
+            };
+            anyhow::bail!(
+                "Hardgate parser could not analyze {}:{}:{} (syntax errors reported by Tree-sitter; source validity unconfirmed). Invalid source and unsupported parser syntax are distinct: verify with {compiler}. If the compiler accepts this file, this is a Hardgate parser limitation; report the syntax or use an equivalent imported type alias. No complete AST evidence was produced.",
+                path.display(),
+                point.row + 1,
+                column
+            );
         }
         Ok(Some((lang, tree)))
     }
 }
 
-fn has_syntax_errors(tree: &tree_sitter::Tree, lang: SupportedLanguage, source: &[u8]) -> bool {
-    let root = tree.root_node();
-    if !root.has_error() {
-        return false;
-    }
-    has_genuine_syntax_error(root, lang, source)
-}
-
-fn has_genuine_syntax_error(
-    node: tree_sitter::Node,
+fn first_syntax_error<'tree>(
+    node: tree_sitter::Node<'tree>,
     lang: SupportedLanguage,
     source: &[u8],
-) -> bool {
-    if node.is_error() || node.is_missing() {
-        if is_benign_jsx_attribute_error(node, lang, source) {
-            return false;
-        }
-        return true;
+) -> Option<tree_sitter::Node<'tree>> {
+    if !node.has_error() {
+        return None;
     }
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i)
-            && child.has_error()
-            && has_genuine_syntax_error(child, lang, source)
+    if (node.is_error() || node.is_missing()) && is_benign_jsx_attribute_error(node, lang, source) {
+        return None;
+    }
+    // Prefer the smallest offending node over a broad recovery ERROR spanning the file.
+    for index in 0..node.child_count() {
+        if let Some(error) = node
+            .child(index)
+            .and_then(|child| first_syntax_error(child, lang, source))
         {
-            return true;
+            return Some(error);
         }
     }
-    false
+    (node.is_error() || node.is_missing()).then_some(node)
 }
 
 fn is_benign_jsx_attribute_error(

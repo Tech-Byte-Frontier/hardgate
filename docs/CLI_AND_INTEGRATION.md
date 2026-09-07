@@ -236,6 +236,11 @@ hardgate check --json | jq '.clone_violations'
 `check` and saved-report commands while retaining stdout output.
 Setup errors use the normal error channel. `check --progress jsonl` emits stage events to
 stderr; the final report remains the authority for engine completion and verdict.
+Running external commands emit a heartbeat every 10 seconds with active phase,
+phase elapsed time, and timeout. Interactive terminals and explicit JSONL mode
+also receive the initial event. Mutation heartbeats include the latest bounded
+tool progress excerpt when available; silent tools do not have an invented
+completion percentage. Progress stays on stderr so stdout reports remain valid.
 
 ## `hardgate scan <file>`
 
@@ -248,21 +253,64 @@ hardgate scan --format json --summary src/services/auth.ts
 
 Unsupported inventory formats can still receive applicable file/safety checks but do not produce function metrics. Missing or unreadable paths fail closed.
 
+Parser rejections identify one-based line and character-column coordinates,
+also present in JSON diagnostic locations. A Tree-sitter rejection does not
+prove invalid source syntax: validate with the project compiler. If the compiler
+accepts it, report a Hardgate parser limitation. For example,
+`original<typeof import('react-dom/client')>()` can be expressed using an imported
+type alias while parser support is incomplete. Rejected syntax remains missing
+AST evidence and cannot silently pass the gate.
+
 Scan includes every analyzed function, including those within budget. Full JSON
 exposes `functions` with locations, cyclomatic complexity, parameters,
 size, nesting and statements. Human formats show
 the same measurements; summary JSON keeps its smaller aggregate shape.
+
+## `hardgate doctor`
+
+`hardgate doctor` performs a read-only preflight; `--json` produces a structured
+report. It resolves configured and detected launchers (including local Node
+binaries and direct package-manager `exec` targets), checks named `run` scripts
+exist, reports missing format/lint setup, and verifies current evidence
+receipts without executing project commands. Exit 2 means setup/evidence is
+incomplete; exit 0 means these preflight checks passed, not project acceptance.
+Launcher presence does not validate package-manager scripts, arguments, or
+compiler versions. Missing evidence needs `hardgate evidence vitest`,
+`hardgate evidence stryker`, `hardgate evidence cargo-mutants`, or
+`hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>` on Linux.
+macOS supports native checks; evidence production requires Linux containment.
+Linux preflight does not acquire an execution lease or certify runtime admission.
 
 ## `hardgate fmt`
 
 ```sh
 hardgate fmt
 hardgate fmt --check
+hardgate fmt src/main.ts "src/file with spaces.ts"
+hardgate fmt --changed
+hardgate fmt --check --changed
 ```
 
 `fmt --check` runs `[orchestration].format_check`; `fmt` runs `format`, falling back to `format_check` when no write command is configured. Commands run from the repository root with local Node binaries available. A configured command failure is blocking for this command.
 
-An unconfigured formatter is a setup failure with exit 2.
+An unconfigured formatter is a setup failure with exit 2. Scoped formatting
+requires an explicit file-aware template:
+
+```toml
+[orchestration]
+format_files = "oxfmt {files}"
+format_check_files = "oxfmt --check {files}"
+```
+
+The standalone `{files}` argument expands to individually quoted, sorted,
+deduplicated file paths. It is not shell interpolation. Use a command that
+honors file arguments; do not retain whole-repository arguments such as `.` or
+`--all` in the scoped template. Package-manager scripts must forward their
+arguments. Explicit paths resolve from the invocation directory, must be files
+inside the configuration root, and cannot escape through symlinks. `--changed`
+selects staged, unstaged, and untracked files under that root; deleted files
+are skipped, and an empty selection runs no formatter. The whole-project
+`format`/`format_check` commands remain separate from these templates.
 
 ## Output modes
 

@@ -56,7 +56,7 @@ fn execute(
         )
     })?;
     let mut captured = CapturedOutput::from_child(&mut child);
-    let wait = wait_guarded(&mut child, timeout, &mut managed)
+    let wait = wait_guarded(&mut child, timeout, &mut managed, &captured)
         .unwrap_or_else(|error| ProcessWait::Error(error.to_string()));
     let wait = finish_managed_wait(wait, &mut managed, &mut child);
     let outcome = finish_process_wait(wait, &mut child, &mut captured);
@@ -74,9 +74,12 @@ fn wait_guarded(
     child: &mut Child,
     timeout: Duration,
     managed: &mut Option<ManagedCommand>,
+    captured: &CapturedOutput,
 ) -> io::Result<ProcessWait> {
     let start = Instant::now();
+    let mut progress = super::progress::Progress::new("mutation", timeout, captured.latest.clone());
     loop {
+        progress.tick();
         check_pressure()?;
         if let Some(status) = poll_guarded(child, managed)? {
             return Ok(ProcessWait::Exited(status));

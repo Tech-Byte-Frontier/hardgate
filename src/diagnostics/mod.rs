@@ -1,3 +1,4 @@
+mod advisories;
 mod agent;
 mod agent_details;
 mod compact;

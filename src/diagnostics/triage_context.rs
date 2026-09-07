@@ -114,22 +114,4 @@ fn render_counts(report: &GateReport, out: &mut String) {
         s.tool,
         report.advisories.len()
     );
-    for advisory in &report.advisories {
-        let _ = writeln!(out, "Advisory: {}", display::sanitize_controls(advisory));
-    }
-    for finding in report
-        .tool_diagnostics
-        .iter()
-        .filter(|finding| !finding.blocking)
-    {
-        let _ = writeln!(
-            out,
-            "Advisory {} {}:{}:{}: {}",
-            finding.rule,
-            finding.file.display(),
-            finding.line,
-            finding.column,
-            display::sanitize_controls(&finding.message)
-        );
-    }
 }

@@ -295,7 +295,7 @@ fn test_mutation_report_integrity_outcomes_are_blocking() {
     assert!(
         violations
             .iter()
-            .any(|v| v.metric == "Mutation Unviable Mutants")
+            .any(|v| v.metric == "Mutation Unexecuted Mutants")
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

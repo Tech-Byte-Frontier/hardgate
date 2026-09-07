@@ -209,8 +209,9 @@ impl GateReport {
         ));
         for v in &self.mutation_violations {
             out.push_str(&format!(
-                "  --> {}: {} is {:.1}% (required: {:.1}%)\n       {} {}\n",
+                "  --> {}: {}\n       {} is {:.1} (limit: {:.1})\n       {} {}\n",
                 v.report_file.display().to_string().bold(),
+                v.message,
                 v.metric,
                 v.actual,
                 v.limit,

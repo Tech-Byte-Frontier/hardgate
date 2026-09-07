@@ -46,6 +46,9 @@ fn remediation(step: &str) -> &'static str {
         "mutation-report" => {
             "Run `hardgate evidence cargo-mutants` or `hardgate evidence stryker` against current source; set mutation.reports (or check --mutation-report)."
         }
+        "parse-source" => {
+            "Run the project compiler or type check first. If it accepts this file, report unsupported Hardgate parser syntax with the line/column; an equivalent imported type alias may help for TypeScript. Hardgate still requires complete AST evidence."
+        }
         "legacy-ratchet" => {
             "Set legacy.reference_branch to a resolvable, trusted Git reference and retain its source history."
         }

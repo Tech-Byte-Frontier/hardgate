@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.4 (2026-09-07)
+
+- Add read-only `hardgate doctor` preflight with configured/detected tool
+  launchers, source-bound evidence readiness, and Linux producer requirements.
+- Add `fmt <files>` and `fmt --changed`, using explicit file-aware formatter
+  templates with safe argument expansion and repository-bound selections.
+- Distinguish passing mutation scores from incomplete execution evidence;
+  report unexecuted Stryker mutants with their source locations and statuses.
+- Show active command phases, elapsed time, timeouts, and bounded mutation
+  progress excerpts during long runs; preserve JSONL progress support.
+- Explain Playwright screenshot output configuration and provide disposable
+  scratch directories consistently for native and isolated checks.
+- Group repetitive inventory/parser advisories after blocking agent findings.
+- Locate parser rejections with one-based line/column coordinates, including
+  JSON diagnostics; distinguish unconfirmed source validity from parser
+  compatibility limitations for compiler-accepted TypeScript syntax.
+
 ## 0.6.3 (2026-09-07)
 
 - Run ordinary check, fmt, tests, type checks, and generated freshness natively

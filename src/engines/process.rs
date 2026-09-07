@@ -13,6 +13,9 @@ mod cargo_stream;
 mod cleanup;
 #[path = "process/mutation.rs"]
 mod mutation;
+pub(crate) mod phase;
+mod progress;
+pub use progress::configure_jsonl as configure_progress_jsonl;
 #[cfg(target_os = "linux")]
 #[path = "process/write_guard.rs"]
 mod write_guard;
@@ -105,7 +108,7 @@ pub(crate) fn run_command_with_roots(
     };
     let mut captured = CapturedOutput::from_command(&mut child, tokens);
     finish_process_wait(
-        wait_for_child(&mut child, timeout, operation),
+        wait_for_child(&mut child, timeout, operation, &captured),
         &mut child,
         &mut captured,
     )
@@ -171,6 +174,9 @@ fn command_for_tokens(
     }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
+    if roots.protected_root.is_some() {
+        crate::evidence::temporary::configure(&mut command, roots.workspace_root)?;
+    }
     if let Some(original) = roots.protected_root
         && (operation != "check" || crate::resources::runtime::isolated())
     {
@@ -410,9 +416,16 @@ fn finish_wait_error(
     ProcessOutcome::Failed { message, output }
 }
 
-fn wait_for_child(child: &mut Child, timeout: Duration, operation: &str) -> ProcessWait {
+fn wait_for_child(
+    child: &mut Child,
+    timeout: Duration,
+    operation: &str,
+    captured: &CapturedOutput,
+) -> ProcessWait {
     let start = Instant::now();
+    let mut progress = progress::Progress::new(operation, timeout, captured.latest.clone());
     loop {
+        progress.tick();
         match poll_child(child) {
             ChildPoll::Exited(status) => return ProcessWait::Exited(status),
             ChildPoll::Running if start.elapsed() < timeout => {

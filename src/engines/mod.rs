@@ -8,6 +8,7 @@ pub mod invariants;
 pub mod mutation;
 pub mod orchestration;
 pub(crate) mod process;
+pub use process::configure_progress_jsonl;
 pub mod util;
 
 pub use anti_gaming::{AntiGamingScanner, SuppressionViolation};

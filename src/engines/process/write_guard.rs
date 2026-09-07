@@ -1,6 +1,6 @@
 //! Deny child filesystem writes outside its disposable workspace and Cargo cache.
 //! Requires Landlock ABI 3: older ABIs cannot prevent truncation of source files.
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
@@ -40,18 +40,7 @@ pub(super) fn configure(command: &mut Command, copy: &Path, original: &Path) -> 
         command.env("CARGO_HOME", cache);
     }
     allow(&ruleset, Path::new("/dev/null"))?;
-    let scratch = crate::evidence::temporary::scratch_directory(&copy);
-    fs::create_dir_all(&scratch)?;
-    command
-        .env("TMPDIR", &scratch)
-        .env("TMP", &scratch)
-        .env("TEMP", &scratch)
-        .env("XDG_CACHE_HOME", scratch.join("cache"))
-        .env("UV_CACHE_DIR", scratch.join("uv"))
-        .env("npm_config_cache", scratch.join("npm"))
-        .env("npm_config_store_dir", scratch.join("pnpm-store"))
-        .env("pnpm_config_store_dir", scratch.join("pnpm-store"))
-        .env("pnpm_config_verify_deps_before_run", "error");
+    crate::evidence::temporary::configure(command, &copy)?;
     // Only async-signal-safe syscalls run after fork. The descriptor stays alive
     // in the closure until exec; Landlock restrictions are inherited by children.
     unsafe {

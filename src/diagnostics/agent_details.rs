@@ -19,7 +19,6 @@ impl GateReport {
             self.total_violations(),
             self.files_scanned
         );
-        self.render_advisories_agent(&mut out);
         self.render_suppressions_agent(&mut out);
         self.render_complexity_agent(&mut out);
         self.render_budgets_agent(&mut out);
@@ -28,6 +27,7 @@ impl GateReport {
         self.render_coverage_agent(&mut out);
         self.render_mutation_agent(&mut out);
         self.render_orchestration_agent(&mut out);
+        self.render_advisories_agent(&mut out);
         out
     }
 
@@ -114,8 +114,8 @@ impl GateReport {
     fn render_mutation_agent(&self, out: &mut String) {
         for v in &self.mutation_violations {
             out.push_str(&format!(
-                "### 🧬 Mutation Floor in `{}`\n- Metric: {} is {:.1}% (Floor: {:.1}%)\n- Hint: {}\n\n",
-                v.report_file.display(), v.metric, v.actual, v.limit, v.recommendation
+                "### 🧬 Mutation in `{}`\n- {}\n- Metric: {} is {:.1} (Limit: {:.1})\n- Hint: {}\n\n",
+                v.report_file.display(), v.message, v.metric, v.actual, v.limit, v.recommendation
             ));
         }
     }

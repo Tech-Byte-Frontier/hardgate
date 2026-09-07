@@ -95,6 +95,15 @@ impl MutationGatekeeper {
         let score = stats.score_percent();
         let min_score = self.config.min_score.unwrap_or(85.0);
         let mut violations = Vec::new();
+        let unexecuted = super::unexecuted::locations(&json_val);
+        if !unexecuted.is_empty() {
+            violations.push(super::unexecuted::violation(
+                report_path,
+                &unexecuted,
+                &stats,
+                min_score,
+            ));
+        }
 
         if !matches!(stats.viable_count(), Some(1..)) || score < min_score {
             push_score_violation(
@@ -132,7 +141,7 @@ impl MutationGatekeeper {
             },
             IntegritySpec {
                 metric: "Mutation Unviable Mutants",
-                count: stats.unviable,
+                count: stats.unviable.saturating_sub(unexecuted.len()),
                 message: "Mutation report contains unviable outcomes.",
                 recommendation: "Remove or repair unviable mutants; do not let them mask missing coverage.",
             },

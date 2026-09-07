@@ -34,6 +34,7 @@ impl GateReport {
         {
             out.push_str("Excerpts unavailable for some locations; only captured report excerpts are used during saved-report inspection.\n");
         }
+        original.render_grouped_advisories(&mut out);
         if self.display.details {
             out.push_str(&visible.render_agent_details());
         }
@@ -120,16 +121,7 @@ fn measurement(report: &GateReport, diagnostic: &rules::RuleDiagnostic) -> Optio
                     finding.metric, finding.actual, finding.limit
                 )
             }),
-        "mutation" => report
-            .mutation_violations
-            .iter()
-            .find(|finding| finding.message == diagnostic.message)
-            .map(|finding| {
-                format!(
-                    "{} {:.1}/{:.1}",
-                    finding.metric, finding.actual, finding.limit
-                )
-            }),
+        "mutation" => Some(diagnostic.message.clone()),
         _ => None,
     }
 }

@@ -342,6 +342,9 @@ pub(crate) fn sanitize_controls(value: &str) -> String {
 
 pub(crate) fn format_location(location: &rules::DiagnosticLocation) -> String {
     let file = sanitize_controls(&location.file.to_string_lossy());
+    if let (Some(line), Some(column)) = (location.line, location.column) {
+        return format!("{file}:{line}:{column}");
+    }
     match (location.line, location.end_line) {
         (Some(line), Some(end_line)) => format!("{file}:{line}-{end_line}"),
         (Some(line), None) => format!("{file}:{line}"),
@@ -395,6 +398,7 @@ mod presentation_coverage_tests {
         rules::DiagnosticLocation {
             file: PathBuf::from(file),
             line,
+            column: None,
             end_line,
         }
     }

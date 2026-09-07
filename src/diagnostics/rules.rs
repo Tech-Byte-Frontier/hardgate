@@ -29,6 +29,8 @@ pub struct RuleDiagnostic {
 pub struct DiagnosticLocation {
     pub file: PathBuf,
     pub line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
     pub end_line: Option<usize>,
 }
 
@@ -68,6 +70,7 @@ pub fn diagnostics(report: &super::GateReport) -> Vec<RuleDiagnostic> {
                 locations: vec![DiagnosticLocation {
                     file: finding.file.clone(),
                     line: Some(finding.line),
+                    column: None,
                     end_line: Some(finding.end_line),
                 }],
                 recommendation: "Resolve the specialist diagnostic at this source location.".into(),
@@ -205,7 +208,7 @@ fn orchestration_diagnostic(violation: &OrchestrationViolation) -> RuleDiagnosti
             violation.step.as_str(),
             "unsupported-source" | "classify-source" | "read-source" | "parse-source"
         ) {
-            vec![location(Path::new(&violation.command), None, None)]
+            vec![source_failure_location(violation)]
         } else {
             Vec::new()
         },
@@ -235,6 +238,7 @@ fn location(file: &Path, line: Option<usize>, end_line: Option<usize>) -> Diagno
     DiagnosticLocation {
         file: file.to_path_buf(),
         line,
+        column: None,
         end_line,
     }
 }
@@ -333,6 +337,7 @@ const MUTATION_IDS: &str = concat!(
     "Mutation Compile Errors\0HG-MUTATION-COMPILE-ERRORS\0",
     "Mutation Runner Errors\0HG-MUTATION-RUNNER-ERRORS\0",
     "Mutation Unviable Mutants\0HG-MUTATION-UNVIABLE\0",
+    "Mutation Unexecuted Mutants\0HG-MUTATION-UNEXECUTED\0",
 );
 
 const ORCHESTRATION_IDS: &str = concat!(
@@ -357,3 +362,20 @@ const ORCHESTRATION_IDS: &str = concat!(
 #[cfg(test)]
 #[path = "rules_tests.rs"]
 mod tests;
+
+fn source_failure_location(violation: &OrchestrationViolation) -> DiagnosticLocation {
+    let mut result = location(Path::new(&violation.command), None, None);
+    if violation.step == "parse-source" {
+        let position = violation
+            .output
+            .strip_prefix("Hardgate parser could not analyze ")
+            .and_then(|text| text.split_once(" (syntax errors"))
+            .map(|(position, _)| position);
+        if let Some(position) = position {
+            let mut parts = position.rsplitn(3, ':');
+            result.column = parts.next().and_then(|value| value.parse().ok());
+            result.line = parts.next().and_then(|value| value.parse().ok());
+        }
+    }
+    result
+}

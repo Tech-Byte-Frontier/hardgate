@@ -9,6 +9,7 @@ mod evidence;
 mod execution_failure;
 pub(crate) mod execution_plan;
 pub use execution_failure::ExecutionFailure;
+pub mod doctor;
 pub mod fmt;
 mod gate_evidence;
 pub mod init;

@@ -247,6 +247,9 @@ pub struct OrchestrationConfig {
     pub require_isolation: bool,
     pub format_check: Option<String>,
     pub format: Option<String>,
+    /// File-aware formatter commands; one standalone {files} token is required.
+    pub format_files: Option<String>,
+    pub format_check_files: Option<String>,
     pub lint: Option<String>,
     pub test_cmd: Option<String>,
     /// Additional required test scopes, such as workspace doctests.

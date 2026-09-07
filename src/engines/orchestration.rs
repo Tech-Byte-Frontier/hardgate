@@ -250,8 +250,9 @@ impl OrchestrationEngine {
         }
         let timeout_secs = self.timeout_secs();
         let timeout = Duration::from_secs(timeout_secs);
+        let _phase = crate::engines::process::phase::set(spec.step);
         let outcome = if spec.step == "format" {
-            run_command(&tokens, root, timeout, "orchestration")
+            run_command(&tokens, root, timeout, spec.step)
         } else if let Some(session) = session {
             session
                 .run(&tokens, timeout)
@@ -348,7 +349,7 @@ fn runner_violation(
     output: String,
 ) -> OrchestrationViolation {
     let recommendation = if message.contains("check command wrote") {
-        "Use a read-only verification command; run intentional fixes with hardgate fmt or the project tool explicitly. For coverage, declare coverage.report as a separate .lcov/.info output; generate trusted evidence first with `hardgate evidence vitest` or `hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>`.".to_string()
+        "Use a read-only verification command; run intentional fixes with hardgate fmt or the project tool explicitly. For Playwright screenshots, set outputDir: process.env.TMPDIR + \"/playwright-results\" and use testInfo.outputPath(\"screenshot.png\") for page.screenshot({ path: ... }); outputs there are disposable. Do not write snapshots beside source during checks. For coverage, declare coverage.report as a separate .lcov/.info output; generate trusted evidence first with `hardgate evidence vitest` or `hardgate evidence cargo-llvm-cov --toolchain <installed-nightly>`.".to_string()
     } else if message.contains("resource guard:") {
         "Reduce concurrent workloads or narrow the selected scope, then retry within the resource limits.".to_owned()
     } else {

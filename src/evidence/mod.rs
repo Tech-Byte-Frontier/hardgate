@@ -94,6 +94,7 @@ pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResu
         "evidence"
     };
     if let Some(tokens) = &spec.prerequisite {
+        let _phase = crate::engines::process::phase::set("evidence prerequisite");
         let outcome = run_command_in_copy(
             tokens,
             (workspace.root(), &root),

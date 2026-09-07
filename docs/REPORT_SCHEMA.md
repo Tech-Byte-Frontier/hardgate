@@ -141,3 +141,12 @@ saved inspection reuses only those captured excerpts. A limited/filtered saved
 view is marked non-equivalent during comparison, including views saved directly
 from a bounded `check`. Saved `inspection.displayed_errors` respects the display
 limit, while `inspection.original_total_errors` retains the original count.
+
+Parser failures can include an optional one-based `column` alongside `line` in
+rule diagnostic locations. Missing columns in older reports remain valid.
+`HG-MUTATION-UNEXECUTED` identifies Stryker outcomes such as `NoCoverage`,
+`Pending`, and `Ignored`: their counts are not percentages, and a passing kill
+score does not satisfy execution completeness. Messages preserve the score
+verdict; remediation lists the mutant source locations and statuses.
+Agent output groups repeated advisories with counts and up to three example
+locations after blockers. Complete advisory arrays remain available in JSON.

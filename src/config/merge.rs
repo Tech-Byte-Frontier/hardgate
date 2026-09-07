@@ -126,6 +126,8 @@ fn merge_orchestration(
         set!(table, require_isolation, base, user);
         set!(table, format_check, base, user);
         set!(table, format, base, user);
+        set!(table, format_files, base, user);
+        set!(table, format_check_files, base, user);
         set!(table, lint, base, user);
         set!(table, test_cmd, base, user);
         set!(table, additional_tests, base, user);

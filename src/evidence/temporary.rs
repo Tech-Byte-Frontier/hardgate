@@ -33,3 +33,22 @@ fn annotate(mut output: String, workspace: &Path) -> String {
     }
     output
 }
+
+pub(crate) fn configure(
+    command: &mut std::process::Command,
+    workspace: &Path,
+) -> std::io::Result<()> {
+    let scratch = scratch_directory(workspace);
+    std::fs::create_dir_all(&scratch)?;
+    command
+        .env("TMPDIR", &scratch)
+        .env("TMP", &scratch)
+        .env("TEMP", &scratch)
+        .env("XDG_CACHE_HOME", scratch.join("cache"))
+        .env("UV_CACHE_DIR", scratch.join("uv"))
+        .env("npm_config_cache", scratch.join("npm"))
+        .env("npm_config_store_dir", scratch.join("pnpm-store"))
+        .env("pnpm_config_store_dir", scratch.join("pnpm-store"))
+        .env("pnpm_config_verify_deps_before_run", "error");
+    Ok(())
+}
