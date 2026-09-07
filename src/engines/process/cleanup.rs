@@ -118,6 +118,7 @@ fn clone_signal_result(result: &Result<SignalResult, String>) -> Result<SignalRe
     match result {
         Ok(SignalResult::Sent) => Ok(SignalResult::Sent),
         Ok(SignalResult::Absent) => Ok(SignalResult::Absent),
+        Ok(SignalResult::Denied) => Ok(SignalResult::Denied),
         Err(error) => Err(error.clone()),
     }
 }
@@ -269,6 +270,9 @@ enum ProcessGroupState {
 enum SignalResult {
     Sent,
     Absent,
+    // Darwin may return EPERM for zombie-only groups. This is not absence:
+    // cleanup still reaps the child and requires a later ESRCH group probe.
+    Denied,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -289,6 +293,7 @@ fn signal_process_group(signal: &str, pid: rustix::process::Pid) -> Result<Signa
     match rustix::io::retry_on_intr(|| kill_process_group(pid, signal)) {
         Ok(()) => Ok(SignalResult::Sent),
         Err(error) if error == Errno::SRCH => Ok(SignalResult::Absent),
+        Err(error) if error == Errno::PERM => Ok(SignalResult::Denied),
         Err(error) => Err(format!("kernel process-group signal failed: {error}")),
     }
 }
@@ -306,6 +311,8 @@ fn probe_process_group(pid: rustix::process::Pid) -> Result<ProcessGroupState, S
     match rustix::io::retry_on_intr(|| test_kill_process_group(pid)) {
         Ok(()) => Ok(ProcessGroupState::Present),
         Err(error) if error == Errno::SRCH => Ok(ProcessGroupState::Absent),
+        // Permission denial proves neither successful cleanup nor absence.
+        Err(error) if error == Errno::PERM => Ok(ProcessGroupState::Present),
         Err(error) => Err(format!("kernel process-group probe failed: {error}")),
     }
 }

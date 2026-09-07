@@ -104,6 +104,10 @@ mod unix {
             Ok(SignalResult::Absent)
         ));
 
+        assert!(matches!(
+            clone_signal_result(&Ok(SignalResult::Denied)),
+            Ok(SignalResult::Denied)
+        ));
         let error = Err::<SignalResult, _>("kernel failure".to_string());
         assert!(matches!(
             clone_signal_result(&error),
@@ -258,5 +262,32 @@ mod unix {
             probe_process_group(pid),
             Ok(super::super::ProcessGroupState::Absent)
         ));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn zombie_group_permission_denial_is_not_absence_and_can_be_reaped() {
+        let mut fixture = ChildGuard::spawn("exit 0");
+        let pid = fixture.pid();
+        use rustix::process::{WaitId, WaitIdOptions, waitid};
+        // Observe exit without reaping, making a zombie-only group deterministic.
+        waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        )
+        .expect("observe exited child without reaping");
+        assert!(matches!(
+            signal_process_group("TERM", pid),
+            Ok(SignalResult::Denied)
+        ));
+        assert!(matches!(
+            probe_process_group(pid),
+            Ok(super::super::ProcessGroupState::Present)
+        ));
+        terminate_process_tree(fixture.child()).expect("reaped zombie group should become absent");
+        assert!(matches!(
+            probe_process_group(pid),
+            Ok(super::super::ProcessGroupState::Absent)
+        ));
+        fixture.disarm();
     }
 }

@@ -9,6 +9,8 @@
   native execution in command output and saved reports.
 - Add orchestration.require_isolation for policies that require Linux resource
   and filesystem containment. Evidence producers retain mandatory isolation.
+- Handle macOS zombie-only process groups during cleanup; require verified
+  group absence before accepting cleanup completion.
 - Exercise complete checks, tool failures, input writes, timeouts, and explicit
   isolation requirements in native CI and packed npm consumer verification.
 
