@@ -85,9 +85,9 @@ const activeAllowedSigners = releaseAllowedSigners
   .split(/\r?\n/)
   .map((line) => line.trim())
   .filter((line) => line && !line.startsWith("#"));
-assert.equal(activeAllowedSigners.length, 1, "release signer allowlist must contain exactly one active key");
-assert.match(
-  activeAllowedSigners[0],
+assert.equal(activeAllowedSigners.length, 2, "release signer overlap must retain exactly the historical and current keys");
+for (const signer of activeAllowedSigners) assert.match(
+  signer,
   /^\S+ ssh-(?:rsa|ed25519) [A-Za-z0-9+/]+={0,3}$/,
   "release signer allowlist must contain a principal and a valid SSH public-key record",
 );
