@@ -132,7 +132,7 @@ jobs:
       - name: Test local analysis with the MSRV
         run: |
           rustup toolchain install "$RUST_MSRV" --profile minimal
-          cargo "+${RUST_MSRV}" test --locked --test cli_064 --test portable_analysis_tests --test cli_process_contract --test orchestration_timeout --test engine_boundary_coverage --test execution_contract
+          cargo "+${RUST_MSRV}" test --locked --test cli_064 --test cli_064_edges --test portable_analysis_tests --test cli_process_contract --test orchestration_timeout --test engine_boundary_coverage --test execution_contract
       - name: Test process-group cleanup on the host
         run: cargo test --locked --lib engines::process::cleanup::tests
       - name: Lint and build with the pinned compiler
