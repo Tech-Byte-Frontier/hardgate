@@ -54,7 +54,7 @@ fn launch_keeps_limits_and_literal_arguments_in_the_supervisor_command() {
         "--collect",
         "--expand-environment=no",
         "--property=MemoryMax=1073741824",
-        "--property=MemoryHigh=858993456",
+        "--property=MemoryHigh=858980352",
         "--property=MemorySwapMax=0",
         "--property=TasksMax=256",
         "--property=RuntimeMaxSec=1800s",
