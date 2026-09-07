@@ -76,3 +76,9 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org \
             "@tech-byte-frontier/hardgate@$RELEASE_VERSION"
           test "$(node_modules/.bin/hardgate --version)" = "hardgate $RELEASE_VERSION ($RELEASE_COMMIT)"
+      - name: Report mirror visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "orgs/$GITHUB_REPOSITORY_OWNER/packages/npm/hardgate" \
+            --jq '{name,visibility,html_url,repository:.repository.full_name}'

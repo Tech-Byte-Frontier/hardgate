@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { PLATFORM_NAMES } from "../scripts/release-platforms.mjs";
 import { mirrorVersion, packageName, verifyArchive } from "../scripts/mirror-github-package.mjs";
 
@@ -71,4 +75,35 @@ for (const required of [
   'hardgate $RELEASE_VERSION ($RELEASE_COMMIT)',
 ]) assert.ok(workflow.includes(required), `missing mirror boundary: ${required}`);
 assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|id-token: write|continue-on-error|pull_request/);
+
+// Run the entry point against local fetch responses to exercise its actual
+// callback wiring when an already-published GitHub version is reused.
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-mirror-cli-"));
+try {
+  const signed = path.join(directory, "signed.json");
+  const preload = path.join(directory, "registry.mjs");
+  fs.writeFileSync(signed, JSON.stringify(manifest));
+  fs.writeFileSync(preload, `
+import assert from "node:assert/strict";
+const manifest = ${JSON.stringify(manifest)};
+const source = Buffer.from(${JSON.stringify(source.toString("base64"))}, "base64");
+globalThis.fetch = async (input, options = {}) => {
+  const url = new URL(input);
+  assert.ok(["https://registry.npmjs.org", "https://npm.pkg.github.com"].includes(url.origin));
+  assert.equal(options.headers?.authorization, url.origin === "https://npm.pkg.github.com" ? "Bearer fixture-token" : undefined);
+  if (url.pathname === "/wrapper.tgz") return new Response(source);
+  const version = { ...manifest, dist: { ...manifest.dist, tarball: url.origin + "/wrapper.tgz" } };
+  return Response.json({ "dist-tags": { latest: manifest.version }, versions: { [manifest.version]: version } });
+};
+`);
+  const result = spawnSync(process.execPath, ["--import", preload,
+    fileURLToPath(new URL("../scripts/mirror-github-package.mjs", import.meta.url)), version, signed], {
+    cwd: directory, encoding: "utf8", timeout: 30_000,
+    env: { ...process.env, NODE_AUTH_TOKEN: "fixture-token", PATH: "" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /GitHub Packages: reused .*archive bytes verified/);
+} finally {
+  fs.rmSync(directory, { recursive: true, force: true });
+}
 console.log("github_package_mirror.test: OK");

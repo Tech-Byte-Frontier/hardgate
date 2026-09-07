@@ -97,10 +97,10 @@ async function main() {
         "publish", filename, `--registry=${githubRegistry}`, "--provenance=false",
         "--ignore-scripts", "--tag=latest", "--access=public", "--fetch-retries=0",
       ]),
-      verify: async (observed, expected) => {
+      verify: async (observed, expectedBytes) => {
         const bytes = await archive(observed, githubRegistry, token);
         verifyArchive(bytes, observed, version, expected);
-        assert.ok(bytes.equals(expected), "GitHub mirror differs from npm archive");
+        assert.ok(bytes.equals(expectedBytes), "GitHub mirror differs from npm archive");
       },
     });
     // An existing immutable version may need its default restored after a
