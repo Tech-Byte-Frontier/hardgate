@@ -2,7 +2,7 @@
 
 These safeguards apply to project-tool execution and maintenance runners.
 Static scans, policy-only checks without generated freshness, saved reports,
-and static MCP tools run locally on macOS, Linux, and Windows. Resource exhaustion is
+and static MCP tools run locally on macOS and Linux. Resource exhaustion is
 incomplete evaluation, never a passing gate or a killed-mutant credit.
 
 ## Project-tool execution boundary

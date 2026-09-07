@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 (2026-09-07)
+
+- Support macOS and Linux local analysis and native npm installation on x64
+  and ARM64. Remove the Windows package, CI builds, and release requirements.
+- Include the portable analysis, CLI triage, workspace execution, and tested
+  Rust 1.90 compatibility from 0.6.1.
+- Supersede the partially published 0.6.1 release, whose npm publication stopped
+  at the Windows package. Existing 0.6.1 artifacts and signed tag remain immutable.
+
 ## 0.6.1 (2026-09-07)
 
 - Enable local static analysis on macOS, Linux, and Windows. Keep Linux

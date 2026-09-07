@@ -9,7 +9,7 @@ assert.equal(classifyBinaryAbi(fixture).ok, true);
 assert.equal(classifyBinaryAbi({ ...fixture, programHeaders: "" }).ok, false);
 assert.equal(classifyBinaryAbi({ ...fixture, report: "Mach-O 64-bit" }).ok, false);
 assert.equal(classifyBinaryAbi({ ...fixture, programHeaders: "/lib/ld-musl-x86_64.so.1" }).ok, false);
-for (const abi of ["musl", null, "unknown"]) assert.equal(classifyBinaryAbi({ ...fixture, abi }).ok, false);
+for (const abi of ["musl", "msvc", null, "unknown"]) assert.equal(classifyBinaryAbi({ ...fixture, abi }).ok, false);
 assert.equal(classifyBinaryAbi({ ...fixture, symbols: "__libc_start_main@GLIBC_2.39" }).ok, true);
 assert.equal(classifyBinaryAbi({ ...fixture, symbols: "future@GLIBC_2.40" }).ok, false);
 const inspect = (command, args) => {
@@ -25,7 +25,7 @@ if (process.platform === "linux") assert.equal(classifyBinaryAbi({
 }).ok, true, "the real GNU system executable must supply positive ABI evidence");
 console.log("release_contract.abi: GNU evidence and unsupported ABI rejection OK");
 
-for (const [abi, report] of [["darwin", "Mach-O 64-bit arm64 executable"], ["msvc", "PE32+ executable (console) x86-64, for MS Windows"]]) {
+for (const [abi, report] of [["darwin", "Mach-O 64-bit arm64 executable"]]) {
   assert.equal(classifyBinaryAbi({ abi, report }).ok, true);
   assert.equal(classifyBinaryAbi({ abi, report: "ELF 64-bit" }).ok, false);
   assert.equal(classifyBinaryAbi({ abi, report: "ASCII text" }).ok, false);

@@ -55,9 +55,9 @@ try {
   const completed = readReceipt(receiptPath);
   for (const name of names) assert.equal(completed.channels[name].state, "exact_consumer_verified");
   assert.equal(completed.channels["hardgate-linux-x64"].state, "pending");
-  assert.equal(completed.channels["hardgate-win32-x64"].events.at(-1).evidence.consumer.executable,
-    "node_modules/hardgate-win32-x64/bin/hardgate.exe");
-  console.log("portable_release: missing, mismatched, mixed-attempt, and Windows consumer proofs verified");
+  for (const name of names) assert.equal(completed.channels[name].events.at(-1).evidence.consumer.executable,
+    `node_modules/${name}/bin/hardgate`);
+  console.log("portable_release: missing, mismatched, and mixed-attempt consumer proofs verified");
 } finally {
   fs.rmSync(directory, { recursive: true, force: true });
 }

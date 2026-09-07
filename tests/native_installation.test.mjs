@@ -7,7 +7,6 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { npm, run, verifyLocalAnalysis } from "../scripts/local-consumer.mjs";
 import { executableName } from "../scripts/release-platforms.mjs";
-import { verifyWindowsRuntime } from "../scripts/windows-runtime.mjs";
 
 const require = createRequire(import.meta.url);
 const launcher = require("../npm/hardgate/bin/hardgate.js");
@@ -15,7 +14,6 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const host = launcher.platformPackage();
 assert.ok(host);
 const binary = path.resolve(process.argv[2] ?? path.join(root, "target/debug", executableName(host)));
-if (process.platform === "win32") verifyWindowsRuntime(fs.readFileSync(binary));
 verifyLocalAnalysis(binary);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-native-install-"));
 try {

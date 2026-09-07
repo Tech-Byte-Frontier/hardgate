@@ -91,7 +91,7 @@ try {
   fs.rmSync(exact.fixture.directory, {recursive: true, force: true});
 }
 
-for (const packageName of ["hardgate-linux-x64-musl", "hardgate-win32-arm64", "__proto__"]) {
+for (const packageName of ["hardgate-linux-x64-musl", "hardgate-win32-x64", "hardgate-win32-arm64", "__proto__"]) {
   assert.throws(() => parseArgs(["--package", packageName, "--version", version, "--source-sha", sourceSha, "--archive", "/tmp/archive.tar.gz", "--mode", "exact", "--output", "/tmp/native-proof.json"]), /supported native package/);
 }
 

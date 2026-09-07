@@ -48,7 +48,7 @@ publication used `trusted` mode. This is not a new secret and must not be
 silently substituted or omitted. Keep the promotion credential scoped to the
 promotion operation, and never print it or carry it into read-only verifiers.
 
-The npm channels are the five native platform packages and
+The npm channels are the four native platform packages and
 `@tech-byte-frontier/hardgate`:
 
 ```text
@@ -56,7 +56,6 @@ hardgate-linux-x64
 hardgate-linux-arm64
 hardgate-darwin-x64
 hardgate-darwin-arm64
-hardgate-win32-x64
 @tech-byte-frontier/hardgate
 ```
 
@@ -82,7 +81,7 @@ checks SHA-512 integrity and package identity, downloads the GitHub copy to
 compare bytes, then installs the GitHub wrapper and checks the CLI's full
 version/commit identity. Existing matching versions are reused. A conflicting
 version or ambiguous publication failure stops the workflow; inspect registry
-state before rerunning. The primary eight-channel release receipt stays separate
+state before rerunning. The primary seven-channel release receipt stays separate
 from this additional mirror workflow.
 
 Publication uses the job's `GITHUB_TOKEN` with `packages: write`; no additional

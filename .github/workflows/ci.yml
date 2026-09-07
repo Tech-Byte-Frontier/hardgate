@@ -115,7 +115,6 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, binary: hardgate }
           - { os: macos-15-intel, target: x86_64-apple-darwin, binary: hardgate }
           - { os: macos-15, target: aarch64-apple-darwin, binary: hardgate }
-          - { os: windows-2025, target: x86_64-pc-windows-msvc, binary: hardgate.exe }
     defaults:
       run:
         shell: bash
@@ -137,9 +136,6 @@ jobs:
       - name: Lint and build with the pinned compiler
         run: |
           cargo clippy --locked --lib --bin hardgate -- -D warnings
-          if [ '${{ matrix.target }}' = x86_64-pc-windows-msvc ]; then
-            export RUSTFLAGS='-C target-feature=+crt-static'
-          fi
           cargo build --locked --release --target ${{ matrix.target }}
         env:
           HARDGATE_BUILD_GIT_SHA: ${{ github.sha }}

@@ -20,14 +20,14 @@ self-gate replaces native mutation with an explicit single budget-engine
 cargo-mutants sample; that sample is not repository-wide mutation coverage.
 Distribution-sensitive PR changes also run crate/package/ABI/SBOM and actual
 packed-install checks. Main CI always runs those distribution checks and builds
-native release binaries for Linux x64/ARM64, macOS Intel/Apple Silicon, and Windows x64.
+native release binaries for Linux x64/ARM64 and macOS Intel/Apple Silicon.
 The native matrix exercises real packed npm installs and local static analysis. The stable `CI quality aggregate`
 rejects failed, cancelled, or skipped required jobs. Conditional packaging
 steps do not remove required jobs from the aggregate.
 
 ## Release preparation
 
-Local analysis supports macOS, Linux, and Windows through Cargo, direct
+Local analysis supports macOS and Linux through Cargo, direct
 downloads, npm, and pnpm. The wrapper and every native package must match Cargo.toml, Cargo.lock, and
 the root package version. `scripts/release-platforms.mjs` defines the supported
 distribution map. Linux prebuilt artifacts must fit the glibc 2.39 baseline; project-tool
@@ -42,13 +42,13 @@ overwriting or republishing.
 The release workflow has six stages: tag validation, packaging, publication,
 exact consumers, promotion, and default consumers/completion. Packaging reuses
 the exact main CI artifact by run ID, artifact ID, source SHA, and digest.
-It creates five reproducible archives, checksums, and SBOM and tests actual npm
+It creates four reproducible archives, checksums, and SBOM and tests actual npm
 and pnpm installs. It never rebuilds the shared native binary. Publication
 attests the verified bundle, publishes only missing artifacts, and preserves
 partial receipts. Cargo installation necessarily builds from the verified
 crate; its installed `hardgate check` behavior is tested separately.
 
-All eight receipt channels must reach exact-consumer verification before
+All seven receipt channels must reach exact-consumer verification before
 promotion, and default-consumer verification before completion. npm and pnpm
 project/global installs, Cargo, and direct downloads on Linux exercise real
 `hardgate check` and test-failure propagation with unchanged inputs. Each other native platform also installs the exact/default registry package,

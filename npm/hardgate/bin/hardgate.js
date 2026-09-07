@@ -39,9 +39,8 @@ const PLATFORM_TABLE = [
   ["linux", "arm64", false, "hardgate-linux-arm64"],
   ["darwin", "x64", null, "hardgate-darwin-x64"],
   ["darwin", "arm64", null, "hardgate-darwin-arm64"],
-  ["win32", "x64", null, "hardgate-win32-x64"],
 ];
-const BINARY_NAME = process.platform === "win32" ? "hardgate.exe" : "hardgate";
+const BINARY_NAME = "hardgate";
 
 function resolvePlatform(platform, arch, musl) {
   const hit = PLATFORM_TABLE.find(
@@ -61,7 +60,6 @@ function platformPackage() {
 // Accept native executable headers for this host. Reject launcher shims to avoid recursion
 // through an npm or pnpm .bin entry on PATH.
 function magicMatches(buf) {
-  if (process.platform === "win32") return buf[0] === 0x4d && buf[1] === 0x5a;
   if (process.platform === "darwin") {
     return [0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(buf.readUInt32BE(0));
   }
@@ -208,12 +206,10 @@ function launcherDepth() {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-// Spawn contract in one place so stdio inheritance, Windows window hiding,
-// and fuse depth propagation are unit-assertable without spawning anything.
+// Keep stdio inheritance and fuse depth propagation in one spawn contract.
 function spawnOptions() {
   return {
     stdio: "inherit",
-    windowsHide: true,
     env: {
       ...process.env,
       HARDGATE_LAUNCHER_DEPTH: String(launcherDepth() + 1),
@@ -255,7 +251,7 @@ function main() {
   const primary = platformPackage();
   if (!primary) {
     reportFailure(
-      `[hardgate] Unsupported platform ${process.platform}/${process.arch}; prebuilt binaries support Linux glibc and macOS (x64/arm64), and Windows x64. Try a source build with cargo install hardgate --locked for other targets.`,
+      `[hardgate] Unsupported platform ${process.platform}/${process.arch}; supported hosts are Linux glibc and macOS (x64/arm64).`,
     );
     return;
   }

@@ -89,7 +89,7 @@ assert.deepEqual(await stageGithubRelease(request(), resumedZero.operations), { 
 assert.equal(resumedZero.events.filter((event) => event === "create").length, 0);
 assert.equal(resumedZero.events.filter((event) => event.startsWith("upload:")).length, assets.length);
 
-await reject(stageGithubRelease(request({ assets: assets.slice(0, -1) }), scenario([{ state: "missing" }]).operations), /exactly match the eight expected/);
+await reject(stageGithubRelease(request({ assets: assets.slice(0, -1) }), scenario([{ state: "missing" }]).operations), /exactly match the expected/);
 
 for (const bad of [present(["unexpected.tgz"], true), { ...present([assets[0]], true), tag: "v9.9.9" }, { ...present([assets[0]], true), isDraft: true }]) {
   const invalid = scenario([bad]);

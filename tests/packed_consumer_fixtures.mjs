@@ -101,7 +101,7 @@ export function makeDuplicateManifestArchives({ fixtureRoot }) {
   for (const archive of fs.readdirSync(path.join(fixtureRoot, "packages")).filter((name) => name.endsWith(".tgz"))) {
     fs.copyFileSync(path.join(fixtureRoot, "packages", archive), path.join(packagesDir, archive));
   }
-  const wrapperArchive = fs.readdirSync(packagesDir).find((name) => name.endsWith(".tgz") && !/^hardgate-(?:linux|darwin|win32)-/.test(name));
+  const wrapperArchive = fs.readdirSync(packagesDir).find((name) => name.endsWith(".tgz") && !/^hardgate-(?:linux|darwin)-/.test(name));
   assert.ok(wrapperArchive, "fixture wrapper archive must be present");
   const tarPath = path.join(fixtureRoot, "duplicate-manifest.tar");
   const duplicateRoot = path.join(fixtureRoot, "duplicate-manifest");

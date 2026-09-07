@@ -32,7 +32,7 @@ retain attempt-numbered binaries and proofs. Collectors select each platform's
 newest attempt within the same workflow run and verify source/target/receipt
 identity; successful platforms may be retained from earlier partial attempts.
 
-Eight channels must progress through `pending` → `staged` →
+Seven channels must progress through `pending` → `staged` →
 `immutable_verified` → `exact_consumer_verified` → `promoted` →
 `default_consumer_verified`:
 
@@ -41,7 +41,6 @@ hardgate-linux-x64
 hardgate-linux-arm64
 hardgate-darwin-x64
 hardgate-darwin-arm64
-hardgate-win32-x64
 @tech-byte-frontier/hardgate
 hardgate
 github-assets
@@ -74,9 +73,10 @@ The new run records its own run/artifact identity and re-establishes channel
 state from verified public bytes; previous receipts remain retained.
 
 The 0.6 workflow rejects pre-0.6 payloads. Recover historical releases with
-their original signed workflow and platform contract. Do not feed a historical
-six-platform bundle into the new one-platform workflow, delete its published
-assets, republish an existing version, or move its signed tag.
+their original signed workflow and platform contract. Platform contracts can
+differ even between patch releases. Do not feed an older bundle into a workflow
+with different required platforms, delete its
+published assets, republish an existing version, or move its signed tag.
 
 ## Publication and promotion
 
@@ -85,7 +85,7 @@ platform packages, verifies them, then publishes the wrapper under
 `hardgate-candidate`. crates.io exposes its immutable version independently;
 this process does not make publication atomic across registries.
 
-Promotion requires all eight channel exact-consumer checkpoints. npm's `latest` update
+Promotion requires all seven channel exact-consumer checkpoints. npm's `latest` update
 uses the separate token credential even when publication used trusted OIDC.
 The crate's intended `max_stable_version` is verified without a registry
 mutation. GitHub promotes only its byte-verified release. Default consumers

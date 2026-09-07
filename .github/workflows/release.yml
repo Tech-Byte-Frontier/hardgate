@@ -336,7 +336,7 @@ jobs:
           path: build-binaries/binary-x86_64-unknown-linux-gnu
           digest-mismatch: error
       # Additional targets: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
-      # aarch64-apple-darwin, x86_64-pc-windows-msvc. All come from the same
+      # aarch64-apple-darwin. All come from the same
       # successful CI run and are rechecked for target/source identity below.
       - if: needs.version-check.outputs.resume != 'true'
         name: Download native local-analysis binaries verified by main CI
@@ -394,10 +394,9 @@ jobs:
           packed_root=$(mktemp -d)
           trap 'rm -rf -- "$packed_root"' EXIT
           mkdir -p "$packed_root/packages" "$packed_root/source"
-          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
+          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64; do
             cp -R "npm/$pkg" "$packed_root/source/$pkg"
             executable=hardgate
-            if [ "$pkg" = hardgate-win32-x64 ]; then executable=hardgate.exe; fi
             mkdir -p "$packed_root/source/$pkg/bin"
             tar xOf "dist/$pkg.tar.gz" "$pkg/$executable" > "$packed_root/source/$pkg/bin/$executable"
             chmod 755 "$packed_root/source/$pkg/bin/$executable"
@@ -526,7 +525,6 @@ jobs:
             hardgate-linux-arm64 \
             hardgate-darwin-x64 \
             hardgate-darwin-arm64 \
-            hardgate-win32-x64 \
             @tech-byte-frontier/hardgate
           do
             encoded_name=$(printf '%s' "$package_name" | sed 's|/|%2f|g')
@@ -735,10 +733,9 @@ jobs:
           cmp -- npm/hardgate/bin/hardgate.js release-tooling/npm/hardgate/bin/hardgate.js
           node scripts/release-verify.mjs --dist dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
           node scripts/sync-npm-version.mjs --check --tag "$RELEASE_TAG"
-          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
+          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64; do
             mkdir -p "npm/$pkg/bin"
             executable=hardgate
-            if [ "$pkg" = hardgate-win32-x64 ]; then executable=hardgate.exe; fi
             tar xOf "dist/$pkg.tar.gz" "$pkg/$executable" > "npm/$pkg/bin/$executable"
             chmod 755 "npm/$pkg/bin/$executable"
             cp LICENSE-MIT LICENSE-APACHE "npm/$pkg/"
@@ -752,7 +749,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           set -euo pipefail
-          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64 hardgate-win32-x64; do
+          for pkg in hardgate-linux-x64 hardgate-linux-arm64 hardgate-darwin-x64 hardgate-darwin-arm64; do
             printf '%s' "$pkg" > receipt/active-channel
             node release-tooling/scripts/release-receipt-cli.mjs advance --receipt receipt/release.json --channel "$pkg" --to staged
             node release-tooling/scripts/publish-npm-package.mjs --package-dir "./npm/$pkg" --version "$RELEASE_VERSION" --dist dist
@@ -803,7 +800,6 @@ jobs:
           - { os: ubuntu-24.04-arm, package: hardgate-linux-arm64 }
           - { os: macos-15-intel, package: hardgate-darwin-x64 }
           - { os: macos-15, package: hardgate-darwin-arm64 }
-          - { os: windows-2025, package: hardgate-win32-x64 }
     defaults:
       run:
         shell: bash
@@ -1017,7 +1013,7 @@ jobs:
             --artifact-id '${{ needs.package.outputs.bundle_artifact_id }}' --dist dist
           node release-tooling/scripts/merge-release-receipts.mjs --expected identity.json --output verified-receipt.json receipt/release.json
           mv verified-receipt.json receipt/release.json
-          jq -e '.channels | length == 8 and all(.[]; .state == "exact_consumer_verified" or .state == "promoted" or .state == "default_consumer_verified")' receipt/release.json >/dev/null
+          jq -e '.channels | length == 7 and all(.[]; .state == "exact_consumer_verified" or .state == "promoted" or .state == "default_consumer_verified")' receipt/release.json >/dev/null
       - name: Promote npm defaults after immutable and exact consumer verification
         env:
           # dist-tag uses token authentication even when publication uses OIDC.
@@ -1060,7 +1056,6 @@ jobs:
           - { os: ubuntu-24.04-arm, package: hardgate-linux-arm64 }
           - { os: macos-15-intel, package: hardgate-darwin-x64 }
           - { os: macos-15, package: hardgate-darwin-arm64 }
-          - { os: windows-2025, package: hardgate-win32-x64 }
     defaults:
       run:
         shell: bash
@@ -1189,7 +1184,6 @@ jobs:
             hardgate-linux-arm64.tar.gz
             hardgate-darwin-x64.tar.gz
             hardgate-darwin-arm64.tar.gz
-            hardgate-win32-x64.tar.gz
             SHA256SUMS
             "hardgate-${RELEASE_VERSION}.sbom.cdx.json"
           )

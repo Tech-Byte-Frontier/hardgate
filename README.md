@@ -13,7 +13,7 @@ CI jobs, and coding agents can inspect before accepting a change.
 A passing report means that the enabled engines found no blocking findings. It
 does not claim that every possible quality property was proven.
 
-Local static analysis supports macOS, Linux, and Windows. Native npm packages
+Local static analysis supports macOS and Linux. Native npm packages
 include the CLI, so users do not need Rust. Executing project tools requires
 Linux resource containment; read-only child checks additionally need Landlock
 ABI 3+. See [installation and feature requirements](docs/INSTALLATION.md).

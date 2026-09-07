@@ -44,7 +44,6 @@ const launcher = loadLauncher(launcherFile);
     process.env.HARDGATE_LAUNCHER_DEPTH = "3";
     const options = launcher.spawnOptions();
     assert.equal(options.stdio, "inherit");
-    assert.equal(options.windowsHide, true);
     assert.equal(options.env.HARDGATE_LAUNCHER_DEPTH, "4");
     assert.equal(
       options.env.HARDGATE_LAUNCHER_DEPTH,

@@ -17,5 +17,3 @@ importers:
   npm/hardgate-linux-arm64: {}
 
   npm/hardgate-linux-x64: {}
-
-  npm/hardgate-win32-x64: {}

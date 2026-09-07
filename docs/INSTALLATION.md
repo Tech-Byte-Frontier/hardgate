@@ -1,6 +1,6 @@
 # Installation
 
-Local analysis supports **macOS, Linux, and Windows**. Cargo, direct release
+Local analysis supports **macOS and Linux**. Cargo, direct release
 downloads, npm, and pnpm provide the same CLI. This guide describes the current
 source contract; use a published version from the
 [releases](https://github.com/Tech-Byte-Frontier/hardgate/releases) when installing
@@ -34,13 +34,12 @@ See [resource limits](MUTATION_RESOURCES.md) for Linux execution setup.
 | Linux ARM64, glibc 2.39+ | `hardgate-linux-arm64` |
 | macOS Intel | `hardgate-darwin-x64` |
 | macOS Apple Silicon | `hardgate-darwin-arm64` |
-| Windows x64 | `hardgate-win32-x64` |
 
-Each archive is named `<package>.tar.gz`. Windows contains `hardgate.exe`;
-other archives contain `hardgate`. All include `BUILD-METADATA.json`.
-The native CI matrix builds and tests these platforms; musl/Alpine and Windows
-ARM64 do not have prebuilt packages. Cargo source builds have no artificial
-target allowlist. Yarn and Bun are not tested installation channels.
+Each archive is named `<package>.tar.gz` and contains `hardgate` plus
+`BUILD-METADATA.json`. The native CI matrix builds and tests these platforms.
+Windows and musl/Alpine are not supported. Cargo source builds have no artificial
+target allowlist; untested targets carry no compatibility guarantee. Yarn and
+Bun are not tested installation channels.
 
 ## Cargo
 

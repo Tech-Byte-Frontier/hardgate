@@ -50,7 +50,7 @@ export function expectedGithubAssets(version) {
 
 function assertExpectedAssets(version, assets) {
   const expected = expectedGithubAssets(version);
-  if (assets.length !== expected.length || expected.some((name) => !assets.includes(name))) fail("request.assets must exactly match the eight expected release assets");
+  if (assets.length !== expected.length || expected.some((name) => !assets.includes(name))) fail("request.assets must exactly match the expected release assets");
 }
 
 function assertPolicy(policy) {

@@ -28,8 +28,8 @@ for (const [name, phase] of [["verify-exact", "exact"], ["verify-channels", "def
 includesAll(installedConsumers, ['exact) selector="${RELEASE_VERSION:', "default) selector=latest", '"$pnpm_tool" bin --global', "command -v hardgate", '"$acceptance_script" "$command"'], "real installed checks for project and global consumers");
 includesAll(installedCheck, ['["check", "--json"]', "report.accepted", 'engine.state === "completed"', "inputHashes", 'finding.step === "test"'], "real check result, engine completion, input preservation, and test failures");
 const promotion = releaseJob("promote-channels");
-includesAll(promotion, ["needs.verify-exact.outputs.receipt_artifact_id", "scripts/merge-release-receipts.mjs", "length == 8", "exact_consumer_verified", "scripts/promote-npm-channels.mjs", "--require-default", "--channel hardgate --to promoted", "scripts/promote-github-channel.mjs"], "all-channel promotion barrier");
-assert.ok(promotion.indexOf("length == 8") < promotion.indexOf("scripts/promote-npm-channels.mjs"));
+includesAll(promotion, ["needs.verify-exact.outputs.receipt_artifact_id", "scripts/merge-release-receipts.mjs", "length == 7", "exact_consumer_verified", "scripts/promote-npm-channels.mjs", "--require-default", "--channel hardgate --to promoted", "scripts/promote-github-channel.mjs"], "all-channel promotion barrier");
+assert.ok(promotion.indexOf("length == 7") < promotion.indexOf("scripts/promote-npm-channels.mjs"));
 assert.ok(promotion.indexOf("scripts/promote-npm-channels.mjs") < promotion.indexOf("scripts/promote-github-channel.mjs"));
 assert.doesNotMatch(promotion, /--to default_consumer_verified/);
 const packaging = releaseJob("package");

@@ -22,8 +22,8 @@ registry availability. Select a published version and commit your lockfile.
 
 ## Supported runtime
 
-Local static analysis supports Linux (x64/ARM64 glibc 2.39+), macOS
-(Intel/Apple Silicon), and Windows x64. Node.js 18+ runs the launcher and the
+Local static analysis supports Linux (x64/ARM64 glibc 2.39+) and macOS
+(Intel/Apple Silicon). Node.js 18+ runs the launcher and the
 matching native optional dependency supplies the executable. **Rust is not
 required.**
 
@@ -33,8 +33,7 @@ saved evidence. Executing project tools requires Linux cgroup v2 and systemd
 254+ (or inherited verified limits); read-only child checks need Landlock ABI 3+.
 Unsupported execution features fail with setup guidance before starting tools.
 
-npm and pnpm are tested installation channels. Prebuilt musl/Alpine and Windows
-ARM64 binaries are not provided. Published versions retain their original
+npm and pnpm are tested installation channels. Windows and musl/Alpine are not supported. Published versions retain their original
 platform contracts.
 
 There are no postinstall or runtime downloads. The launcher first resolves the

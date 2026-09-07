@@ -56,7 +56,7 @@ function validateDist(directory, assets) {
   assertRegularDirectory(directory);
   const expected = [...assets].sort();
   const actual = fs.readdirSync(directory).sort();
-  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) fail("--dist must contain exactly the eight expected release assets");
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) fail("--dist must contain exactly the expected release assets");
   for (const name of assets) {
     const stats = fs.lstatSync(path.join(directory, name));
     if (stats.isSymbolicLink() || !stats.isFile()) fail(`asset ${name} must be a regular file, not a symlink`);

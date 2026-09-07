@@ -141,7 +141,7 @@ try {
   assert.equal(result.status, 0, result.stderr);
   const failedValue = JSON.parse(fs.readFileSync(failedReceipt, "utf8"));
   assert.equal(failedValue.channels[REQUIRED_CHANNELS[2]].events.length, 2);
-  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=8/);
+  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=7/);
   assert.equal(runCli(["assert", "--receipt", failedReceipt, "--require-complete"]).status, 1);
   result = runCli(["failure", "--receipt", failedReceipt, "--channel", REQUIRED_CHANNELS[2], "--code", "BAD!", "--message", "invalid"]);
   assert.notEqual(result.status, 0);

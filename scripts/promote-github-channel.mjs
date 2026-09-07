@@ -73,7 +73,7 @@ function assertAssetSet(directory, assets) {
   assertDirectory(directory);
   const actual = fs.readdirSync(directory).sort();
   const expected = [...assets].sort();
-  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) fail("--dist must contain exactly the eight expected release assets");
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) fail("--dist must contain exactly the expected release assets");
   for (const name of assets) assertRegularFile(path.join(directory, name), `asset ${name}`);
 }
 
