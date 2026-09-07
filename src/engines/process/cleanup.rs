@@ -278,23 +278,29 @@ enum SignalResult {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn signal_process_group(signal: &str, pid: rustix::process::Pid) -> Result<SignalResult, String> {
     use rustix::io::Errno;
-    use rustix::process::{Signal, kill_process_group};
+    use rustix::process::kill_process_group;
 
     if pid.as_raw_pid() <= 1 {
         return Err(format!(
             "refusing to signal process group for invalid PID {pid}"
         ));
     }
-    let signal = match signal {
-        "TERM" => Signal::TERM,
-        "KILL" => Signal::KILL,
-        other => return Err(format!("unsupported process-group signal {other}")),
-    };
+    let signal = parse_group_signal(signal)?;
     match rustix::io::retry_on_intr(|| kill_process_group(pid, signal)) {
         Ok(()) => Ok(SignalResult::Sent),
         Err(error) if error == Errno::SRCH => Ok(SignalResult::Absent),
         Err(error) if error == Errno::PERM => Ok(SignalResult::Denied),
         Err(error) => Err(format!("kernel process-group signal failed: {error}")),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn parse_group_signal(signal: &str) -> Result<rustix::process::Signal, String> {
+    use rustix::process::Signal;
+    match signal {
+        "TERM" => Ok(Signal::TERM),
+        "KILL" => Ok(Signal::KILL),
+        other => Err(format!("unsupported process-group signal {other}")),
     }
 }
 
