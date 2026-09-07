@@ -58,6 +58,7 @@ assert.deepEqual(
     "/docs/GETTING_STARTED.md",
     "/docs/TRIALS_0_6.md",
     "/docs/TRIALS_0_6_1.md",
+    "/docs/TRIALS_0_6_4.md",
     "/docs/MUTATION_RESOURCES.md",
     "/docs/ARCHITECTURE.md",
     "/docs/CLI_AND_INTEGRATION.md",
