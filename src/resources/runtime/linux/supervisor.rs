@@ -100,7 +100,10 @@ fn launch(runtime: &Path, ready: &readiness::Readiness, memory: u64) -> io::Resu
         format!("CPUQuota={quota}%"),
         "CPUWeight=25".into(),
         format!("MemoryMax={memory}"),
-        format!("MemoryHigh={}", memory / 5 * 4),
+        format!(
+            "MemoryHigh={}",
+            crate::resources::MutationBudget::high_memory_bytes(memory)
+        ),
         "MemorySwapMax=0".into(),
         format!("TasksMax={MAX_TASKS}"),
         "OOMPolicy=kill".into(),

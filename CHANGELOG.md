@@ -10,6 +10,8 @@
 - Test Rust 1.90 as the MSRV independently of the pinned Rust 1.98.1 toolchain.
 - Mirror the verified npm wrapper to GitHub Packages after release completion.
 - Verify newly published pnpm consumers without the default release-age delay.
+- Align workload memory limits to kernel pages and expose actual controls when
+  resource admission fails.
 
 - Coordinate CLI and maintenance workloads through one per-user resource slot
   with unique scope identities, cancellable waiting, and inherited lock ownership.

@@ -16,7 +16,7 @@ const result = verifyRepositoryRules();
 assert.equal(result.aggregateName, "CI quality aggregate");
 assert.deepEqual(
   result.needs,
-  ["rust", "npm-wrapper", "npm-wrapper-minimum", "repository-rules", "hardgate-self", "release-contract"],
+  ["rust", "native", "npm-wrapper", "npm-wrapper-minimum", "repository-rules", "hardgate-self", "release-contract"],
 );
 assert.equal(result.proposals.length, 2);
 

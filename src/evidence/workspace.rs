@@ -78,12 +78,14 @@ fn private_directory() -> Result<PathBuf> {
         let id = NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed);
         let root =
             std::env::temp_dir().join(format!("hardgate-evidence-{}-{id}", std::process::id()));
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         match builder.create(&root) {
             Ok(()) => return Ok(root),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

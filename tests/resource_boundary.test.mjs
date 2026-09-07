@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { boundary, bounded, eventCounters } from "../scripts/check-resource-boundary.mjs";
+import { alignedMemoryLimits, boundary, bounded, eventCounters } from "../scripts/check-resource-boundary.mjs";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-resource-script-"));
 try {
   const proc = path.join(root, "proc"), mount = path.join(root, "cgroup"), scope = path.join(mount, "parent/workload");
@@ -14,6 +14,20 @@ try {
   const write = (values) => { for (const [name, value] of Object.entries(values)) fs.writeFileSync(path.join(scope, name), value); };
   write(controls);
   assert.equal(boundary(proc, mount), scope);
+  // Reproduce kernel round-up with real page sizes and non-page-aligned host
+  // memory. Both requested controls must remain below their policy ceilings.
+  for (const ceiling of [4294967296, 2087566336, 2087566592]) {
+    const { memory, high } = alignedMemoryLimits(ceiling);
+    for (const page of [4096, 16384, 65536]) {
+      const actualMax = Math.ceil(memory / page) * page;
+      const actualHigh = Math.ceil(high / page) * page;
+      assert.ok(actualMax <= ceiling);
+      assert.ok(actualHigh <= Math.floor(actualMax / 5) * 4);
+      write({ "memory.max": String(actualMax), "memory.high": String(actualHigh) });
+      assert.equal(bounded(scope, ceiling), true);
+    }
+  }
+  write(controls);
   for (const [name, value] of [["cpu.max", "max 100000"], ["cpu.max", "300000 100000"], ["memory.max", "8589934592"], ["memory.high", "4294967296"], ["memory.swap.max", "1"], ["pids.max", "max"]]) {
     write({ [name]: value });
     assert.equal(bounded(scope, 4294967296), false, name);

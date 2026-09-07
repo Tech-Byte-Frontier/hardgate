@@ -6,6 +6,12 @@ const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 const MEMORY_ALIGNMENT: u64 = 64 * 1024;
 
+// cgroup memory controls round up to kernel pages. Align down first so the
+// enforced readback never exceeds the intended byte ceiling (4/16/64 KiB pages).
+pub(super) fn align_memory_bytes(bytes: u64) -> u64 {
+    bytes / MEMORY_ALIGNMENT * MEMORY_ALIGNMENT
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MutationBudget {
     pub(crate) memory_bytes: u64,
@@ -31,7 +37,7 @@ impl MutationBudget {
             }
             None => (2 * GIB, 256 * MIB),
         };
-        let memory_bytes = memory_bytes / MEMORY_ALIGNMENT * MEMORY_ALIGNMENT;
+        let memory_bytes = align_memory_bytes(memory_bytes);
         if memory_bytes < 64 * MIB {
             return Err(io::Error::other(
                 "mutation resource guard: insufficient memory headroom; close other workloads and retry",
@@ -52,7 +58,7 @@ impl MutationBudget {
 
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn high_memory_bytes(memory_bytes: u64) -> u64 {
-        memory_bytes / 5 * 4 / MEMORY_ALIGNMENT * MEMORY_ALIGNMENT
+        align_memory_bytes(memory_bytes / 5 * 4)
     }
 
     pub(crate) fn constrain_environment(self, command: &mut Command) {

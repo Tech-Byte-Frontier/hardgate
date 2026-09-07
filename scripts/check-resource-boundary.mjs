@@ -16,6 +16,12 @@ export function memoryLimit(proc = "/proc") {
   return Math.min(Math.floor(integer(value) * 1024 / 4), 4 * 1024 ** 3);
 }
 
+export function alignedMemoryLimits(limit) {
+  const alignment = 64 * 1024;
+  const memory = Math.floor(limit / alignment) * alignment;
+  return { memory, high: Math.floor(Math.floor(memory / 5) * 4 / alignment) * alignment };
+}
+
 export function bounded(directory, limit) {
   try {
     const value = (name) => read(path.join(directory, name));
@@ -41,12 +47,23 @@ export function boundary(proc = "/proc", mount = "/sys/fs/cgroup") {
   const membership = read(path.join(proc, "self/cgroup")).split("\n").find((line) => line.startsWith("0::"))?.slice(3);
   if (!membership?.startsWith("/") || membership.split("/").includes("..")) throw new Error("invalid cgroup membership");
   let current = path.join(mount, membership);
+  const observed = [];
   while (current !== mount) {
     if (bounded(current, limit)) return current;
+    observed.push(controlSnapshot(current));
     current = path.dirname(current);
   }
   if (bounded(mount, limit)) return mount;
-  throw new Error("no enforced CPU, memory, swap and task boundary");
+  observed.push(controlSnapshot(mount));
+  throw new Error(`no enforced CPU, memory, swap and task boundary (memory ceiling ${limit}); ${observed.join("; ")}`);
+}
+
+function controlSnapshot(directory) {
+  const values = ["cpu.max", "memory.max", "memory.high", "memory.swap.max", "pids.max"].map((name) => {
+    try { return `${name}=${read(path.join(directory, name))}`; }
+    catch (error) { return `${name}=${error.code}`; }
+  });
+  return `${directory}: ${values.join(", ")}`;
 }
 
 export function eventCounters(directory, name) {
@@ -72,8 +89,8 @@ function affinityCount() {
 }
 
 export function resourceLimits() {
-  const memory = memoryLimit();
-  return { quota: Math.min(200, affinityCount() * 50), memory, high: Math.floor(memory / 5) * 4 };
+  // Kernel memory controls may round up to PAGE_SIZE on readback.
+  return { quota: Math.min(200, affinityCount() * 50), ...alignedMemoryLimits(memoryLimit()) };
 }
 
 function main(args) {

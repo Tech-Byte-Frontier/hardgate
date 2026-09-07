@@ -52,7 +52,9 @@ pub(super) fn enter() -> io::Result<Admission> {
 }
 
 pub(super) fn memory_limit() -> io::Result<u64> {
-    Ok((memory::host_total_bytes()? / 4).min(MAX_MEMORY))
+    Ok(crate::resources::budget::align_memory_bytes(
+        (memory::host_total_bytes()? / 4).min(MAX_MEMORY),
+    ))
 }
 
 pub(super) fn find_boundary() -> io::Result<Option<Boundary>> {
