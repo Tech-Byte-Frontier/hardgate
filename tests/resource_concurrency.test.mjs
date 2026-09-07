@@ -64,7 +64,7 @@ function fixture(name) {
   const directory = path.join(root, name);
   fs.mkdirSync(path.join(directory, "src"), { recursive: true });
   fs.writeFileSync(path.join(directory, "src/index.ts"), "export const answer = 42;\n");
-  fs.writeFileSync(path.join(directory, "hardgate.toml"), "[gate]\npreset='custom'\n[orchestration]\ntest_cmd='sh probe.sh'\n");
+  fs.writeFileSync(path.join(directory, "hardgate.toml"), "[gate]\npreset='custom'\n[orchestration]\nrequire_isolation=true\ntest_cmd='sh probe.sh'\n");
   fs.writeFileSync(path.join(directory, "probe.sh"), `set -eu
 slot=0
 for descriptor in /proc/$$/fd/*; do
