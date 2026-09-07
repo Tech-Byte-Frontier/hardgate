@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.6.1 (unreleased)
+## 0.6.1 (2026-09-07)
+
+- Enable local static analysis on macOS, Linux, and Windows. Keep Linux
+  containment mandatory for project-tool execution and generated freshness,
+  with actionable unsupported-feature errors.
+- Add native npm packages and release/consumer validation for Linux ARM64,
+  macOS Intel/Apple Silicon, and Windows x64; no Rust is needed for npm installs.
+- Test Rust 1.90 as the MSRV independently of the pinned Rust 1.98.1 toolchain.
+- Mirror the verified npm wrapper to GitHub Packages after release completion.
+- Verify newly published pnpm consumers without the default release-age delay.
 
 - Coordinate CLI and maintenance workloads through one per-user resource slot
   with unique scope identities, cancellable waiting, and inherited lock ownership.

@@ -13,9 +13,10 @@ CI jobs, and coding agents can inspect before accepting a change.
 A passing report means that the enabled engines found no blocking findings. It
 does not claim that every possible quality property was proven.
 
-Hardgate 0.6 supports Linux x64 GNU (Ubuntu 24.04 baseline). Workload commands
-require cgroup v2, a systemd user manager or inherited verified limits, and
-Landlock ABI 3+ for read-only child checks. See [runtime setup](docs/INSTALLATION.md).
+Local static analysis supports macOS, Linux, and Windows. Native npm packages
+include the CLI, so users do not need Rust. Executing project tools requires
+Linux resource containment; read-only child checks additionally need Landlock
+ABI 3+. See [installation and feature requirements](docs/INSTALLATION.md).
 
 ## Quick start
 
@@ -26,8 +27,11 @@ the project you want to check:
 cargo install hardgate --locked
 cd /path/to/your/project
 hardgate init
-hardgate check
+hardgate check --checks policy
 ```
+
+`check --checks policy` is a partial static/evidence check, not full acceptance.
+On a configured Linux execution host, run `hardgate check` for all requirements.
 
 `balanced` is a structural starting point. Initialization does not install
 project tools or execute project commands. An existing project may still fail

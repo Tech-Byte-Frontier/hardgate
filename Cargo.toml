@@ -2,7 +2,7 @@
 name = "hardgate"
 version = "0.6.1"
 edition = "2024"
-rust-version = "1.98.1"
+rust-version = "1.90"
 description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
 authors = ["Tauan BF <contact@techbytefrontier.com>"]
 license = "MIT OR Apache-2.0"

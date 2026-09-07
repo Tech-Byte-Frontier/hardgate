@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Promote the two npm latest channels from a verified release receipt.
+// Promote the native and wrapper npm latest channels from a verified release receipt.
 //
 // This command only moves npm dist-tags. It does not publish package bytes,
 // perform an OIDC exchange, or mark a receipt's default-consumer state. The

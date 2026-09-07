@@ -9,7 +9,7 @@ for (const [label, text] of [["CI", ci], ["release", release]]) {
     assert.match(line, /#\s*(?:v?[0-9]|master\b)/i, `${label} pin must identify its version`);
   }
   assert.equal((text.match(/actions\/checkout@/g) ?? []).length, (text.match(/persist-credentials: false/g) ?? []).length, `${label} must not persist checkout credentials`);
-  assert.doesNotMatch(text, /YARN_VERSION|BUN_VERSION|setup-bun|macos-|ubuntu-24\.04-arm|matrix:/);
+  assert.doesNotMatch(text, /YARN_VERSION|BUN_VERSION|setup-bun/);
   includesAll(text, ["NODE_VERSION: 26.8.1", "NPM_VERSION: 12.0.2", "PNPM_VERSION: 11.25.0", "digest-mismatch: error", "retention-days: 30"], `${label} tool and artifact contracts`);
 }
 includesAll(ci, [
@@ -23,10 +23,10 @@ includesAll(ci, [
   "name: Select distribution checks", "distribution=true", "EVENT_NAME", "BASE_SHA", "HEAD_SHA",
   "if: needs.rust.outputs.distribution == 'true'",
 ], "focused required CI");
-const ciRust = ci.slice(ci.indexOf("  rust:"), ci.indexOf("  npm-wrapper:"));
+const ciRust = ci.slice(ci.indexOf("  rust:"), ci.indexOf("  native:"));
 const ciSelf = ci.slice(ci.indexOf("  hardgate-self:"), ci.indexOf("  release-contract:"));
 const ciWrapper = ci.slice(ci.indexOf("  npm-wrapper:"), ci.indexOf("  npm-wrapper-minimum:"));
-assert.equal((ci.match(/cargo build --locked --release/g) ?? []).length, 1, "CI builds the native release binary once");
+assert.equal((ciRust.match(/cargo build --locked --release/g) ?? []).length, 1, "CI builds the native release binary once");
 assert.doesNotMatch(release, /cargo build/, "release reuses the exact CI artifact");
 includesAll(ciRust, ["steps.upload_native.outputs.artifact-id", "SOURCE_DATE_EPOCH: 0", "native-linux-x64-attempt-", "cargo publish --dry-run --locked"], "source-identified CI artifact");
 assert.doesNotMatch(ciRust, /CARGO_REGISTRY_TOKEN|NODE_AUTH_TOKEN/, "CI build scripts must not receive publication credentials");
@@ -73,3 +73,5 @@ includesAll(consumers, ["--json tagName,isDraft,isPrerelease", 'test "$release_t
 includesAll(installedConsumers, ['"$npm_tool" install --ignore-scripts --global', '"$pnpm_tool" add --ignore-scripts --global', '"$pnpm_tool" bin --global', "command -v hardgate", "installed-check.mjs"], "installed project/global consumers");
 includesAll(launcher, ["function detectMusl", "glibcVersionRuntime", "trim().length", "function exitFromSpawn", "result.status ?? 1", "process.kill(process.pid, result.signal)", "process.exit(1)"], "launcher libc and process contract");
 assert.doesNotMatch(launcher, /fallbackPackages|hasAlpineRelease|MACHO_U32/);
+
+includesAll(ci, ["RUST_MSRV: 1.90.0", 'cargo "+${RUST_MSRV}" test', "--test portable_analysis_tests", "tests/native_installation.test.mjs", "binary-${{ matrix.target }}"], "portable analysis and MSRV gates");

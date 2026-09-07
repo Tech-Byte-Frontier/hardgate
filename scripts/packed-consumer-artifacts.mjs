@@ -107,7 +107,7 @@ function readArtifact(archivePath, directory, expectedVersion, budget) {
   if (manifest.version !== expectedVersion) fail(`${name} archive version ${manifest.version} does not match --version ${expectedVersion}`);
   validateManifestContract(manifest);
   const resolved = fs.realpathSync(archivePath);
-  const relative = path.relative(directory, resolved);
+  const relative = path.relative(fs.realpathSync(directory), resolved);
   if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail(`archive escapes --packages-dir: ${archivePath}`);
   return {
     name,
@@ -140,7 +140,7 @@ function requireExactPackageSet(artifacts, expectedVersion) {
   const extraNames = [...artifacts.keys()].filter((name) => !expectedNames.has(name));
   if (missingNames.length === 0 && extraNames.length === 0 && artifacts.size === expectedNames.size) return;
   const missingLabel = missingNames.map((name) => `${name}@${expectedVersion}`).join(", ") || "none";
-  fail(`--packages-dir must contain exactly the wrapper and the Linux x64 GNU platform archive (missing: ${missingLabel}; extra: ${extraNames.join(", ") || "none"})`);
+  fail(`--packages-dir must contain exactly the wrapper and all supported native platform archives (missing: ${missingLabel}; extra: ${extraNames.join(", ") || "none"})`);
 }
 
 function validateNonHostPlatforms(artifacts, host, expectedVersion) {

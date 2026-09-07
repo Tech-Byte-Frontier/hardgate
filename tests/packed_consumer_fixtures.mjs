@@ -9,6 +9,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 
+import { PLATFORM_NAMES, executableName } from "../scripts/release-platforms.mjs";
 import { readCargoVersion } from "../scripts/release-support.mjs";
 
 import { runReleaseProcess } from "../scripts/release-process.mjs";
@@ -52,7 +53,7 @@ export function makeFixtureArchives({ fixtureRoot, root }) {
   fs.mkdirSync(packagesDir, { recursive: true });
   const nativeBinary = path.resolve(process.env.HARDGATE_BINARY ?? path.join(root, "target/release/hardgate"));
   fs.accessSync(nativeBinary, fs.constants.X_OK);
-  const names = ["hardgate-linux-x64"];
+  const names = PLATFORM_NAMES;
   for (const name of ["hardgate", ...names]) {
     const packageDirectory = path.join(fixtureRoot, name);
     fs.cpSync(path.join(root, "npm", name), packageDirectory, { recursive: true });
@@ -64,8 +65,8 @@ export function makeFixtureArchives({ fixtureRoot, root }) {
     for (const dependency of Object.keys(manifest.optionalDependencies ?? {})) manifest.optionalDependencies[dependency] = version;
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     if (name !== "hardgate") {
-      fs.copyFileSync(nativeBinary, path.join(packageDirectory, "bin", "hardgate"));
-      fs.chmodSync(path.join(packageDirectory, "bin", "hardgate"), 0o755);
+      fs.copyFileSync(nativeBinary, path.join(packageDirectory, "bin", executableName(name)));
+      fs.chmodSync(path.join(packageDirectory, "bin", executableName(name)), 0o755);
     }
     run("npm", ["pack", "--json", "--loglevel=error", "--pack-destination", packagesDir], {
       cwd: packageDirectory, env: fixtureEnvironment(fixtureRoot),
@@ -100,7 +101,7 @@ export function makeDuplicateManifestArchives({ fixtureRoot }) {
   for (const archive of fs.readdirSync(path.join(fixtureRoot, "packages")).filter((name) => name.endsWith(".tgz"))) {
     fs.copyFileSync(path.join(fixtureRoot, "packages", archive), path.join(packagesDir, archive));
   }
-  const wrapperArchive = fs.readdirSync(packagesDir).find((name) => name.endsWith(".tgz") && !/^hardgate-(?:linux|darwin)-/.test(name));
+  const wrapperArchive = fs.readdirSync(packagesDir).find((name) => name.endsWith(".tgz") && !/^hardgate-(?:linux|darwin|win32)-/.test(name));
   assert.ok(wrapperArchive, "fixture wrapper archive must be present");
   const tarPath = path.join(fixtureRoot, "duplicate-manifest.tar");
   const duplicateRoot = path.join(fixtureRoot, "duplicate-manifest");

@@ -53,13 +53,13 @@ assert.match(expectedVersion, /hardgate \d+\.\d+\.\d+/);
   const preload = path.join(dir, "platform.cjs");
   fs.writeFileSync(
     preload,
-    'Object.defineProperty(process, "platform", { value: "win32" });\n',
+    'Object.defineProperty(process, "platform", { value: "freebsd" });\n',
   );
   const res = runLauncher(launcher, ["--version"], {
     nodeArgs: ["--require", preload],
   });
   assert.equal(res.status, 1);
-  assert.match(res.stderr, /Unsupported platform win32/);
+  assert.match(res.stderr, /Unsupported platform freebsd/);
   console.log("A2: unsupported platform fails clearly -- OK");
 }
 

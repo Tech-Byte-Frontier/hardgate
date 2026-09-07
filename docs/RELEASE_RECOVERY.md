@@ -18,7 +18,7 @@ The six stages are:
 | Stage | Required result |
 | --- | --- |
 | `version-check` | Signed tag, source versions, main-tip/recovery authorization, successful exact-source CI and artifact identity |
-| `package` | Reused Linux x64 GNU binary, reproducible archive, checksums, SBOM, and real offline npm/pnpm installs |
+| `package` | Reused binaries for every supported native platform, reproducible archives, checksums, SBOM, and real offline npm/pnpm installs |
 | `publish` | Checksum/SBOM attestations, receipt identity, authenticated prerequisites, publication of missing GitHub/crate/npm artifacts, and exact Cargo installation |
 | `verify-exact` | Real npm/pnpm project/global checks and direct downloaded-binary checks for the exact release |
 | `promote-channels` | All exact consumers verified, immutable versions unchanged, and independent readback of default selectors |
@@ -27,15 +27,21 @@ The six stages are:
 The bundle upload is the final packaging checkpoint. Attestation or publication
 failures can therefore reuse it without rebuilding. `release-bundle` lasts 30
 days. Attempt-specific publication, exact-consumer, promotion, and final
-receipts last 90 days. Stages pass exact artifact IDs directly; there is no
-platform matrix or newest-artifact collector.
+receipts last 90 days. Bundle and receipt stages pass exact artifact IDs directly. Native matrix jobs
+retain attempt-numbered binaries and proofs. Collectors select each platform's
+newest attempt within the same workflow run and verify source/target/receipt
+identity; successful platforms may be retained from earlier partial attempts.
 
-Four channels must progress through `pending` → `staged` →
+Eight channels must progress through `pending` → `staged` →
 `immutable_verified` → `exact_consumer_verified` → `promoted` →
 `default_consumer_verified`:
 
 ```text
 hardgate-linux-x64
+hardgate-linux-arm64
+hardgate-darwin-x64
+hardgate-darwin-arm64
+hardgate-win32-x64
 @tech-byte-frontier/hardgate
 hardgate
 github-assets
@@ -45,8 +51,10 @@ Transitions are adjacent, identity-bound, and replay-safe. Failures retain the
 previous verified state. The final stage requires every channel to complete;
 a failed, cancelled, or skipped dependency prevents it from succeeding.
 Installed consumers verify binary bytes and full version/source identity,
-then run actual `hardgate check`, including a real failing-test case and
-input preservation. A version response alone is insufficient.
+then run actual local analysis on each matching host. The Linux x64 consumer
+also runs complete `hardgate check`, including a real failing-test case and
+input preservation. Native exact/default matrix failures block their aggregate
+consumer checkpoint. A version response alone is insufficient.
 
 ## Retry or resume
 
@@ -72,12 +80,12 @@ assets, republish an existing version, or move its signed tag.
 
 ## Publication and promotion
 
-GitHub stages a public prerelease without changing Latest. npm publishes the
-platform package, verifies it, then publishes the wrapper under
+GitHub stages a public prerelease without changing Latest. npm publishes all
+platform packages, verifies them, then publishes the wrapper under
 `hardgate-candidate`. crates.io exposes its immutable version independently;
 this process does not make publication atomic across registries.
 
-Promotion requires all four exact-consumer checkpoints. npm's `latest` update
+Promotion requires all eight channel exact-consumer checkpoints. npm's `latest` update
 uses the separate token credential even when publication used trusted OIDC.
 The crate's intended `max_stable_version` is verified without a registry
 mutation. GitHub promotes only its byte-verified release. Default consumers

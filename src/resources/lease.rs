@@ -106,7 +106,7 @@ fn hold(file: File, path: &Path) -> MutationLease {
 }
 
 /// Create and validate the shared lock before child write restrictions apply.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub(crate) fn prepare() -> io::Result<()> {
     prepare_at(&lock_path(), current_uid()).map(drop)
 }

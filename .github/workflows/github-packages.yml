@@ -1,0 +1,78 @@
+name: GitHub Packages mirror
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Latest stable released tag to mirror (vX.Y.Z)
+        required: true
+        type: string
+
+# Share the release lock so npm latest cannot advance during mirroring.
+concurrency:
+  group: hardgate-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.8.1
+          registry-url: https://npm.pkg.github.com
+          scope: '@tech-byte-frontier'
+      - run: npm install --global npm@12.0.2 --registry=https://registry.npmjs.org
+      - name: Verify latest stable release and signed source
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          metadata=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease)
+          jq -e '.isDraft == false and .isPrerelease == false' <<< "$metadata" >/dev/null
+          tag=$(jq -r .tagName <<< "$metadata")
+          if [ -n "$REQUESTED_TAG" ]; then test "$REQUESTED_TAG" = "$tag"; fi
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git cat-file -t "refs/tags/$tag")" = tag
+          git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag "refs/tags/$tag"
+          commit=$(git rev-parse "refs/tags/${tag}^{commit}")
+          git merge-base --is-ancestor "$commit" HEAD
+          git show "$commit:npm/hardgate/package.json" > "$RUNNER_TEMP/signed-wrapper.json"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Mirror and verify identical npm archive
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/mirror-github-package.mjs "$RELEASE_VERSION" "$RUNNER_TEMP/signed-wrapper.json"
+      - name: Install from GitHub Packages and verify CLI identity
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          consumer=$(mktemp -d)
+          trap 'rm -rf "$consumer"' EXIT
+          cd "$consumer"
+          npm install --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org \
+            "@tech-byte-frontier/hardgate@$RELEASE_VERSION"
+          test "$(node_modules/.bin/hardgate --version)" = "hardgate $RELEASE_VERSION ($RELEASE_COMMIT)"

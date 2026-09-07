@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { compareReleaseTags } from "./release-order.mjs";
 
-import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+import { NATIVE_PACKAGES, executableName } from "./release-platforms.mjs";
 export { NATIVE_PACKAGES } from "./release-platforms.mjs";
 
 const HOST_PACKAGE_RULES = Object.values(NATIVE_PACKAGES).map(({ platform, arch, libc, name }) => [platform, arch, libc, name]);
@@ -47,7 +47,7 @@ export function regularFile(file, label) {
 
 export function packageDescriptor(packageName) {
   const descriptor = Object.hasOwn(NATIVE_PACKAGES, packageName) ? NATIVE_PACKAGES[packageName] : undefined;
-  if (!descriptor) fail(`--package must identify the supported Linux x64 GNU package, got ${packageName || "<missing>"}`);
+  if (!descriptor) fail(`--package must identify a supported native package, got ${packageName || "<missing>"}`);
   return descriptor;
 }
 
@@ -255,7 +255,7 @@ export function pathInside(root, candidate) {
   return relative.length > 0 && relative !== "." && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
-export function stableExecutablePath(packageName, suffix = "bin/hardgate") {
+export function stableExecutablePath(packageName, suffix = `bin/${executableName(packageName)}`) {
   return `node_modules/${packageName}/${suffix}`.replaceAll(path.sep, "/");
 }
 

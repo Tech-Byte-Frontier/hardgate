@@ -48,13 +48,32 @@ fn execute_guarded(
 }
 
 fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources::Admission>> {
-    if matches!(
-        cli.command,
-        Commands::Completions { .. } | Commands::Init { .. } | Commands::Config { .. }
-    ) {
+    if !requires_isolation(cli)? {
         return Ok(None);
     }
     hardgate::runtime_resources::enter().map(Some)
+}
+
+fn requires_isolation(cli: &super::Cli) -> io::Result<bool> {
+    match &cli.command {
+        Commands::Fmt { .. } | Commands::Evidence { .. } => Ok(true),
+        Commands::Check { checks, .. } => {
+            if checks.is_empty()
+                || checks
+                    .iter()
+                    .any(|kind| *kind != hardgate::commands::CheckKind::Policy)
+            {
+                return Ok(true);
+            }
+            // Policy checks normally only read source and saved evidence. A
+            // configured freshness command is the exception: it executes code.
+            let context = hardgate::config::ConfigContext::load(cli.config.as_deref())
+                .map_err(io::Error::other)?;
+            Ok(context.config.generated.enabled
+                && context.config.generated.freshness_command.is_some())
+        }
+        _ => Ok(false),
+    }
 }
 
 fn finish(result: CommandResult, stage: &str, json: bool) -> ExitCode {

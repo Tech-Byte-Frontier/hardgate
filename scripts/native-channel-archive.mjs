@@ -1,6 +1,7 @@
 // Verify the bounded archive and architecture evidence for one native package.
 "use strict";
 
+import { executableName } from "./release-platforms.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -41,7 +42,7 @@ function runTarBytes(archive, member, { policy, maxBytes }) {
 }
 
 function archiveRecords(listing, packageName) {
-  const expected = [`${packageName}/`, `${packageName}/BUILD-METADATA.json`, `${packageName}/hardgate`];
+  const expected = [`${packageName}/`, `${packageName}/BUILD-METADATA.json`, `${packageName}/${executableName(packageName)}`];
   const records = new Map();
   for (const member of expected) {
     const line = listing.split("\n").find((entry) => entry.trim().split(/\s+->\s+/, 1)[0].endsWith(` ${member}`));
@@ -55,7 +56,7 @@ function archiveRecords(listing, packageName) {
   }
   const metadata = records.get(`${packageName}/BUILD-METADATA.json`);
   if (metadata.mode[0] !== "-") fail(`${packageName} BUILD-METADATA.json must be a bounded regular file`);
-  const binary = records.get(`${packageName}/hardgate`);
+  const binary = records.get(`${packageName}/${executableName(packageName)}`);
   if (binary.mode[0] !== "-") fail(`${packageName} hardgate must be a bounded regular file`);
   // GNU and BSD tar place size columns differently; runTarBytes enforces the
   // byte bounds on the actual extracted payload below.
@@ -91,9 +92,9 @@ async function verifyArchiveAbi(binaryPath, descriptor, { runProcess, policy }) 
   if (!descriptor.abi) return;
   const [report, programHeaders, symbols, notes] = await Promise.all([
     runText(SYSTEM_FILE, ["-b", binaryPath], { runProcess, policy }),
-    runText(SYSTEM_READELF, ["-l", binaryPath], { runProcess, policy }),
-    runText(SYSTEM_READELF, ["-sW", binaryPath], { runProcess, policy }),
-    runText(SYSTEM_READELF, ["-n", binaryPath], { runProcess, policy }),
+    descriptor.abi === "gnu" ? runText(SYSTEM_READELF, ["-l", binaryPath], { runProcess, policy }) : "",
+    descriptor.abi === "gnu" ? runText(SYSTEM_READELF, ["-sW", binaryPath], { runProcess, policy }) : "",
+    descriptor.abi === "gnu" ? runText(SYSTEM_READELF, ["-n", binaryPath], { runProcess, policy }) : "",
   ]);
   const evidence = classifyBinaryAbi({
     report,
@@ -122,11 +123,11 @@ export async function verifyNativeArchive({ archive, packageName, version, sourc
   regularFile(archive, "--archive");
   if (path.basename(archive) !== `${packageName}.tar.gz`) fail(`archive must be named ${packageName}.tar.gz`);
   const listing = (await runText(SYSTEM_TAR, ["-tzf", archive], { runProcess, policy })).split("\n").filter(Boolean).sort();
-  const expected = [`${packageName}/`, `${packageName}/BUILD-METADATA.json`, `${packageName}/hardgate`];
+  const expected = [`${packageName}/`, `${packageName}/BUILD-METADATA.json`, `${packageName}/${executableName(packageName)}`];
   if (listing.join("\n") !== expected.join("\n")) fail(`${packageName} archive contains unexpected members`);
   const modeListing = await runText(SYSTEM_TAR, ["-tvzf", archive], { runProcess, policy });
   archiveRecords(modeListing, packageName);
-  if (!isExecutableMode(archiveMemberMode(modeListing, `${packageName}/hardgate`))) {
+  if (!isExecutableMode(archiveMemberMode(modeListing, `${packageName}/${executableName(packageName)}`))) {
     fail(`${packageName} archive member hardgate must retain an executable mode`);
   }
   let metadata;
@@ -136,7 +137,7 @@ export async function verifyNativeArchive({ archive, packageName, version, sourc
     fail(`${packageName} BUILD-METADATA.json is not valid JSON: ${error.message}`);
   }
   assertArchiveMetadata(metadata, { packageName, descriptor, version, sourceSha });
-  const bytes = runTarBytes(archive, `${packageName}/hardgate`, { policy, maxBytes: MAX_BINARY_BYTES });
+  const bytes = runTarBytes(archive, `${packageName}/${executableName(packageName)}`, { policy, maxBytes: MAX_BINARY_BYTES });
   if (bytes.length === 0 || bytes.length > MAX_BINARY_BYTES) fail(`${packageName} archive binary is outside the bounded size limit`);
   verifyEmbeddedIdentity(bytes, { packageName, target: descriptor.target, version, sourceSha });
   const binaryPath = path.join(directory, `${packageName}.hardgate`);

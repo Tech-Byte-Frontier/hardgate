@@ -19,12 +19,12 @@ const launcher = loadLauncher(launcherFile);
   const cases = [
     { platform: "linux", arch: "x64", musl: false, expected: "hardgate-linux-x64" },
     { platform: "linux", arch: "x64", musl: true, expected: null },
-    { platform: "linux", arch: "arm64", musl: false, expected: null },
+    { platform: "linux", arch: "arm64", musl: false, expected: "hardgate-linux-arm64" },
     { platform: "linux", arch: "arm64", musl: true, expected: null },
-    { platform: "darwin", arch: "x64", musl: null, expected: null },
-    { platform: "darwin", arch: "x64", musl: false, expected: null },
-    { platform: "darwin", arch: "arm64", musl: null, expected: null },
-    { platform: "win32", arch: "x64", musl: null, expected: null },
+    { platform: "darwin", arch: "x64", musl: null, expected: "hardgate-darwin-x64" },
+    { platform: "darwin", arch: "x64", musl: false, expected: "hardgate-darwin-x64" },
+    { platform: "darwin", arch: "arm64", musl: null, expected: "hardgate-darwin-arm64" },
+    { platform: "win32", arch: "x64", musl: null, expected: "hardgate-win32-x64" },
     { platform: "win32", arch: "arm64", musl: null, expected: null },
     { platform: "linux", arch: "s390x", musl: false, expected: null },
     { platform: "freebsd", arch: "x64", musl: null, expected: null },
@@ -64,19 +64,19 @@ const launcher = loadLauncher(launcherFile);
   console.log("H: musl-detection truth table -- OK");
 }
 
-// I. Only ELF magic bytes are accepted as supported machine binaries.
+// I. Native headers are accepted only for their host platform.
 {
   const dir = makeTempDir("hg-magic-");
   const files = [
-    ["elf", Buffer.from([0x7f, 0x45, 0x4c, 0x46]), true],
+    ["elf", Buffer.from([0x7f, 0x45, 0x4c, 0x46]), process.platform === "linux"],
     ["elf-truncated", Buffer.from([0x7f, 0x45]), false],
     ["elf-lookalike", Buffer.from([0x7f, 0x4f, 0x4f, 0x4f]), false],
     ["elf-first-two", Buffer.from([0x7f, 0x45, 0x00, 0x00]), false],
     ["elf-first-three", Buffer.from([0x7f, 0x45, 0x4c, 0x00]), false],
-    ["pe", Buffer.from([0x4d, 0x5a, 0x90, 0x00]), false],
+    ["pe", Buffer.from([0x4d, 0x5a, 0x90, 0x00]), process.platform === "win32"],
     ["pe-lookalike", Buffer.from([0x4d, 0x00, 0x00, 0x00]), false],
-    ["macho-le64", Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), false],
-    ["macho-fat", Buffer.from([0xca, 0xfe, 0xba, 0xbe]), false],
+    ["macho-le64", Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), process.platform === "darwin"],
+    ["macho-fat", Buffer.from([0xca, 0xfe, 0xba, 0xbe]), process.platform === "darwin"],
     ["shell", Buffer.from("#!/bin/sh\necho hi\n"), false],
     ["empty", Buffer.alloc(0), false],
     ["text", Buffer.from("not a binary"), false],

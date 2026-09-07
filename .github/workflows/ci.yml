@@ -15,6 +15,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: 0
   CARGO_PROFILE_TEST_DEBUG: 0
   RUST_TOOLCHAIN: 1.98.1
+  RUST_MSRV: 1.90.0
   RUST_COVERAGE_TOOLCHAIN: nightly-2026-09-04
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_LLVM_COV_VERSION: 0.9.0
@@ -53,7 +54,7 @@ jobs:
           distribution=true
           if [ "$EVENT_NAME" = pull_request ]; then
             changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-            if ! printf '%s\n' "$changed" | grep -Eq '^(Cargo\.(toml|lock)|build\.rs|rust-toolchain\.toml|package\.json|\.nvmrc|npm/|scripts/|\.github/|tests/(release_contract|packed_consumer|npm|native_|repository_rules))'; then
+            if ! printf '%s\n' "$changed" | grep -Eq '^(Cargo\.(toml|lock)|build\.rs|rust-toolchain\.toml|package\.json|\.nvmrc|npm/|scripts/|\.github/|tests/(release_contract|packed_consumer|npm|native_|portable_|repository_rules))'; then
               distribution=false
             fi
           fi
@@ -70,6 +71,10 @@ jobs:
       - run: cargo fmt --all --check
       - run: scripts/with-resource-limits.sh cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: scripts/with-resource-limits.sh cargo test --all-targets --all-features --locked
+      - name: Install the minimum supported Rust compiler
+        run: rustup toolchain install "$RUST_MSRV" --profile minimal
+      - name: Test locked dependencies and all targets on the MSRV
+        run: scripts/with-resource-limits.sh cargo "+${RUST_MSRV}" test --all-targets --all-features --locked
       - name: Resource boundary and supervisor concurrency regressions
         run: |
           node tests/resource_boundary.test.mjs
@@ -97,6 +102,51 @@ jobs:
         with:
           name: native-linux-x64-attempt-${{ github.run_attempt }}
           path: target/release/hardgate
+          if-no-files-found: error
+          retention-days: 30
+
+  native:
+    name: Native local analysis (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, binary: hardgate }
+          - { os: macos-15-intel, target: x86_64-apple-darwin, binary: hardgate }
+          - { os: macos-15, target: aarch64-apple-darwin, binary: hardgate }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc, binary: hardgate.exe }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - name: Test local analysis with the MSRV
+        run: |
+          rustup toolchain install "$RUST_MSRV" --profile minimal
+          cargo "+${RUST_MSRV}" test --locked --test portable_analysis_tests --test cli_process_contract
+      - name: Lint and build with the pinned compiler
+        run: |
+          cargo clippy --locked --lib --bin hardgate -- -D warnings
+          cargo build --locked --release --target ${{ matrix.target }}
+        env:
+          HARDGATE_BUILD_GIT_SHA: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: 0
+      - name: Install packed npm binaries and exercise local analysis without Rust
+        run: node tests/native_installation.test.mjs target/${{ matrix.target }}/release/${{ matrix.binary }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ matrix.target }}-attempt-${{ github.run_attempt }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 30
 
@@ -247,6 +297,15 @@ jobs:
           fallback: none
       - name: Run complete configured static/orchestration/evidence gate
         run: scripts/self-gate.sh
+      - name: Preserve evidence for coverage diagnosis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: self-evidence-attempt-${{ github.run_attempt }}
+          path: .hardgate/evidence/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
   release-contract:
     name: Distribution safety contract
@@ -270,7 +329,7 @@ jobs:
   quality:
     name: CI quality aggregate
     if: ${{ always() }}
-    needs: [rust, npm-wrapper, npm-wrapper-minimum, repository-rules, hardgate-self, release-contract]
+    needs: [rust, native, npm-wrapper, npm-wrapper-minimum, repository-rules, hardgate-self, release-contract]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every quality job to pass

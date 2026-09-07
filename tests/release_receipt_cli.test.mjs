@@ -1,6 +1,7 @@
 // Behavioral contract for the release-receipt checkpoint CLI.
 "use strict";
 
+import { PLATFORM_ASSETS } from "../scripts/release-platforms.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -14,7 +15,7 @@ import "../scripts/release-receipt-cli.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "scripts", "release-receipt-cli.mjs");
 const platformAssets = [
-  "hardgate-linux-x64.tar.gz",
+  ...PLATFORM_ASSETS,
 ];
 const version = "0.5.0";
 
@@ -140,7 +141,7 @@ try {
   assert.equal(result.status, 0, result.stderr);
   const failedValue = JSON.parse(fs.readFileSync(failedReceipt, "utf8"));
   assert.equal(failedValue.channels[REQUIRED_CHANNELS[2]].events.length, 2);
-  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=4/);
+  assert.match(runCli(["assert", "--receipt", failedReceipt]).stdout, /pending=8/);
   assert.equal(runCli(["assert", "--receipt", failedReceipt, "--require-complete"]).status, 1);
   result = runCli(["failure", "--receipt", failedReceipt, "--channel", REQUIRED_CHANNELS[2], "--code", "BAD!", "--message", "invalid"]);
   assert.notEqual(result.status, 0);

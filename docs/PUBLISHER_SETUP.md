@@ -48,21 +48,59 @@ publication used `trusted` mode. This is not a new secret and must not be
 silently substituted or omitted. Keep the promotion credential scoped to the
 promotion operation, and never print it or carry it into read-only verifiers.
 
-The two npm channels are the Linux x64 GNU platform package and
+The npm channels are the five native platform packages and
 `@tech-byte-frontier/hardgate`:
 
 ```text
 hardgate-linux-x64
+hardgate-linux-arm64
+hardgate-darwin-x64
+hardgate-darwin-arm64
+hardgate-win32-x64
 @tech-byte-frontier/hardgate
 ```
 
-The intended publisher sequence is the platform package first, then the
+The intended publisher sequence is all platform packages first, then the
 wrapper. Each package is published at most once for the immutable version,
 verified independently, and promoted to `latest` at most once after all exact
 consumer evidence is merged. npm versions are immutable; an ambiguous result
 requires public-state inspection and independent reconciliation within the
 authorized recovery scope rather than a blind retry. Stop if identity,
 integrity, or authorization remains unresolved.
+
+## GitHub Packages npm mirror
+
+`.github/workflows/github-packages.yml` mirrors the latest stable release of
+`@tech-byte-frontier/hardgate` after the Release workflow succeeds. It can also
+be dispatched manually with the latest released `vX.Y.Z` tag, including for an
+existing release. The workflow must be present on `main` before it can run.
+
+The mirror shares the release concurrency lock, verifies the signed annotated
+tag and main ancestry, and requires the version to match both GitHub's latest
+stable release and npm's `latest`. It copies the exact published npm tarball,
+checks SHA-512 integrity and package identity, downloads the GitHub copy to
+compare bytes, then installs the GitHub wrapper and checks the CLI's full
+version/commit identity. Existing matching versions are reused. A conflicting
+version or ambiguous publication failure stops the workflow; inspect registry
+state before rerunning. The primary eight-channel release receipt stays separate
+from this additional mirror workflow.
+
+Publication uses the job's `GITHUB_TOKEN` with `packages: write`; no additional
+registry secret is needed. The npm provenance flag is disabled for the GitHub
+upload; the original npm tarball is preserved, but its npm registry attestation
+is not copied. The package's existing repository metadata connects it to Hardgate.
+GitHub initially creates packages as private: after the first successful upload,
+an organization/package administrator must change package visibility to **Public**
+in its GitHub package settings. Verify that setting before advertising public
+availability. Organization policy may restrict package creation or visibility.
+
+Only the scoped wrapper is mirrored. Its matching unscoped native dependency
+continues to resolve from npmjs.org; GitHub's npm registry only publishes scoped
+packages. Installation uses a scope-specific registry mapping, as documented in
+[Installation](INSTALLATION.md#github-packages-mirror).
+
+See GitHub's [npm registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)
+for authentication, repository association, and initial visibility.
 
 ## crates.io authentication
 
@@ -84,7 +122,7 @@ Before enabling or changing a mode, an authorized maintainer must record:
    `release.yml`.
 2. The selected `token` or `trusted` mode, job-scoped permissions, and the
    absence of registry tokens in trusted publish environments.
-3. The two npm package bindings, if trusted mode is selected, matching owner
+3. All six npm package bindings, if trusted mode is selected, matching owner
    `Tech-Byte-Frontier`, repository `hardgate`, workflow filename `release.yml`,
    and any explicitly named environment.
 4. The separate `NPM_TOKEN` promotion credential and its restricted use after

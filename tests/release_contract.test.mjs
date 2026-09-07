@@ -24,8 +24,10 @@ await import("./npm_publisher_preflight.test.mjs");
 await import("./github_staging.test.mjs");
 await import("./npm_channel_promotion.test.mjs");
 await import("./github_channel_promotion.test.mjs");
+await import("./github_package_mirror.test.mjs");
 await import("./native_channel_consumer.test.mjs");
 await import("./native_receipt.test.mjs");
+await import("./portable_release.test.mjs");
 await import("./crate_publication.test.mjs");
 
 console.log("release_contract.test: OK");

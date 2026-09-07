@@ -6,12 +6,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { verifyNativeArchive } from "../scripts/native-channel-archive.mjs";
+import { detectHost, hostNativePackage, packageDescriptor } from "../scripts/native-channel-support.mjs";
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-archive-identity-test-"));
-const packageName = "hardgate-linux-x64";
+const packageName = hostNativePackage(detectHost());
 const version = "0.6.0";
 const sourceSha = "1234567890abcdef1234567890abcdef12345678";
-const target = "x86_64-unknown-linux-gnu";
+const target = packageDescriptor(packageName).target;
 
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 30_000 });

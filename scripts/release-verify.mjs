@@ -5,7 +5,7 @@
 
 import { detectHost, hostNativePackage } from "./native-channel-support.mjs";
 
-import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+import { NATIVE_PACKAGES, executableName } from "./release-platforms.mjs";
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -88,7 +88,7 @@ function extract(archive, member, directory) {
 }
 
 function verifyExecutableMember(archive, packageName) {
-  const member = `${packageName}/hardgate`;
+  const member = `${packageName}/${executableName(packageName)}`;
   const mode = archiveMemberMode(run("tar", ["-tvzf", archive]), member);
   if (!isExecutableMode(mode)) {
     fail(`${packageName} archive member hardgate must retain an executable mode before extraction`);
@@ -98,9 +98,9 @@ function verifyExecutableMember(archive, packageName) {
 function verifyBinaryAbi(binaryPath, target, abi, packageName) {
   if (!abi) return;
   const report = run("file", ["-b", binaryPath]);
-  const programHeaders = run("readelf", ["-l", binaryPath]);
-  const symbols = run("readelf", ["-sW", binaryPath]);
-  const notes = run("readelf", ["-n", binaryPath]);
+  const programHeaders = abi === "gnu" ? run("readelf", ["-l", binaryPath]) : "";
+  const symbols = abi === "gnu" ? run("readelf", ["-sW", binaryPath]) : "";
+  const notes = abi === "gnu" ? run("readelf", ["-n", binaryPath]) : "";
   const evidence = classifyBinaryAbi({
     report,
     programHeaders,
@@ -127,7 +127,7 @@ function verifyArchive({ dist, target, pkg, archPattern, abi, version, commit, d
   for (const [key, value] of Object.entries({ name: "hardgate", version, target, package: pkg, commit })) {
     if (metadata[key] !== value) fail(`${pkg} metadata ${key} is ${metadata[key] ?? "<missing>"}`);
   }
-  const binaryPath = extract(archive, `${pkg}/hardgate`, directory);
+  const binaryPath = extract(archive, `${pkg}/${executableName(pkg)}`, directory);
   // tar -xO writes bytes without preserving the executable bit. Restore it
   // before the host smoke test and keep the extracted file bounded for the
   // embedded identity check below.
@@ -137,7 +137,7 @@ function verifyArchive({ dist, target, pkg, archPattern, abi, version, commit, d
   if (!archPattern.test(report)) fail(`${pkg} architecture does not match ${target}: ${report.trim()}`);
   verifyBinaryAbi(binaryPath, target, abi, pkg);
   const listing = run("tar", ["-tzf", archive]).split("\n").filter(Boolean).sort();
-  const expected = [`${pkg}/`, `${pkg}/BUILD-METADATA.json`, `${pkg}/hardgate`];
+  const expected = [`${pkg}/`, `${pkg}/BUILD-METADATA.json`, `${pkg}/${executableName(pkg)}`];
   if (listing.join("\n") !== expected.join("\n")) fail(`${pkg} contains unexpected archive members`);
   return { archive, binaryPath };
 }

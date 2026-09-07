@@ -11,10 +11,10 @@ Use npm or pnpm with optional dependencies enabled:
 ```sh
 npm install --save-dev --save-exact @tech-byte-frontier/hardgate
 npx --no-install hardgate init
-npx --no-install hardgate check
+npx --no-install hardgate check --checks policy
 
 pnpm add --save-dev --save-exact @tech-byte-frontier/hardgate
-pnpm exec hardgate check
+pnpm exec hardgate check --checks policy
 ```
 
 This source README describes 0.6; a source manifest version does not establish
@@ -22,18 +22,21 @@ registry availability. Select a published version and commit your lockfile.
 
 ## Supported runtime
 
-Linux x64 GNU only. The prebuilt baseline is Ubuntu 24.04 with glibc 2.39+.
-Node.js 18+ runs the launcher. Workload commands require cgroup-v2 CPU/memory/swap
-and task limits, systemd 254+ with an accessible user manager (or inherited
-verified limits), and enabled Landlock ABI 3+ for read-only child checks.
-Install the project's configured tools separately. `--version` does not prove
-that the host can run `check`.
+Local static analysis supports Linux (x64/ARM64 glibc 2.39+), macOS
+(Intel/Apple Silicon), and Windows x64. Node.js 18+ runs the launcher and the
+matching native optional dependency supplies the executable. **Rust is not
+required.**
 
-ARM64, musl/Alpine, macOS, and Windows are unsupported in 0.6. npm and pnpm are
-the tested package managers. Previously published artifacts retain their own
-release contracts.
+`scan`, policy-only checks, saved reports, and static MCP tools run without
+platform isolation. Policy-only checks are partial and still require configured
+saved evidence. Executing project tools requires Linux cgroup v2 and systemd
+254+ (or inherited verified limits); read-only child checks need Landlock ABI 3+.
+Unsupported execution features fail with setup guidance before starting tools.
 
-The matching `hardgate-linux-x64` optional dependency supplies the binary.
+npm and pnpm are tested installation channels. Prebuilt musl/Alpine and Windows
+ARM64 binaries are not provided. Published versions retain their original
+platform contracts.
+
 There are no postinstall or runtime downloads. The launcher first resolves the
 installed native package, then a local Rust workspace binary or a real binary
 on PATH. It rejects launcher scripts to prevent recursion.

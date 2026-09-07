@@ -5,7 +5,7 @@
 // Usage: node scripts/verify-npm-publication.mjs --version <version> --dist dist
 "use strict";
 
-import { PLATFORM_CONTRACT } from "./release-platforms.mjs";
+import { PLATFORM_CONTRACT, executableName } from "./release-platforms.mjs";
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -42,12 +42,12 @@ function unpackTar(archive, directory) {
 }
 
 function verifyExecutableMember(archive, packageDirectory, packageName) {
-  const member = "package/bin/hardgate";
+  const member = `package/bin/${executableName(packageName)}`;
   const mode = archiveMemberMode(run("tar", ["-tvzf", archive]), member);
   if (!isExecutableMode(mode)) {
     fail(`${packageName} published package bin/hardgate must retain an executable mode`);
   }
-  const extractedMode = fs.statSync(path.join(packageDirectory, "bin/hardgate")).mode;
+  const extractedMode = fs.statSync(path.join(packageDirectory, "bin", executableName(packageName))).mode;
   if ((extractedMode & 0o111) === 0) {
     fail(`${packageName} published package bin/hardgate is not executable after extraction`);
   }
@@ -74,8 +74,8 @@ async function verifyPlatformPackage(version, dist, [name, osValues, cpuValues, 
     assertArray(manifest, "cpu", cpuValues, name);
     if (libcValues) assertArray(manifest, "libc", libcValues, name);
     else if (Object.hasOwn(manifest, "libc")) fail(`${name} must not advertise a libc constraint`);
-    const publishedBinary = fs.readFileSync(path.join(packageDirectory, "bin/hardgate"));
-    const releaseBinary = readTar(path.join(dist, `${name}.tar.gz`), `${name}/hardgate`);
+    const publishedBinary = fs.readFileSync(path.join(packageDirectory, "bin", executableName(name)));
+    const releaseBinary = readTar(path.join(dist, `${name}.tar.gz`), `${name}/${executableName(name)}`);
     if (digest(publishedBinary) !== digest(releaseBinary) || !publishedBinary.equals(releaseBinary)) {
       fail(`${name} npm binary does not byte-match its verified release archive`);
     }
@@ -121,7 +121,7 @@ if (!version) fail("--version is required");
 const policy = verificationPolicy(version);
 if (process.argv.includes("--package") && !selectedPackage) fail("--package requires a platform package name");
 if (selectedPackage && !packageNames.includes(selectedPackage)) {
-  fail(`--package must identify the supported Linux x64 GNU package, got ${selectedPackage}`);
+  fail(`--package must identify a supported native package, got ${selectedPackage}`);
 }
 const platformsToVerify = selectedPackage
   ? packages.filter(([name]) => name === selectedPackage)
@@ -129,5 +129,5 @@ const platformsToVerify = selectedPackage
 for (const platform of platformsToVerify) await verifyPlatformPackage(version, dist, platform);
 if (!platformOnly) await verifyWrapper(version);
 remainingMs(policy);
-const platformLabel = selectedPackage ? selectedPackage : "the Linux x64 GNU platform package";
+const platformLabel = selectedPackage ? selectedPackage : "the native platform packages";
 console.log(`verify-npm-publication: ${platformLabel}${platformOnly ? "" : " and wrapper"} verified at ${version}`);

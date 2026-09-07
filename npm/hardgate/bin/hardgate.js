@@ -34,7 +34,14 @@ function isMusl() {
   return detectMusl(process.platform, readGlibcVersion());
 }
 
-const PLATFORM_TABLE = [["linux", "x64", false, "hardgate-linux-x64"]];
+const PLATFORM_TABLE = [
+  ["linux", "x64", false, "hardgate-linux-x64"],
+  ["linux", "arm64", false, "hardgate-linux-arm64"],
+  ["darwin", "x64", null, "hardgate-darwin-x64"],
+  ["darwin", "arm64", null, "hardgate-darwin-arm64"],
+  ["win32", "x64", null, "hardgate-win32-x64"],
+];
+const BINARY_NAME = process.platform === "win32" ? "hardgate.exe" : "hardgate";
 
 function resolvePlatform(platform, arch, musl) {
   const hit = PLATFORM_TABLE.find(
@@ -51,9 +58,13 @@ function platformPackage() {
   return resolvePlatform(process.platform, process.arch, musl);
 }
 
-// Only ELF candidates are accepted. Reject launcher shims to avoid recursion
+// Accept native executable headers for this host. Reject launcher shims to avoid recursion
 // through an npm or pnpm .bin entry on PATH.
 function magicMatches(buf) {
+  if (process.platform === "win32") return buf[0] === 0x4d && buf[1] === 0x5a;
+  if (process.platform === "darwin") {
+    return [0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(buf.readUInt32BE(0));
+  }
   return buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46;
 }
 
@@ -142,7 +153,7 @@ function resolveViaSiblings(pkg, bin) {
 }
 
 function tryResolve(pkg) {
-  const bin = "hardgate";
+  const bin = BINARY_NAME;
   // NOTE: there is deliberately no argv[1]-based lookup. Node resolves the
   // entry-point path (symlinks + `..`) before user code runs, so argv[1]
   // always shows the content-addressed store path under pnpm -- never the
@@ -157,8 +168,8 @@ function tryResolve(pkg) {
 
 function resolveDevBinary() {
   const rels = [
-    ["..", "..", "..", "target", "release", "hardgate"],
-    ["..", "..", "..", "target", "debug", "hardgate"],
+    ["..", "..", "..", "target", "release", BINARY_NAME],
+    ["..", "..", "..", "target", "debug", BINARY_NAME],
   ];
   for (const rel of rels) {
     const candidate = path.join(__dirname, ...rel);
@@ -171,7 +182,7 @@ function resolvePathBinary() {
   const dirs = (process.env.PATH || "").split(path.delimiter);
   for (const dir of dirs) {
     if (!dir) continue;
-    const candidate = path.join(dir, "hardgate");
+    const candidate = path.join(dir, BINARY_NAME);
     if (acceptCandidate(candidate)) return candidate;
   }
   return null;
@@ -244,7 +255,7 @@ function main() {
   const primary = platformPackage();
   if (!primary) {
     reportFailure(
-      `[hardgate] Unsupported platform ${process.platform}/${process.arch}; Hardgate 0.6 requires Linux x64 with GNU glibc. macOS, ARM64, and musl are unsupported.`,
+      `[hardgate] Unsupported platform ${process.platform}/${process.arch}; prebuilt binaries support Linux glibc and macOS (x64/arm64), and Windows x64. Try a source build with cargo install hardgate --locked for other targets.`,
     );
     return;
   }

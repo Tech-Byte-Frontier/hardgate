@@ -64,4 +64,5 @@ another MCP transport, or a hosted quality dashboard.
 Version 0.6.0 targets Linux x64 GNU only. Cargo installation, direct release
 archives, and the thin npm launcher share the same runtime contract; npm and
 pnpm are tested. Archives are checked with `SHA256SUMS`, `BUILD-METADATA.json`,
-the target marker, and exact version/commit identity. Other platforms are deferred.
+the target marker, and exact version/commit identity. The current source adds local analysis and native npm packages for macOS,
+Windows x64, and Linux ARM64; isolated project-tool execution remains Linux-only.

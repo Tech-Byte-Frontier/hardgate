@@ -1,6 +1,7 @@
 // Shared source loading and fixtures for the release safety contracts.
 "use strict";
 
+import { NATIVE_PACKAGES, PLATFORM_NAMES } from "../scripts/release-platforms.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,8 +37,8 @@ export const rustToolchain = read("rust-toolchain.toml");
 export const build = read("build.rs");
 export const buildInfo = read("src/build_info.rs");
 
-export const platformPackages = ["hardgate-linux-x64"];
-export const targets = ["x86_64-unknown-linux-gnu"];
+export const platformPackages = PLATFORM_NAMES;
+export const targets = Object.values(NATIVE_PACKAGES).map(({target}) => target);
 
 const npmRoot = path.join(root, "npm");
 export const npmPlatformDirectories = fs

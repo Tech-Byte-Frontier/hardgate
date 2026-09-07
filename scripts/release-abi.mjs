@@ -2,7 +2,9 @@
 "use strict";
 
 export function classifyBinaryAbi({ report, programHeaders, symbols, notes = "", abi }) {
-  if (abi !== "gnu") return { ok: false, reason: "only Linux GNU artifacts are supported" };
+  if (abi === "darwin") return { ok: /Mach-O 64-bit/.test(report), reason: "expected a 64-bit Mach-O executable" };
+  if (abi === "msvc") return { ok: /PE32\+ executable/.test(report), reason: "expected a 64-bit Windows PE executable" };
+  if (abi !== "gnu") return { ok: false, reason: "unsupported native ABI" };
   const text = `${report}\n${programHeaders}\n${symbols}\n${notes}`;
   if (/ld-musl|__init_libc/.test(text)) return { ok: false, reason: "musl ABI evidence is unsupported" };
   if (!/ELF 64-bit/.test(report) || !/ld-linux|glibc/i.test(text)) {

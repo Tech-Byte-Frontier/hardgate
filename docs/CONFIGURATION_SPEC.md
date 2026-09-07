@@ -366,8 +366,8 @@ details must still establish an unambiguous production/test split.
 This repository's self-gate generates branch LCOV with the pinned
 `RUST_COVERAGE_TOOLCHAIN` (`nightly-2026-09-04`) because Rust branch
 instrumentation is unstable. The producer-only nightly toolchain does not
-change the Rust 1.98.1 crate MSRV or normal build/test gates; the helper
-includes the executable `build.rs` in that LCOV report.
+change the Rust 1.90 MSRV or the Rust 1.98.1 pin used for normal build/test
+gates. The helper includes executable `build.rs` in that LCOV report.
 
 `check` accepts optional path arguments for the current static
 inventory and coverage source matching only. Mutation-report ingestion and

@@ -1,0 +1,30 @@
+{
+  "name": "hardgate-darwin-x64",
+  "version": "0.6.1",
+  "description": "hardgate prebuilt binary: darwin x64",
+  "license": "(MIT OR Apache-2.0)",
+  "homepage": "https://github.com/Tech-Byte-Frontier/hardgate",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tech-Byte-Frontier/hardgate.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "author": "Tauan BF <contact@techbytefrontier.com>",
+  "bugs": "https://github.com/Tech-Byte-Frontier/hardgate/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "commonjs"
+}

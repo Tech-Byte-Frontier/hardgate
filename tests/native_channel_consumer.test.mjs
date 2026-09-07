@@ -91,8 +91,8 @@ try {
   fs.rmSync(exact.fixture.directory, {recursive: true, force: true});
 }
 
-for (const packageName of ["hardgate-linux-x64-musl", "hardgate-linux-arm64", "hardgate-darwin-x64", "__proto__"]) {
-  assert.throws(() => parseArgs(["--package", packageName, "--version", version, "--source-sha", sourceSha, "--archive", "/tmp/archive.tar.gz", "--mode", "exact", "--output", "/tmp/native-proof.json"]), /supported Linux x64 GNU/);
+for (const packageName of ["hardgate-linux-x64-musl", "hardgate-win32-arm64", "__proto__"]) {
+  assert.throws(() => parseArgs(["--package", packageName, "--version", version, "--source-sha", sourceSha, "--archive", "/tmp/archive.tar.gz", "--mode", "exact", "--output", "/tmp/native-proof.json"]), /supported native package/);
 }
 
 const defaultRun = await successful("default");
@@ -302,6 +302,6 @@ assert.throws(() => validateProof({
   archive: {name: "hardgate-linux-x64-musl.tar.gz", sha256: digestBytes(goodBinary)},
   consumer: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
   wrapper: {executable: "node_modules/hardgate-linux-x64-musl/bin/hardgate", sha256: digestBytes(goodBinary)},
-}), /supported Linux x64 GNU/);
+}), /supported native package/);
 
 console.log("native_channel_consumer.test: OK (host, exact/default specs, bytes, version, proof, cleanup)");

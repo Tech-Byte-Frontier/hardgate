@@ -1,6 +1,8 @@
 // Package-manifest and platform-contract validation for packed consumers.
 "use strict";
 
+import { executableName } from "./release-platforms.mjs";
+
 const LIFECYCLE_HOOKS = [
   "preinstall", "install", "postinstall", "prepare", "prepublish", "prepublishOnly", "prepack", "postpack",
 ];
@@ -56,11 +58,12 @@ function exactManifestArray(manifest, field, expected, packageName) {
 
 export function validatePlatformArtifact({ artifact, descriptor, expectedVersion }) {
   if (!artifact) fail(`--packages-dir is missing ${descriptor.name}@${expectedVersion}`);
-  const nativeBytes = artifact.entries.get("package/bin/hardgate");
-  if (!nativeBytes) fail(`${descriptor.name}@${expectedVersion}.tgz is missing package/bin/hardgate`);
-  if (nativeBytes.length === 0) fail(`${descriptor.name} package/bin/hardgate is empty`);
-  const nativeMode = artifact.entryModes.get("package/bin/hardgate");
-  if ((nativeMode & 0o111) === 0) fail(`${descriptor.name} package/bin/hardgate is not executable in the archive`);
+  const member = `package/bin/${executableName(descriptor.name)}`;
+  const nativeBytes = artifact.entries.get(member);
+  if (!nativeBytes) fail(`${descriptor.name}@${expectedVersion}.tgz is missing ${member}`);
+  if (nativeBytes.length === 0) fail(`${descriptor.name} ${member} is empty`);
+  const nativeMode = artifact.entryModes.get(member);
+  if ((nativeMode & 0o111) === 0) fail(`${descriptor.name} ${member} is not executable in the archive`);
   exactManifestArray(artifact.manifest, "os", descriptor.os, descriptor.name);
   exactManifestArray(artifact.manifest, "cpu", descriptor.cpu, descriptor.name);
   exactManifestArray(artifact.manifest, "libc", descriptor.libc, descriptor.name);
@@ -80,7 +83,7 @@ function validateWrapperOptionalDependencies(manifest, expectedVersion, wrapperN
   const optional = manifest.optionalDependencies ?? {};
   const expectedNames = [...platformPackages].sort();
   if (JSON.stringify(Object.keys(optional).sort()) !== JSON.stringify(expectedNames)) {
-    fail(`${wrapperName} optionalDependencies do not match the supported Linux x64 GNU platform package`);
+    fail(`${wrapperName} optionalDependencies do not match the supported native platform packages`);
   }
   for (const name of platformPackages) {
     if (optional[name] !== expectedVersion) fail(`${wrapperName} optionalDependencies[${name}] must be ${expectedVersion}`);
@@ -91,8 +94,8 @@ export function validateWrapper(wrapper, expectedVersion, wrapperName, platformP
   if (!wrapper) fail(`--packages-dir is missing ${wrapperName}@${expectedVersion}.tgz`);
   const launcherBytes = wrapper.entries.get("package/bin/hardgate.js");
   if (!launcherBytes) fail(`${wrapperName}@${expectedVersion}.tgz is missing package/bin/hardgate.js`);
-  for (const [field, expected] of Object.entries({ os: ["linux"], cpu: ["x64"], libc: ["glibc"] })) {
-    exactManifestArray(wrapper.manifest, field, expected, wrapperName);
+  for (const field of ["os", "cpu", "libc"]) {
+    exactManifestArray(wrapper.manifest, field, undefined, wrapperName);
   }
   validateWrapperBin(wrapper.manifest, wrapperName);
   validateWrapperOptionalDependencies(wrapper.manifest, expectedVersion, wrapperName, platformPackages);

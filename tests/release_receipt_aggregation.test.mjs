@@ -111,7 +111,7 @@ try {
 
   const incomplete = runCli(["--expected", expectedPath, "--output", outputPath, "--require-complete", inputPath]);
   assert.notEqual(incomplete.status, 0, "--require-complete must reject an incomplete aggregate");
-  assert.match(incomplete.stdout, /0\/4 channels complete \(incomplete\)/);
+  assert.match(incomplete.stdout, /0\/8 channels complete \(incomplete\)/);
   assert.doesNotMatch(incomplete.stdout, new RegExp(identity.source_sha));
   assert.equal(readReceipt(outputPath, identity).complete, false, "incomplete output must be persisted for recovery");
 
@@ -124,7 +124,7 @@ try {
   const completeOutput = path.join(directory, "merged-complete.json");
   const completed = runCli(["--expected", expectedPath, "--output", completeOutput, "--require-complete", ...completeInputs]);
   assert.equal(completed.status, 0, completed.stderr);
-  assert.match(completed.stdout, /4\/4 channels complete \(complete\)/);
+  assert.match(completed.stdout, /8\/8 channels complete \(complete\)/);
   assert.doesNotMatch(completed.stdout, new RegExp(identity.source_sha));
   assert.equal(readReceipt(completeOutput, identity).complete, true);
 

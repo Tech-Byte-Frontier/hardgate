@@ -1,5 +1,6 @@
 // Contract tests for bounded npm latest-channel promotion.
 "use strict";
+import { PLATFORM_ASSETS } from "../scripts/release-platforms.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -27,7 +28,7 @@ function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-npm-promotion-test-"));
   const dist = path.join(directory, "dist");
   fs.mkdirSync(dist);
-  const names = ["hardgate-linux-x64.tar.gz", "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
+  const names = [...PLATFORM_ASSETS, "SHA256SUMS", `hardgate-${version}.sbom.cdx.json`].sort();
   const archives = names.map((name, index) => {
     const bytes = Buffer.from(`release archive ${index} ${name}\n`);
     fs.writeFileSync(path.join(dist, name), bytes);

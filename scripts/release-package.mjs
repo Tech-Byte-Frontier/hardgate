@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Build reproducible Unix release archives from binaries downloaded by CI.
+// Build reproducible native release archives from binaries downloaded by CI.
 // Usage: node scripts/release-package.mjs --incoming build-binaries --output dist
 "use strict";
 
-import { NATIVE_PACKAGES } from "./release-platforms.mjs";
+import { NATIVE_PACKAGES, executableName } from "./release-platforms.mjs";
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -24,10 +24,14 @@ function run(command, args) {
   return result.stdout;
 }
 
-function locate(incoming, target) {
-  const names = [`binary-${target}`, target];
+function locate(incoming, target, packageName) {
+  const prefix = `binary-${target}-attempt-`;
+  const attempts = fs.readdirSync(incoming)
+    .filter((name) => name.startsWith(prefix) && /^[1-9][0-9]*$/.test(name.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)));
+  const names = [...attempts, `binary-${target}`, target];
   for (const name of names) {
-    for (const candidate of [path.join(incoming, name, "hardgate"), path.join(incoming, name, "bin", "hardgate")]) {
+    for (const candidate of [path.join(incoming, name, executableName(packageName)), path.join(incoming, name, "bin", executableName(packageName))]) {
       if (fs.existsSync(candidate)) return candidate;
     }
   }
@@ -40,7 +44,7 @@ function archiveBinary({ binary, output, packageName, target, version, commit, s
   // Explicit modes make the tar stream independent of the caller's umask.
   // The package root and every archived member have a deliberate mode below.
   fs.chmodSync(packageRoot, 0o755);
-  const destination = path.join(packageRoot, "hardgate");
+  const destination = path.join(packageRoot, executableName(packageName));
   fs.copyFileSync(binary, destination);
   fs.chmodSync(destination, 0o755);
   const metadata = {
@@ -94,7 +98,7 @@ const archives = [];
 try {
   for (const [target, pkg] of targets) {
     archives.push(archiveBinary({
-      binary: locate(incoming, target),
+      binary: locate(incoming, target, pkg),
       output,
       packageName: pkg,
       target,

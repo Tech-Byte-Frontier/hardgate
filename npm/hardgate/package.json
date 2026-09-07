@@ -30,7 +30,11 @@
     "LICENSE-APACHE"
   ],
   "optionalDependencies": {
-    "hardgate-linux-x64": "0.6.1"
+    "hardgate-linux-x64": "0.6.1",
+    "hardgate-linux-arm64": "0.6.1",
+    "hardgate-darwin-x64": "0.6.1",
+    "hardgate-darwin-arm64": "0.6.1",
+    "hardgate-win32-x64": "0.6.1"
   },
   "scripts": {
     "test": "node ../../tests/npm-wrapper.test.mjs"
@@ -40,14 +44,5 @@
     "access": "public",
     "provenance": true
   },
-  "type": "commonjs",
-  "os": [
-    "linux"
-  ],
-  "cpu": [
-    "x64"
-  ],
-  "libc": [
-    "glibc"
-  ]
+  "type": "commonjs"
 }

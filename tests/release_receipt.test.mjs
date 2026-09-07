@@ -66,9 +66,9 @@ function assertReceiptRejects(value, expected = undefined) {
 }
 
 assert.deepEqual(CHANNELS.npmPlatforms, [
-  "hardgate-linux-x64",
+  "hardgate-linux-x64", "hardgate-linux-arm64", "hardgate-darwin-x64", "hardgate-darwin-arm64", "hardgate-win32-x64",
 ]);
-assert.equal(REQUIRED_CHANNELS.length, 4);
+assert.equal(REQUIRED_CHANNELS.length, 8);
 
 const pending = createReceipt(identity, REQUIRED_CHANNELS);
 assert.equal(pending.schema_version, 1);

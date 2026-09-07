@@ -17,10 +17,16 @@ const inspect = (command, args) => {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 };
-assert.equal(classifyBinaryAbi({
+if (process.platform === "linux") assert.equal(classifyBinaryAbi({
   report: inspect("file", ["-b", "/usr/bin/true"]),
   programHeaders: inspect("readelf", ["-l", "/usr/bin/true"]),
   symbols: inspect("readelf", ["-sW", "/usr/bin/true"]),
   abi: "gnu",
 }).ok, true, "the real GNU system executable must supply positive ABI evidence");
 console.log("release_contract.abi: GNU evidence and unsupported ABI rejection OK");
+
+for (const [abi, report] of [["darwin", "Mach-O 64-bit arm64 executable"], ["msvc", "PE32+ executable (console) x86-64, for MS Windows"]]) {
+  assert.equal(classifyBinaryAbi({ abi, report }).ok, true);
+  assert.equal(classifyBinaryAbi({ abi, report: "ELF 64-bit" }).ok, false);
+  assert.equal(classifyBinaryAbi({ abi, report: "ASCII text" }).ok, false);
+}

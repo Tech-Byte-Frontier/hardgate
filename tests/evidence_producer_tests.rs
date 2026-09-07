@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 #[path = "support/evidence_tests.rs"]
 mod protocol_tests;
 

@@ -1,4 +1,4 @@
-//! Resource admission for complete CLI workloads, including their descendants.
+//! Resource admission for commands that execute project tools and their descendants.
 use std::io;
 use std::process::Command;
 
@@ -22,9 +22,7 @@ fn select_workers(
     maximum: usize,
 ) -> io::Result<usize> {
     if requested.is_some_and(|count| count == 0 || count > maximum) {
-        return Err(error(format!(
-            "--threads must be between 1 and {maximum}; the resource boundary remains enforced"
-        )));
+        return Err(error(format!("--threads must be between 1 and {maximum}")));
     }
     Ok(requested
         .or(inherited.filter(|count| *count > 0))
@@ -87,13 +85,13 @@ impl WorkloadGuard {
     }
 }
 
-/// Enforce the CLI-wide resource boundary before reading project input or starting tools.
+/// Enforce containment before starting project tools. Static analysis does not need it.
 pub fn enter() -> io::Result<Admission> {
     #[cfg(target_os = "linux")]
     return linux::enter();
     #[cfg(not(target_os = "linux"))]
     Err(error(
-        "this platform has no enforced workload backend; analysis and external tools were not started",
+        "executing project tools requires Linux cgroup v2 and systemd (or inherited verified limits); read-only child checks also require Landlock ABI 3+. Use `hardgate scan <file>`, `hardgate check --checks policy` without generated.freshness_command, or static MCP tools for local analysis on this platform. No project tools were started",
     ))
 }
 

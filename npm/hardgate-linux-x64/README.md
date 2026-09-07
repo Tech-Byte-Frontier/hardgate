@@ -5,13 +5,14 @@ pnpm; it selects this package through an exact optional dependency:
 
 ```sh
 npm install --save-dev --save-exact @tech-byte-frontier/hardgate
-npx --no-install hardgate check
+npx --no-install hardgate check --checks policy
 ```
 
-The 0.6 baseline is Ubuntu 24.04 x64 with glibc 2.39+, cgroup v2 resource
-controllers, systemd 254+ with a user manager (or inherited verified limits),
-and Landlock ABI 3+ enabled. `--version` alone does not prove check support.
-No postinstall download runs. ARM64, musl, and macOS are deferred.
+The prebuilt baseline is Ubuntu 24.04 x64 with glibc 2.39+. Static analysis
+needs no cgroup or systemd setup. Executing project tools requires cgroup v2,
+systemd 254+ (or inherited verified limits), and Landlock ABI 3+ for read-only
+child checks. No Rust or postinstall download is needed for this package.
+Other native packages cover Linux ARM64, macOS, and Windows x64.
 
 [Runtime and installation guide](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/INSTALLATION.md)
 · [Releases](https://github.com/Tech-Byte-Frontier/hardgate/releases)

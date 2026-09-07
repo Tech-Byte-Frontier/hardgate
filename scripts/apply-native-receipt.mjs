@@ -4,6 +4,7 @@
 "use strict";
 
 import fs from "node:fs";
+import { executableName } from "./release-platforms.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,7 +44,7 @@ function assertProofSize(proof) {
 }
 
 function expectedConsumerPath(packageName) {
-  return `node_modules/${packageName}/bin/hardgate`;
+  return `node_modules/${packageName}/bin/${executableName(packageName)}`;
 }
 
 function transitionFor(mode) {

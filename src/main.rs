@@ -19,7 +19,7 @@ struct Cli {
     /// Explicit policy file; its directory is the configuration root
     #[arg(long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
-    /// Limit analysis workers (defaults to at most two; OS limits also cover child tools)
+    /// Limit analysis workers (defaults to at most two)
     #[arg(long, global = true, value_name = "N")]
     threads: Option<std::num::NonZeroUsize>,
     /// Terminal colors; auto respects TTY, NO_COLOR and CLICOLOR conventions

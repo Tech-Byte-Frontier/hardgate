@@ -128,7 +128,7 @@ const immutableFailure = fakeOperations([{ state: "missing" }], { verifyImmutabl
 await rejects(promoteGithubChannel({ receipt: immutableFailureReceipt, policy: policy() }, immutableFailure.operations), /remote asset mismatch/);
 assert.equal(immutableFailureReceipt.channels[CHANNELS.githubAssets].state, "exact_consumer_verified");
 
-assert.equal(REQUIRED_CHANNELS.length, 4);
+assert.equal(REQUIRED_CHANNELS.length, 8);
 
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-github-promotion-test-"));
 try {

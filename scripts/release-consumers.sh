@@ -59,9 +59,11 @@ verify_install "$npm_project" "$npm_project/node_modules/.bin/hardgate" "$npm_ho
 
 pnpm_project="$consumer_tmp/pnpm-project"; pnpm_home="$consumer_tmp/pnpm-home"
 pnpm_config="$consumer_tmp/pnpm-config"; pnpm_store="$consumer_tmp/pnpm-store"
+# These disposable consumers verify the just-published, signed release bytes.
+# pnpm 11 otherwise selects an older version during its default one-day delay.
 make_project "$pnpm_project"; mkdir -p "$pnpm_home" "$pnpm_config" "$pnpm_store"
 (cd "$pnpm_project" && env -i HOME="$pnpm_home" XDG_CONFIG_HOME="$pnpm_config" \
-  PNPM_STORE_DIR="$pnpm_store" PATH="$manager_path" "$pnpm_tool" add \
+  pnpm_config_minimum_release_age=0 PNPM_STORE_DIR="$pnpm_store" PATH="$manager_path" "$pnpm_tool" add \
   --ignore-scripts --registry=https://registry.npmjs.org/ --store-dir "$pnpm_store" "@tech-byte-frontier/hardgate@$selector")
 verify_install "$pnpm_project" "$pnpm_project/node_modules/.bin/hardgate" "$pnpm_home" pnpm-project
 
@@ -82,6 +84,7 @@ pnpm_global="$consumer_tmp/pnpm-global"; pnpm_global_bin_expected="$pnpm_global/
 pnpm_global_config="$consumer_tmp/pnpm-global-config"; pnpm_global_store="$pnpm_global/store"
 mkdir -p "$pnpm_global" "$pnpm_global_bin_expected" "$pnpm_global_home" "$pnpm_global_config" "$pnpm_global_store"
 env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \
+  pnpm_config_minimum_release_age=0 \
   PNPM_HOME="$pnpm_global" PNPM_STORE_DIR="$pnpm_global_store" PATH="$pnpm_global_bin_expected:$manager_path" \
   "$pnpm_tool" add --ignore-scripts --global --store-dir "$pnpm_global_store" "@tech-byte-frontier/hardgate@$selector"
 pnpm_global_bin=$(env -i HOME="$pnpm_global_home" XDG_CONFIG_HOME="$pnpm_global_config" \

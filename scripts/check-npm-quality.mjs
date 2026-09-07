@@ -35,8 +35,8 @@ if (main.name !== "@tech-byte-frontier/hardgate")
   fail(`npm/hardgate name = ${main.name} (unscoped 'hardgate' is blocked by npm typosquat protection)`);
 if (main.version !== version) fail(`npm/hardgate version ${main.version} != Cargo ${version}`);
 if (JSON.stringify(Object.keys(main.optionalDependencies ?? {}).sort()) !== JSON.stringify([...platformPkgs].sort())) fail("wrapper must contain exactly the supported optional dependencies");
-for (const [field, expected] of Object.entries({ os: ["linux"], cpu: ["x64"], libc: ["glibc"] })) {
-  if (JSON.stringify(main[field]) !== JSON.stringify(expected)) fail(`wrapper ${field} must identify Linux x64 GNU`);
+for (const field of ["os", "cpu", "libc"]) {
+  if (Object.hasOwn(main, field)) fail(`wrapper must leave ${field} filtering to its native optional dependencies`);
 }
 for (const p of platformPkgs) {
   if (main.optionalDependencies?.[p] !== version)
