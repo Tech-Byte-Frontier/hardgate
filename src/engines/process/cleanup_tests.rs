@@ -200,7 +200,9 @@ mod unix {
 
     #[test]
     fn process_group_poll_observes_present_and_absent_states() {
-        let mut fixture = ChildGuard::spawn("sleep 1");
+        // Reaping the direct child must reap the group's only member; a shell
+        // spawning sleep can leave a descendant awaiting its own reap.
+        let mut fixture = ChildGuard::spawn("exec sleep 30");
         let pid = fixture.pid();
 
         assert!(matches!(
