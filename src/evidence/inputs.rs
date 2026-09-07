@@ -116,3 +116,7 @@ fn pytest_cache_record(rest: &[&str]) -> bool {
 fn cache_marker(parts: &[&str]) -> bool {
     parts.len() == 1 && matches!(parts[0], "CACHEDIR.TAG" | ".gitignore")
 }
+
+#[cfg(test)]
+#[path = "inputs_tests.rs"]
+mod tests;

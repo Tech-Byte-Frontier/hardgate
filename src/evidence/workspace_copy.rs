@@ -197,3 +197,7 @@ fn copy_link(_source: &Path, _destination: &Path, relative: &Path) -> Result<()>
         relative.display()
     )
 }
+
+#[cfg(test)]
+#[path = "workspace_copy_tests.rs"]
+mod tests;

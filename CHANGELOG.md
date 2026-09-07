@@ -7,6 +7,7 @@
   with actionable unsupported-feature errors.
 - Add native npm packages and release/consumer validation for Linux ARM64,
   macOS Intel/Apple Silicon, and Windows x64; no Rust is needed for npm installs.
+  Windows binaries include the Visual C++ runtime.
 - Test Rust 1.90 as the MSRV independently of the pinned Rust 1.98.1 toolchain.
 - Mirror the verified npm wrapper to GitHub Packages after release completion.
 - Verify newly published pnpm consumers without the default release-age delay.

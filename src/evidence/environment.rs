@@ -92,3 +92,7 @@ fn python_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || byte == b'.')
     })
 }
+
+#[cfg(all(test, unix))]
+#[path = "environment_tests.rs"]
+mod tests;

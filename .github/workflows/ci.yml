@@ -137,6 +137,9 @@ jobs:
       - name: Lint and build with the pinned compiler
         run: |
           cargo clippy --locked --lib --bin hardgate -- -D warnings
+          if [ '${{ matrix.target }}' = x86_64-pc-windows-msvc ]; then
+            export RUSTFLAGS='-C target-feature=+crt-static'
+          fi
           cargo build --locked --release --target ${{ matrix.target }}
         env:
           HARDGATE_BUILD_GIT_SHA: ${{ github.sha }}
