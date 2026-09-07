@@ -242,6 +242,9 @@ pub struct MutationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestrationConfig {
+    /// Require Linux CPU/memory containment and protected check workspaces.
+    #[serde(default)]
+    pub require_isolation: bool,
     pub format_check: Option<String>,
     pub format: Option<String>,
     pub lint: Option<String>,

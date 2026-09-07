@@ -8,22 +8,32 @@ from a registry. Existing releases retain their original platform contracts.
 
 ## Feature requirements
 
-`scan`, `check --checks policy`, saved-report inspection/comparison, static MCP
-tools, initialization, configuration, and completions run locally without Linux
-resource controls. Policy-only checks still validate required saved evidence and
-remain partial checks; missing evidence never becomes a passing acceptance.
+`check`, `fmt`, configured tests/type checks, generated freshness, and static
+analysis run natively on macOS and Linux with the configured project tools
+installed. Checks use disposable copies and verify source inputs before and
+after execution. Timeouts, process-group cleanup, bounded output, and conservative
+worker defaults remain active. Native execution does not enforce OS CPU/memory
+limits or filesystem write containment; the CLI and saved check report say so.
+Only run trusted project commands in this mode.
 
-Commands that execute project tools (`check` orchestration, `fmt`, `evidence`,
-and an enabled `generated.freshness_command`) require:
+Policies that need enforced containment can require it explicitly:
+
+```toml
+[orchestration]
+require_isolation = true
+```
+
+This setting and all `evidence` producers require:
 
 - Linux cgroup v2 with CPU, memory, swap, and task controllers.
 - systemd 254+ with an accessible user manager, unless verified limits are inherited.
-- Landlock ABI 3+ for read-only child checks.
-- The configured formatter, linter, tests, type checker, or evidence producer.
+- Landlock ABI 3+ for protected child checks.
 
-Hardgate refuses unsupported execution features before starting project tools,
-with exit 2 and setup guidance. Use `hardgate scan <file>` or
-`hardgate check --checks policy` without generated freshness for local analysis.
+Required isolation never falls back to native execution. Unsupported requirements
+fail with exit 2 before project tools start. Ordinary checks also reuse verified
+inherited Linux containment when available. Static commands and policy-only
+checks without generated freshness need no tool execution. Policy-only checks
+remain partial; missing required evidence never becomes a passing acceptance.
 See [resource limits](MUTATION_RESOURCES.md) for Linux execution setup.
 
 ## Native packages

@@ -22,7 +22,8 @@ pub(super) fn explain(outcome: ProcessOutcome, workspace: &Path) -> ProcessOutco
 }
 
 fn annotate(mut output: String, workspace: &Path) -> String {
-    if output.contains("/tmp/")
+    if crate::resources::runtime::isolated()
+        && output.contains("/tmp/")
         && (output.contains("Permission denied") || output.contains("Operation not permitted"))
     {
         output.push_str(&format!(

@@ -93,7 +93,7 @@ pub(crate) fn run_command_with_roots(
     if operation == "mutation" {
         return mutation::run(tokens, roots, timeout);
     }
-    if let Err(error) = require_containment() {
+    if let Err(error) = admit_command(operation) {
         return ProcessOutcome::Failed {
             message: error.to_string(),
             output: String::new(),
@@ -111,11 +111,9 @@ pub(crate) fn run_command_with_roots(
     )
 }
 
-fn require_containment() -> std::io::Result<()> {
-    if !crate::resources::runtime::inherited()? {
-        return Err(crate::resources::runtime::error(
-            "external tools require a verified CPU and memory boundary; command was not started",
-        ));
+fn admit_command(operation: &str) -> std::io::Result<()> {
+    if operation == "evidence" {
+        crate::resources::runtime::require()?;
     }
     crate::resources::check_pressure()
 }
@@ -158,7 +156,7 @@ fn command_for_tokens(
         .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if matches!(operation, "mutation" | "evidence") {
+    if matches!(operation, "mutation" | "evidence" | "check") {
         command.env("CARGO_TARGET_DIR", roots.workspace_root.join("target"));
     }
     crate::resources::runtime::constrain_command(&mut command);
@@ -173,7 +171,9 @@ fn command_for_tokens(
     }
     prepend_local_bins(&mut command, roots.package_root, roots.workspace_root);
     configure_process_group(&mut command);
-    if let Some(original) = roots.protected_root {
+    if let Some(original) = roots.protected_root
+        && (operation != "check" || crate::resources::runtime::isolated())
+    {
         #[cfg(target_os = "linux")]
         write_guard::configure(&mut command, roots.workspace_root, original)?;
         #[cfg(not(target_os = "linux"))]

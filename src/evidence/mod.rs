@@ -70,6 +70,7 @@ struct Receipt {
 /// Produce fresh evidence from an independent input copy. This operation never
 /// attaches a receipt to a pre-existing report supplied by the caller.
 pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResult {
+    crate::resources::runtime::require()?;
     ensure!(
         options.timeout_secs > 0,
         "evidence timeout must be positive"

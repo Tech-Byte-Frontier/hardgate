@@ -17,6 +17,14 @@ pub fn run_generated_freshness(
     config: &GeneratedConfig,
     root: &Path,
 ) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
+    run_with_isolation(config, root, false)
+}
+
+pub(crate) fn run_with_isolation(
+    config: &GeneratedConfig,
+    root: &Path,
+    require_isolation: bool,
+) -> Option<Result<OrchestrationResult, OrchestrationViolation>> {
     if !config.enabled {
         return None;
     }
@@ -31,6 +39,7 @@ pub fn run_generated_freshness(
 
     let timeout_secs = config.timeout_secs.unwrap_or(300).max(1);
     let orchestration = OrchestrationConfig {
+        require_isolation,
         timeout_secs: config.timeout_secs,
         ..OrchestrationConfig::default()
     };

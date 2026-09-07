@@ -238,6 +238,10 @@ impl OrchestrationEngine {
         root: &Path,
         session: Option<&crate::evidence::read_only::Session>,
     ) -> Result<OrchestrationResult, OrchestrationViolation> {
+        if self.config.require_isolation {
+            crate::resources::runtime::require()
+                .map_err(|error| runner_violation(spec, error.to_string(), String::new()))?;
+        }
         let start = Instant::now();
         let mut tokens = shell_words_split(spec.command);
         super::cargo_diagnostics::structured_tokens(&mut tokens);
@@ -256,7 +260,7 @@ impl OrchestrationEngine {
                     output: String::new(),
                 })
         } else {
-            crate::evidence::read_only::run(&tokens, root, timeout)
+            crate::evidence::read_only::run(&tokens, root, timeout, self.config.require_isolation)
         };
         finish_outcome(outcome, spec, start, timeout_secs)
     }

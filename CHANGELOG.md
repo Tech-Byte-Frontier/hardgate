@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.3 (2026-09-07)
+
+- Run ordinary check, fmt, tests, type checks, and generated freshness natively
+  on macOS and Linux without requiring systemd or cgroup admission.
+- Retain disposable check copies, source-change detection, bounded output,
+  timeouts, process-group cleanup, and conservative worker defaults. Explain
+  native execution in command output and saved reports.
+- Add orchestration.require_isolation for policies that require Linux resource
+  and filesystem containment. Evidence producers retain mandatory isolation.
+- Exercise complete checks, tool failures, input writes, timeouts, and explicit
+  isolation requirements in native CI and packed npm consumer verification.
+
 ## 0.6.2 (2026-09-07)
 
 - Support macOS and Linux local analysis and native npm installation on x64

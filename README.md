@@ -13,10 +13,10 @@ CI jobs, and coding agents can inspect before accepting a change.
 A passing report means that the enabled engines found no blocking findings. It
 does not claim that every possible quality property was proven.
 
-Local static analysis supports macOS and Linux. Native npm packages
-include the CLI, so users do not need Rust. Executing project tools requires
-Linux resource containment; read-only child checks additionally need Landlock
-ABI 3+. See [installation and feature requirements](docs/INSTALLATION.md).
+Local analysis and ordinary project checks support macOS and Linux. Native npm
+packages include the CLI, so users do not need Rust. Evidence producers and
+policies with `orchestration.require_isolation = true` require Linux containment.
+See [installation and feature requirements](docs/INSTALLATION.md).
 
 ## Quick start
 
@@ -27,11 +27,11 @@ the project you want to check:
 cargo install hardgate --locked
 cd /path/to/your/project
 hardgate init
-hardgate check --checks policy
+hardgate check
 ```
 
 `check --checks policy` is a partial static/evidence check, not full acceptance.
-On a configured Linux execution host, run `hardgate check` for all requirements.
+Run `hardgate check` on macOS or Linux for all configured requirements.
 
 `balanced` is a structural starting point. Initialization does not install
 project tools or execute project commands. An existing project may still fail

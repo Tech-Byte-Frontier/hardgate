@@ -137,6 +137,7 @@ fn execute_check(
         ownership,
         empty,
     } = run_static_phase(&opts, context, ratchet_enabled)?;
+    super::gate_evidence::describe_execution(&plan, &mut report);
     report.execution = Some(plan);
     if empty && opts.selects(CheckKind::Policy) {
         report

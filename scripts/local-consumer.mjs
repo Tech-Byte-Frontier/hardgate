@@ -1,4 +1,4 @@
-// Portable native/npm consumer checks. No Rust or project tool is invoked.
+// Portable native/npm consumer checks, including ordinary tools without Rust.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -44,8 +44,18 @@ export function verifyLocalAnalysis(command, prefix = [], env = process.env) {
     invoke(["report", "gate.json", "--json"]);
     fs.writeFileSync(path.join(root, "src/lib.rs"), "pub fn add(a: u32, b: u32) -> u32 { a + b }\n");
     assert.equal(invoke(["scan", "src/lib.rs", "--json"], 1).passed, false);
+    fs.writeFileSync(path.join(root, "src/lib.rs"), "pub fn answer() -> u32 { 42 }\n");
+    const policy = "[gate]\npreset = 'custom'\n[orchestration]\nformat_check = '/bin/sh check.sh'\nlint = '/bin/sh check.sh'\n";
+    fs.writeFileSync(path.join(root, "hardgate.toml"), policy);
+    fs.writeFileSync(path.join(root, "check.sh"), "test -f src/lib.rs || exit 7\necho native-tool-ran\n");
+    const complete = invoke(["check", "--json"]);
+    assert.equal(complete.accepted, true);
+    assert.equal(complete.partial, false);
+    fs.writeFileSync(path.join(root, "check.sh"), "echo native-tool-failed; exit 7\n");
+    assert.equal(invoke(["check", "--json"], 1).accepted, false);
     if (process.platform !== "linux") {
-      assert.match(invoke(["check", "--checks", "tests", "--json"], 2).message, /requires Linux cgroup v2/);
+      fs.writeFileSync(path.join(root, "hardgate.toml"), `${policy}require_isolation = true\n`);
+      assert.match(invoke(["check", "--json"], 2).message, /requires Linux cgroup v2/);
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -139,7 +139,7 @@ fn aborts_retain_policy_and_intended_scope_without_claiming_completed_engines() 
     assert_eq!(report["command"], "scan");
     assert_eq!(
         report["execution"]["config"]["root"],
-        fixture.to_string_lossy().as_ref()
+        fixture.canonicalize().unwrap().to_string_lossy().as_ref()
     );
     assert_eq!(state(&report, "complexity"), "incomplete");
     assert_eq!(state(&report, "lint"), "skipped");

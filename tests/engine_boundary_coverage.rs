@@ -150,7 +150,10 @@ fn orchestration_timeout_keeps_cleanup_evidence() {
         .expect_err("long-running commands must time out");
     assert!(violation.output.contains("timed out"));
     assert!(violation.output.contains("process group"));
-    assert!(violation.recommendation.contains("timeout_secs"));
+    assert!(
+        violation.recommendation.contains("timeout_secs"),
+        "{violation:?}"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -93,6 +93,7 @@ fn make_orchestration() -> OrchestrationConfig {
         // `init` fills these fields only when it can identify a configured
         // project command; otherwise the generated policy stays explicit about
         // the missing setup instead of selecting JavaScript tools globally.
+        require_isolation: false,
         format_check: None,
         format: None,
         lint: None,

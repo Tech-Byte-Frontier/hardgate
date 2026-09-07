@@ -13,3 +13,13 @@ have had an opportunity to assess it.
 
 For general bugs and questions, use the project's [issue
 tracker](https://github.com/Tech-Byte-Frontier/hardgate/issues).
+
+## Project commands
+
+Ordinary checks and formatting execute trusted project commands natively on
+macOS and Linux. Disposable check copies and input verification detect persistent
+source changes; they do not sandbox malicious commands or prevent access to other
+host files. Set `[orchestration] require_isolation = true` when CPU/memory limits
+and protected Linux check workspaces are required. Evidence producers always
+require isolation. Missing required protection fails the command; it is never
+silently replaced with native execution.

@@ -123,6 +123,7 @@ fn merge_orchestration(
     raw: &toml::Table,
 ) {
     with_section(raw, &["orchestration"], |table| {
+        set!(table, require_isolation, base, user);
         set!(table, format_check, base, user);
         set!(table, format, base, user);
         set!(table, lint, base, user);

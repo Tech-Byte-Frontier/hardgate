@@ -48,13 +48,25 @@ fn execute_guarded(
 }
 
 fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources::Admission>> {
-    if !requires_isolation(cli)? {
+    if !executes_tools(cli)? {
         return Ok(None);
     }
-    hardgate::runtime_resources::enter().map(Some)
+    let context =
+        hardgate::config::ConfigContext::load(cli.config.as_deref()).map_err(io::Error::other)?;
+    if matches!(cli.command, Commands::Evidence { .. })
+        || context.config.orchestration.require_isolation
+        || hardgate::runtime_resources::isolated()
+    {
+        return hardgate::runtime_resources::enter().map(Some);
+    }
+    eprintln!(
+        "hardgate: {}",
+        hardgate::runtime_resources::NATIVE_EXECUTION
+    );
+    Ok(None)
 }
 
-fn requires_isolation(cli: &super::Cli) -> io::Result<bool> {
+fn executes_tools(cli: &super::Cli) -> io::Result<bool> {
     match &cli.command {
         Commands::Fmt { .. } | Commands::Evidence { .. } => Ok(true),
         Commands::Check { checks, .. } => {
@@ -65,8 +77,6 @@ fn requires_isolation(cli: &super::Cli) -> io::Result<bool> {
             {
                 return Ok(true);
             }
-            // Policy checks normally only read source and saved evidence. A
-            // configured freshness command is the exception: it executes code.
             let context = hardgate::config::ConfigContext::load(cli.config.as_deref())
                 .map_err(io::Error::other)?;
             Ok(context.config.generated.enabled

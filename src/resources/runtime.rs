@@ -91,7 +91,7 @@ pub fn enter() -> io::Result<Admission> {
     return linux::enter();
     #[cfg(not(target_os = "linux"))]
     Err(error(
-        "executing project tools requires Linux cgroup v2 and systemd (or inherited verified limits); read-only child checks also require Landlock ABI 3+. Use `hardgate scan <file>`, `hardgate check --checks policy` without generated.freshness_command, or static MCP tools for local analysis on this platform. No project tools were started",
+        "this feature or orchestration.require_isolation policy requires Linux cgroup v2 and systemd (or inherited verified limits); protected child checks also require Landlock ABI 3+. Ordinary check and fmt work natively with require_isolation = false. Evidence producers require a Linux execution host. No project tools were started",
     ))
 }
 
@@ -118,3 +118,20 @@ pub(crate) fn verify_active() -> io::Result<()> {
 
 #[cfg(target_os = "linux")]
 static ACTIVE: std::sync::OnceLock<std::sync::Arc<linux::Boundary>> = std::sync::OnceLock::new();
+
+/// Explanation included when ordinary tools run without kernel containment.
+pub const NATIVE_EXECUTION: &str = "Native project tools: timeouts and worker limits remain enabled; checks also verify source inputs; OS CPU/memory and filesystem isolation are not enforced. Set orchestration.require_isolation = true to require Linux containment.";
+
+/// Probe optional protection. Required execution always uses `enter`/`require`.
+pub fn isolated() -> bool {
+    inherited().unwrap_or(false)
+}
+
+pub(crate) fn require() -> io::Result<()> {
+    if !inherited()? {
+        return Err(error(
+            "this feature or orchestration.require_isolation policy requires verified Linux CPU and memory containment; no project tool was started",
+        ));
+    }
+    crate::resources::check_pressure()
+}

@@ -107,7 +107,7 @@ With `[legacy].ratchet = true`, Hardgate resolves the configured Git reference a
 - `check --checks policy`: explicit partial policy/evidence run.
 - `evidence`: optional specialist production in a private input copy with source identity and restoration checks.
 
-Commands run sequentially in a private copy under CPU/memory containment and a Linux Landlock write allowlist. Local Node executables are prepended to `PATH`. Conservative command detection shares init's independent formatter/linter choices; missing required setup fails. Cargo commands cover workspace/all-target scopes and a separate doctest step. Structured rustc/Clippy findings are distinct from execution failures.
+Commands run sequentially in a private copy with input verification, timeouts, and process-group cleanup. Native execution supports macOS and Linux. Explicit `orchestration.require_isolation` policies and evidence producers require CPU/memory containment and a Linux Landlock write allowlist; ordinary checks also use verified inherited containment when available. Local Node executables are prepended to `PATH`. Conservative command detection shares init's independent formatter/linter choices; missing required setup fails. Cargo commands cover workspace/all-target scopes and a separate doctest step. Structured rustc/Clippy findings are distinct from execution failures.
 
 ## Reports and MCP
 

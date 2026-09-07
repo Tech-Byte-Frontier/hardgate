@@ -9,9 +9,10 @@ npx --no-install hardgate check --checks policy
 ```
 
 The prebuilt baseline is Ubuntu 24.04 x64 with glibc 2.39+. Static analysis
-needs no cgroup or systemd setup. Executing project tools requires cgroup v2,
-systemd 254+ (or inherited verified limits), and Landlock ABI 3+ for read-only
-child checks. No Rust or postinstall download is needed for this package.
+and ordinary checks need no cgroup or systemd setup. Evidence producers and
+`orchestration.require_isolation = true` require cgroup v2, systemd 254+ (or
+inherited verified limits), and Landlock ABI 3+ for protected child checks.
+No Rust or postinstall download is needed for this package.
 Other native packages cover Linux ARM64 and macOS.
 
 [Runtime and installation guide](https://github.com/Tech-Byte-Frontier/hardgate/blob/main/docs/INSTALLATION.md)

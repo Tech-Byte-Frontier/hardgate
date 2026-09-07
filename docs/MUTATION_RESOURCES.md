@@ -1,13 +1,17 @@
 # Workload resources
 
-These safeguards apply to project-tool execution and maintenance runners.
+These safeguards apply to evidence producers, policies that set
+`orchestration.require_isolation = true`, and maintenance runners. Ordinary
+project checks and formatting run natively on macOS and Linux; native execution
+retains timeouts, process-group cleanup, worker defaults, and check-input
+verification, but does not enforce OS CPU/memory or filesystem isolation.
 Static scans, policy-only checks without generated freshness, saved reports,
 and static MCP tools run locally on macOS and Linux. Resource exhaustion is
 incomplete evaluation, never a passing gate or a killed-mutant credit.
 
 ## Project-tool execution boundary
 
-Commands that execute project tools run inside verified cgroup-v2 limits on Linux. Hardgate reuses
+Commands requiring isolation run inside verified cgroup-v2 limits on Linux. Hardgate reuses
 an already bounded ancestor or creates an owned systemd user scope, discovering
 the owner-validated user runtime directory even when an agent omits its bus
 environment. The kernel settings are checked; an environment marker alone cannot
@@ -39,8 +43,9 @@ worker environment hints alone are insufficient.
 
 Full workload containment currently requires Linux cgroup v2 and, when no suitable
 boundary is inherited, systemd 254 or later with an accessible user manager.
-Platforms without an enforced backend refuse project-tool execution with setup
-guidance. Static analysis remains available and uses at most two Rayon workers;
+Platforms without an enforced backend refuse evidence production and explicitly
+isolated project-tool execution with setup guidance. Native checks remain
+available. Static analysis uses at most two Rayon workers;
 this worker limit does not claim OS containment.
 
 Mutation execution now belongs to specialist tools. The removed native mutant

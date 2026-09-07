@@ -10,7 +10,7 @@ use crate::diagnostics::GateReport;
 use crate::discovery::FileRole;
 use crate::engines::{
     coverage::{normalized_repository_key, retain_code_lines},
-    run_generated_freshness as execute_generated_freshness,
+    generated::run_with_isolation as execute_generated_freshness,
 };
 use crate::git_evidence::{ChangedLineMap, ReferenceEvidence, load_reference};
 use anyhow::Result;
@@ -66,7 +66,11 @@ pub(crate) fn run_generated_freshness(
     root: &Path,
     report: &mut GateReport,
 ) {
-    let Some(result) = execute_generated_freshness(&config.generated, root) else {
+    let Some(result) = execute_generated_freshness(
+        &config.generated,
+        root,
+        config.orchestration.require_isolation,
+    ) else {
         return;
     };
     report.observe_engine(
@@ -323,6 +327,28 @@ pub(crate) fn filter_changed_lines(request: ChangedLineFilter<'_>) -> Result<Cha
             (!filtered.is_empty()).then_some((path.clone(), filtered))
         })
         .collect())
+}
+
+pub(crate) fn describe_execution(
+    plan: &crate::diagnostics::execution::ExecutionPlan,
+    report: &mut GateReport,
+) {
+    if plan.engines.iter().any(|engine| {
+        engine.selected
+            && matches!(
+                engine.id,
+                crate::diagnostics::execution::EngineId::FormatCheck
+                    | crate::diagnostics::execution::EngineId::Lint
+                    | crate::diagnostics::execution::EngineId::Tests
+                    | crate::diagnostics::execution::EngineId::Typecheck
+                    | crate::diagnostics::execution::EngineId::GeneratedFreshness
+            )
+    }) && !crate::resources::runtime::isolated()
+    {
+        report
+            .advisories
+            .push(crate::resources::runtime::NATIVE_EXECUTION.into());
+    }
 }
 
 #[cfg(test)]

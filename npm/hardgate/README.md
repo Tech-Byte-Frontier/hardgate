@@ -22,15 +22,16 @@ registry availability. Select a published version and commit your lockfile.
 
 ## Supported runtime
 
-Local static analysis supports Linux (x64/ARM64 glibc 2.39+) and macOS
+Local analysis and ordinary project checks support Linux (x64/ARM64 glibc 2.39+) and macOS
 (Intel/Apple Silicon). Node.js 18+ runs the launcher and the
 matching native optional dependency supplies the executable. **Rust is not
 required.**
 
 `scan`, policy-only checks, saved reports, and static MCP tools run without
 platform isolation. Policy-only checks are partial and still require configured
-saved evidence. Executing project tools requires Linux cgroup v2 and systemd
-254+ (or inherited verified limits); read-only child checks need Landlock ABI 3+.
+saved evidence. Ordinary `check` and `fmt` run natively. Evidence producers and
+`orchestration.require_isolation = true` require Linux cgroup v2 and systemd
+254+ (or inherited verified limits), plus Landlock ABI 3+ for protected checks.
 Unsupported execution features fail with setup guidance before starting tools.
 
 npm and pnpm are tested installation channels. Windows and musl/Alpine are not supported. Published versions retain their original
