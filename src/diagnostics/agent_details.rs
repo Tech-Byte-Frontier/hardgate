@@ -7,15 +7,19 @@ impl GateReport {
     pub(crate) fn render_agent_details(&self) -> String {
         if self.passed {
             let mut out = format!(
-                "✅ **Hardgate Passed**: All {} files and {} functions satisfied the evaluated policy ({}ms).\n\n",
-                self.files_scanned, self.functions_analyzed, self.duration_ms
+                "{}: All {} files and {} functions satisfied the evaluated policy ({}ms).\n\n",
+                self.human_verdict(),
+                self.files_scanned,
+                self.functions_analyzed,
+                self.duration_ms
             );
             self.render_advisories_agent(&mut out);
             return out;
         }
 
         let mut out = format!(
-            "❌ **Hardgate Failed**: {} violations detected across {} files.\n\n",
+            "{}: {} violations detected across {} files.\n\n",
+            self.human_verdict(),
             self.total_violations(),
             self.files_scanned
         );

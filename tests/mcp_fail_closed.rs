@@ -113,7 +113,7 @@ fn assert_failed_source_scan(tag: &str, content: &[u8], expected_step: &str) {
     );
     assert_ne!(response["result"]["isError"], true);
     let text = tool_error_text(&response);
-    assert!(text.contains("Hardgate Failed"), "{text}");
+    assert!(text.contains("Hardgate Incomplete"), "{text}");
     assert!(text.contains(expected_step), "{text}");
 
     let _ = std::fs::remove_dir_all(root);

@@ -102,6 +102,12 @@ finding; the preset severities make it blocking. Projects must reclassify such
 a file only when another role is truthful, or deliberately change the
 applicable role policy. Classification never adds parser support.
 
+An inventory-only migration with explicit `[roles.migration].severity = "ignore"`
+is inventoried with an advisory and applicable safety checks; it does not create
+an incomplete AST requirement. This does not claim SQL parsing. Warning/error
+severity still retains the unsupported-analysis gap, and read/parse failures are
+never converted into completed evidence. Engine reasons identify the affected file.
+
 Rust files named `tests.rs`, `*_tests.rs`, or `*-tests.rs` use the built-in
 test role convention; the suffix rule is limited to `.rs` so similarly named
 JavaScript and other files remain source unless another convention

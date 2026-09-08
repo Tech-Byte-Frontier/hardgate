@@ -170,7 +170,7 @@ fn scan_unsupported_source_has_consistent_failure_shapes() {
             }
             "agent" => {
                 let text = stdout(&output);
-                assert!(text.contains("Hardgate Failed"), "{text}");
+                assert!(text.contains("Hardgate Incomplete"), "{text}");
                 assert!(text.contains("unsupported-source"), "{text}");
             }
             _ => {
@@ -200,7 +200,7 @@ fn scan_parse_failure_has_consistent_failure_shapes() {
             assert_eq!(report["passed"], false);
             assert!(report["orchestration_violations"].is_array());
         } else if format == "agent" {
-            assert!(text.contains("Hardgate Failed"), "{text}");
+            assert!(text.contains("Hardgate Incomplete"), "{text}");
         } else {
             assert!(text.contains("error[tool]"), "{text}");
         }

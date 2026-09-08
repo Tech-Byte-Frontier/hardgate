@@ -316,7 +316,12 @@ fn run_orchestration(
                     step,
                     target: root,
                     message: format!(
-                        "Required {step} command could not be resolved. Run `hardgate init --preview` for tool-specific setup, or configure [orchestration]."
+                        "{} Required {step} command could not be resolved. Run `hardgate init --preview` for tool-specific setup, or configure [orchestration].",
+                        if step == "format_check" {
+                            "No formatter configured or detected; formatting was not evaluated."
+                        } else {
+                            "No linter configured or detected; lint was not evaluated."
+                        }
                     ),
                 },
             );

@@ -1,4 +1,4 @@
-use super::{GateReport, push_gate_header, status_label};
+use super::{GateReport, push_gate_header};
 use crate::engines::ComplexityContribution;
 use colored::*;
 
@@ -22,11 +22,7 @@ impl GateReport {
     }
 
     fn render_terminal_header(&self, out: &mut String) {
-        push_gate_header(
-            out,
-            &self.gate_name,
-            status_label(self.passed, self.total_violations()),
-        );
+        push_gate_header(out, &self.gate_name, self.human_status_label());
     }
 
     fn render_advisories_terminal(&self, out: &mut String) {
@@ -264,7 +260,7 @@ impl GateReport {
                 self.files_scanned,
                 self.functions_analyzed,
                 self.duration_ms,
-                status_label(self.passed, self.total_violations()),
+                self.human_status_label(),
             ));
         } else {
             out.push_str(&format!(
@@ -275,7 +271,7 @@ impl GateReport {
                 self.duration_ms,
                 code_findings,
                 blockers,
-                status_label(self.passed, self.total_violations()),
+                self.human_status_label(),
             ));
         }
     }

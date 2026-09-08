@@ -49,6 +49,7 @@ pub(crate) fn configure(
         .env("npm_config_cache", scratch.join("npm"))
         .env("npm_config_store_dir", scratch.join("pnpm-store"))
         .env("pnpm_config_store_dir", scratch.join("pnpm-store"))
-        .env("pnpm_config_verify_deps_before_run", "error");
+        .env("npm_config_verify_deps_before_run", "false")
+        .env("pnpm_config_verify_deps_before_run", "false");
     Ok(())
 }

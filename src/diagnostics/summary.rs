@@ -1,4 +1,4 @@
-use super::{GateReport, push_gate_header, status_label};
+use super::{GateReport, push_gate_header};
 use colored::*;
 use serde::{Deserialize, Serialize};
 
@@ -155,11 +155,7 @@ impl GateReport {
     pub fn render_summary(&self) -> String {
         let mut out = String::new();
         let s = self.summary();
-        push_gate_header(
-            &mut out,
-            &self.gate_name,
-            status_label(self.passed, s.total_errors),
-        );
+        push_gate_header(&mut out, &self.gate_name, self.human_status_label());
         out.push_str(&format!(
             "Summary: {} errors ({} code findings across {} files, {} analysis blockers; {} clones, {} AST violations)\n",
             s.total_errors, s.code_findings, s.files_with_violations, s.analysis_blockers, s.clones, s.ast_violations,
@@ -210,7 +206,7 @@ impl GateReport {
         out.push_str(&format!(
             "{}\nresult: {}\n",
             "-".repeat(70).dimmed(),
-            status_label(self.passed, s.total_errors),
+            self.human_status_label(),
         ));
         out
     }

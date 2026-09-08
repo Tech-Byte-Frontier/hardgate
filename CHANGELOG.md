@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5] - 2026-09-08
+
+- Honor explicitly ignored inventory migrations without making AST completion unreachable; retain safety checks and an inventory advisory.
+- Show incomplete acceptance consistently in human reports and include affected paths in engine reasons.
+- Disable pnpm automatic dependency verification in disposable runs while retaining protected inputs and tool failures.
+- Explain missing formatters as unevaluated requirements; cover policy output flag combinations and failed writes with regressions.
+
+
 ## 0.6.4 (2026-09-07)
 
 - Add read-only `hardgate doctor` preflight with configured/detected tool

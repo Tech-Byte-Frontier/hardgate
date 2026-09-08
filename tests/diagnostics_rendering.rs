@@ -208,7 +208,7 @@ fn every_category_is_rendered_with_actionable_details() {
     assert_contains_all(
         &agent,
         &[
-            "❌ **Hardgate Failed**",
+            "⚠ **Hardgate Incomplete**",
             "> ⚠️ **Advisory**",
             "### 🚫 Anti-Gaming",
             "### ⚡ Complexity",
@@ -244,7 +244,7 @@ fn every_category_is_rendered_with_actionable_details() {
             "key contributors:",
             "L14: +7 for nested branch",
             "summary: 7 files, 13 functions in 17ms",
-            "result: fail (11 errors)",
+            "result: ⚠ Incomplete acceptance",
         ],
     );
 
@@ -261,7 +261,7 @@ fn every_category_is_rendered_with_actionable_details() {
             "error[coverage]",
             "error[mutation]",
             "error[tool]",
-            "result: fail (11 errors)",
+            "result: ⚠ Incomplete acceptance",
         ],
     );
     assert!(!compact.contains("help:"));

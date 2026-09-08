@@ -4,13 +4,40 @@ use crate::commands::CommandOutcome;
 use std::fmt::Write;
 
 impl GateReport {
-    pub(crate) fn render_acceptance_context(&self) -> String {
-        let outcome = CommandOutcome::from_report(self);
-        let title = if self.passed {
+    pub(crate) fn acceptance_incomplete(&self) -> bool {
+        CommandOutcome::from_report(self) == CommandOutcome::Incomplete
+            || self.execution.as_ref().is_some_and(|plan| {
+                plan.engines.iter().any(|engine| {
+                    engine.selected
+                        && (engine.state == super::execution::EngineState::Incomplete
+                            || (!plan.is_partial()
+                                && engine.state == super::execution::EngineState::Skipped))
+                })
+            })
+    }
+
+    pub(crate) fn human_verdict(&self) -> &'static str {
+        if self.acceptance_incomplete() {
+            "⚠ **Hardgate Incomplete**"
+        } else if self.passed {
             "✅ **Hardgate Passed**"
         } else {
             "❌ **Hardgate Failed**"
-        };
+        }
+    }
+
+    pub(crate) fn human_status_label(&self) -> colored::ColoredString {
+        use colored::Colorize;
+        if self.acceptance_incomplete() {
+            "⚠ Incomplete acceptance".yellow().bold()
+        } else {
+            super::status_label(self.passed, self.total_violations())
+        }
+    }
+
+    pub(crate) fn render_acceptance_context(&self) -> String {
+        let outcome = CommandOutcome::from_report(self);
+        let title = self.human_verdict();
         let mut out = format!(
             "{title} ({}; {}; exit {})\n",
             if self.passed { "pass" } else { "fail" },
@@ -71,6 +98,8 @@ fn render_scope(report: &GateReport, out: &mut String) {
                 "partial: not complete acceptance"
             } else if report.passed && plan.is_complete() {
                 "complete acceptance"
+            } else if report.acceptance_incomplete() {
+                "acceptance incomplete"
             } else {
                 "acceptance failed"
             }
@@ -79,7 +108,15 @@ fn render_scope(report: &GateReport, out: &mut String) {
             .engines
             .iter()
             .filter(|engine| engine.selected)
-            .map(|engine| format!("{:?}={:?}", engine.id, engine.state))
+            .map(|engine| match &engine.reason {
+                Some(reason) => format!(
+                    "{:?}={:?} ({})",
+                    engine.id,
+                    engine.state,
+                    display::sanitize_controls(reason)
+                ),
+                None => format!("{:?}={:?}", engine.id, engine.state),
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "Evaluated engines: {selected}");

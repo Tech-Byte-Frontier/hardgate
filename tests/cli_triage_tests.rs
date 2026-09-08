@@ -148,7 +148,7 @@ fn failures_remain_visible_with_no_matches_and_zero_limit() {
         } else {
             let text = stdout(&output);
             for required in [
-                "Hardgate Failed",
+                "Hardgate Incomplete",
                 "HG-ORCHESTRATION-COVERAGE-REPORT",
                 "lint-broke",
                 "Displayed: 0/",

@@ -154,7 +154,7 @@ Rust defaults cover workspace members with `cargo test --workspace --all-targets
 
 ### Read-only execution
 
-Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary and JS cache output stays in the disposable copy. pnpm dependency verification uses its error mode so a check cannot silently reinstall dependencies; projects whose copied dependency state needs installation receive a setup failure. Configure a direct local verifier when package-manager installation metadata prevents running an otherwise ready check. Original absolute source paths remain unwritable. Known cache records from Ruff, import-linter, pytest, ESLint and Python bytecode
+Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary and JS cache output stays in the disposable copy. pnpm automatic dependency verification is disabled inside disposable runs: copied install metadata must not trigger an install or block an already installed verifier. Hardgate does not install dependencies. Missing tools and failed checks still fail, and Linux isolation keeps the original dependency tree unwritable when required. For older pnpm versions that mishandle this setting in nested scripts, configure a direct local verifier. Commands are parsed without a shell; use `sh -c 'first && second'` when shell operators are required. Original absolute source paths remain unwritable. Known cache records from Ruff, import-linter, pytest, ESLint and Python bytecode
 may change in the disposable copy. Other files remain protected even when
 Git ignores them; explicit classification rules can protect cache-named inputs.
 Configured commands receive a disposable `UV_CACHE_DIR`, including when the
@@ -233,7 +233,7 @@ hardgate check --json | jq '.clone_violations'
 ```
 
 `--output PATH` saves the final rendered report atomically for `check`, `scan`,
-`check` and saved-report commands while retaining stdout output.
+and saved-report commands while retaining stdout output.
 Setup errors use the normal error channel. `check --progress jsonl` emits stage events to
 stderr; the final report remains the authority for engine completion and verdict.
 Running external commands emit a heartbeat every 10 seconds with active phase,
@@ -293,7 +293,7 @@ hardgate fmt --check --changed
 
 `fmt --check` runs `[orchestration].format_check`; `fmt` runs `format`, falling back to `format_check` when no write command is configured. Commands run from the repository root with local Node binaries available. A configured command failure is blocking for this command.
 
-An unconfigured formatter is a setup failure with exit 2. Scoped formatting
+An unconfigured formatter is an explicit unevaluated requirement (`format_check=incomplete`, exit 2), with “No formatter configured or detected” guidance. This does not indicate formatting violations. `--checks policy` remains available for partial structural triage; complete acceptance requires a formatter. Scoped formatting
 requires an explicit file-aware template:
 
 ```toml

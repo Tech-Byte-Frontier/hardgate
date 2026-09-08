@@ -143,7 +143,23 @@ pub(crate) fn clone_config_for_role(
 }
 
 pub(crate) fn record_role_evidence_failure(report: &mut GateReport, failure: RoleEvidence<'_>) {
-    report.observe_evidence_failure(failure.step, &failure.message);
+    if failure.step == "unsupported-source"
+        && failure.role == FileRole::Migration
+        && crate::discovery::classification::is_inventory_file(failure.target)
+        && severity(failure.config, failure.role) == Severity::Ignore
+    {
+        push_advisory(report, Advisory {
+            role: failure.role,
+            category: failure.step,
+            target: failure.target,
+            detail: "Inventoried without AST analysis under explicit ignore severity; applicable safety checks still run.".into(),
+        });
+        return;
+    }
+    report.observe_evidence_failure(
+        failure.step,
+        &format!("{}: {}", failure.target.display(), failure.message),
+    );
     match severity(failure.config, failure.role) {
         Severity::Error => record_evidence_failure(
             report,

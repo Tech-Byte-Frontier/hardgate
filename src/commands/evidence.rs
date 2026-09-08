@@ -20,7 +20,7 @@ pub(crate) fn record_evidence_failure(
         target,
         message,
     } = failure;
-    report.observe_evidence_failure(step, &message);
+    report.observe_evidence_failure(step, &format!("{}: {message}", target.display()));
     if !blocking {
         report
             .advisories

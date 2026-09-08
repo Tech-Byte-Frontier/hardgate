@@ -166,7 +166,7 @@ fn valid_legacy_reference_does_not_replace_required_coverage_identity() {
         &["check", "--checks", "policy", "--format", "summary"],
     );
     assert_status(&summary, false, "unbound evidence summary");
-    assert!(stdout(&summary).contains("result: fail"));
+    assert!(stdout(&summary).contains("result: ⚠ Incomplete acceptance"));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::{GateReport, push_compact_entry, push_gate_header, status_label};
+use super::{GateReport, push_compact_entry, push_gate_header};
 use colored::*;
 
 impl GateReport {
@@ -6,11 +6,7 @@ impl GateReport {
     /// entry per other finding, without snippets, breakdowns, or help text.
     pub fn render_compact(&self) -> String {
         let mut out = String::new();
-        push_gate_header(
-            &mut out,
-            &self.gate_name,
-            status_label(self.passed, self.total_violations()),
-        );
+        push_gate_header(&mut out, &self.gate_name, self.human_status_label());
         for advisory in &self.advisories {
             out.push_str(&format!("{} {}\n", "warning:".yellow().bold(), advisory));
         }
