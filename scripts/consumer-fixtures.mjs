@@ -50,7 +50,7 @@ export const CONSUMER_CASES = [
       expectedExit: 2,
       expectedViolationCount: 4,
       expectedOrchestration: [
-        ...["format_check", "lint"].map((step) => orchestration(step, "<project-root>", `Required ${step} command could not be resolved. Run ` + "`hardgate init --preview` for tool-specific setup, or configure [orchestration].")),
+        ...[["format_check", "formatter", "formatting"], ["lint", "linter", "lint"]].map(([step, tool, check]) => orchestration(step, "<project-root>", `No ${tool} configured or detected; ${check} was not evaluated. Required ${step} command could not be resolved. Run ` + "`hardgate init --preview` for tool-specific setup, or configure [orchestration].")),
         orchestration("coverage-report", ".hardgate/evidence/coverage.lcov", "Required coverage report was not found."),
         orchestration("mutation-report", "<not-configured>", "Mutation is enabled, but no report path was provided."),
       ],
