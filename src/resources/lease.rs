@@ -277,10 +277,13 @@ pub(super) fn acquire_workload() -> io::Result<MutationLease> {
     let uid = current_uid();
     let path = PathBuf::from(format!("/tmp/hardgate-workload-{uid}/slot.lock"));
     let file = prepare_at(&path, uid)?;
-    let deadline = Instant::now() + Duration::from_secs(1800);
+    let queued = Instant::now();
+    let deadline = queued + Duration::from_secs(1800);
     if !try_lock_or_wait(&file, &path, deadline)? {
-        eprintln!(
-            "hardgate: another workload owns the per-user resource slot; waiting (up to 30 minutes, Ctrl-C to cancel)"
+        crate::engines::process::workload_status(
+            "workload_queue",
+            "another workload owns the per-user resource slot; waiting (up to 30 minutes, Ctrl-C to cancel)",
+            Some(queued.elapsed().as_millis()),
         );
         lock_file(&file, &path, deadline).map_err(|cause| {
             if cause.kind() == io::ErrorKind::TimedOut {
@@ -288,6 +291,14 @@ pub(super) fn acquire_workload() -> io::Result<MutationLease> {
             }
             crate::resources::runtime::error(format!("cannot wait for the per-user workload slot: {cause}"))
         })?;
+        crate::engines::process::workload_status(
+            "workload_queue",
+            &format!(
+                "workload slot acquired after {:.1}s queued; starting execution",
+                queued.elapsed().as_secs_f64()
+            ),
+            Some(queued.elapsed().as_millis()),
+        );
     }
     crate::cancellation::check().map_err(|cause| {
         crate::resources::runtime::error(format!(

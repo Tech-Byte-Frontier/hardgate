@@ -8,6 +8,16 @@ pub fn configure_jsonl(enabled: bool) {
     JSONL.store(enabled, Ordering::Relaxed);
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn workload_status(stage: &str, message: &str, elapsed_ms: Option<u128>) {
+    if JSONL.load(Ordering::Relaxed) {
+        let event = serde_json::json!({"event":"progress", "stage":stage, "elapsed_ms":elapsed_ms, "message":message});
+        let _ = writeln!(std::io::stderr().lock(), "{event}");
+    } else {
+        let _ = writeln!(std::io::stderr().lock(), "hardgate: {message}");
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Latest(Arc<Mutex<String>>);
 

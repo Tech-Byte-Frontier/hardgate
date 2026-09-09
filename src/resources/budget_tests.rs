@@ -14,7 +14,7 @@ fn budgets_leave_host_headroom_and_never_grow_with_core_count() {
     let roomy = MutationBudget::from_sample(Some(&sample(64 * GIB, 60 * GIB))).unwrap();
     assert_eq!(roomy.memory_bytes, 8 * GIB);
     assert_eq!(roomy.reserve_bytes, 2 * GIB);
-    assert!((1..=2).contains(&roomy.jobs));
+    assert!((1..=super::super::runtime::profile::jobs()).contains(&roomy.jobs));
     let constrained = MutationBudget::from_sample(Some(&sample(4 * GIB, GIB))).unwrap();
     assert!(constrained.memory_bytes <= (GIB - constrained.reserve_bytes) / 2);
     assert!(MutationBudget::from_sample(Some(&sample(GIB, 300 * MIB))).is_err());

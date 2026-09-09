@@ -94,7 +94,10 @@ pub(super) fn wrap_command(
         "OOMPolicy=kill".into(),
         "KillMode=control-group".into(),
         "TimeoutStopSec=1s".into(),
-        "TasksMax=256".into(),
+        format!(
+            "TasksMax={}",
+            crate::resources::runtime::profile::task_limit(budget.jobs)
+        ),
         format!("CPUQuota={}%", budget.jobs * 100),
         format!("RuntimeMaxSec={}s", timeout.as_secs().saturating_add(5)),
     ] {
@@ -118,6 +121,7 @@ pub(super) fn wrap_command(
         .arg(budget.memory_bytes.to_string())
         .arg(budget.high_bytes().to_string())
         .arg(evidence.identity())
+        .arg(crate::resources::runtime::profile::task_limit(budget.jobs).to_string())
         .arg(program)
         .args(original.get_args());
     Ok(command)

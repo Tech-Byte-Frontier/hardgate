@@ -400,7 +400,8 @@ fn stryker(options: &EvidenceOptions, root: &Path, output: PathBuf) -> Result<Co
     let report = output.join("mutation.json");
     let derived = output.join("stryker.config.mjs");
     let body = format!(
-        "import {{ readFileSync }} from 'node:fs';\nimport {{ pathToFileURL }} from 'node:url';\nconst project = {load};\nexport default {{ ...project, reporters: ['json'], jsonReporter: {{ fileName: {} }}, incremental: false, force: true, dryRunOnly: false, allowEmpty: false, inPlace: false, concurrency: 1, fileLogLevel: 'off', tempDirName: {}, cleanTempDir: true }};\n",
+        "import {{ readFileSync }} from 'node:fs';\nimport {{ pathToFileURL }} from 'node:url';\nconst project = {load};\nconst maximum = {};\nif (project.concurrency !== undefined && (!Number.isInteger(project.concurrency) || project.concurrency < 1)) throw new Error('Stryker concurrency must be a positive integer');\nconst concurrency = Math.min(project.concurrency ?? maximum, maximum);\nexport default {{ ...project, reporters: ['json'], jsonReporter: {{ fileName: {} }}, incremental: false, force: true, dryRunOnly: false, allowEmpty: false, inPlace: false, concurrency, fileLogLevel: 'off', tempDirName: {}, cleanTempDir: true }};\n",
+        crate::resources::runtime::profile::jobs(),
         serde_json::to_string(&report)?,
         serde_json::to_string(&output.join("sandbox"))?
     );

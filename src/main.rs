@@ -22,6 +22,9 @@ struct Cli {
     /// Limit analysis workers (defaults to at most two)
     #[arg(long, global = true, value_name = "N")]
     threads: Option<std::num::NonZeroUsize>,
+    /// Workload CPUs and worker ceiling (default: half available CPUs, up to 8; env HARDGATE_WORKLOAD_JOBS)
+    #[arg(long, global = true, value_name = "N")]
+    workload_jobs: Option<std::num::NonZeroUsize>,
     /// Terminal colors; auto respects TTY, NO_COLOR and CLICOLOR conventions
     #[arg(long, global = true, default_value = "auto")]
     color: clap::ColorChoice,

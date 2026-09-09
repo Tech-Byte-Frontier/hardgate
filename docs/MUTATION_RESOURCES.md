@@ -17,19 +17,38 @@ the owner-validated user runtime directory even when an agent omits its bus
 environment. The kernel settings are checked; an environment marker alone cannot
 bypass admission. A missing manager or failed containment refuses work with exit 2.
 
-The default scope allows at most two CPUs, with a lower quota on one- and two-CPU
-hosts, and low CPU scheduling weight. Memory is capped at the smaller of 4 GiB and
-one quarter of host RAM; `memory.high` is 80% of that cap. Swap is disabled and
-there is a 256-task ceiling. The entire process tree shares these limits, including
-formatters, linters, test runners and detached subprocesses. Common worker settings
-are capped at two and smaller settings are retained. Analysis also uses at most
-two Rayon workers; requesting more workers is an error, not a policy override.
+The default workload allowance is half the available CPUs, rounded down with a
+minimum of one and a maximum of eight. Set `--workload-jobs N` or
+`HARDGATE_WORKLOAD_JOBS=N` (1–64) for an explicit allowance; the CLI option takes
+precedence. This changes execution capacity, not quality requirements. A selected
+allowance is inherited unchanged when Hardgate reexecutes inside its scope.
+
+For `N` jobs, the scope has an `N`-CPU quota and a task ceiling of
+`max(256, 128*N)`, counting both processes and threads. Memory is capped at the
+smaller of one quarter of host RAM and `clamp(N, 4, 16)` GiB; `memory.high` is
+80% of that cap. Swap remains disabled and CPU scheduling weight remains low.
+The entire process tree shares these limits, including detached subprocesses.
+Hardgate prints the actual admitted kernel limits before running tools; tighter
+inherited limits remain enforced. Resource failures identify memory versus task
+events and include current, peak and maximum usage when available.
+
+Common build/test worker settings are capped at the selected allowance; smaller
+settings are retained. Stryker evidence uses the smaller of the project's explicit
+concurrency and this allowance, defaulting to the allowance when unspecified.
+Analysis remains separate: `--threads` still selects at most two Rayon workers.
+
+```sh
+hardgate --workload-jobs 8 check --format agent
+hardgate --workload-jobs 8 evidence stryker
+HARDGATE_WORKLOAD_JOBS=8 scripts/with-resource-limits.sh cargo test
+```
 
 A shared per-user flock slot prevents independent invocations and maintenance
 runners from multiplying the resource allowance. Each outer invocation creates
 a unique scope identity, so stale unit cleanup cannot collide with a subsequent
 launch. Overlapping commands wait up to 30 minutes and print a waiting message;
-cancellation while queued starts no workload. A timeout reports workload contention.
+cancellation while queued starts no workload. When the slot becomes available,
+Hardgate reports queued time separately from execution. A timeout reports workload contention.
 Nested commands reuse their inherited boundary. Cancellation stops only the owned
 scope. The scope leader inherits the workload lock, so terminating its outer
 supervisor does not release the slot while that leader remains live. The scope

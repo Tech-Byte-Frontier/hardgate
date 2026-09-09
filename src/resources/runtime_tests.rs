@@ -34,6 +34,6 @@ fn external_worker_settings_are_capped_and_jobserver_is_removed() {
             .unwrap()
             .parse::<usize>()
             .unwrap();
-        assert!((1..=2).contains(&value));
+        assert!((1..=profile::jobs()).contains(&value));
     }
 }

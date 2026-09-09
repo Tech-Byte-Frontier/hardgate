@@ -152,6 +152,38 @@ fn stryker_overrides_unsafe_runner_defaults_and_binds_reported_source() {
 }
 
 #[test]
+fn stryker_preserves_smaller_concurrency_and_rejects_invalid_concurrency() {
+    let project = Project::new();
+    if project.nested_mutation_is_rejected("stryker") {
+        return;
+    }
+    let source = std::fs::read_to_string(project.0.join("index.js")).unwrap();
+    let report = json!({"files":{"index.js":{"source":source,"mutants":[{"status":"Killed"}]}}});
+    for concurrency in [1, 2] {
+        std::fs::write(
+            project.0.join("stryker.config.json"),
+            json!({"concurrency":concurrency}).to_string(),
+        )
+        .unwrap();
+        let result = project
+            .producer_command("stryker", &report.to_string(), ("pass", 0))
+            .env("HARDGATE_FIXTURE_CONCURRENCY", concurrency.to_string())
+            .output()
+            .unwrap();
+        assert_exit(&result, 0);
+        project
+            .verify(hardgate::evidence::EvidenceKind::Mutation)
+            .unwrap();
+    }
+    std::fs::write(project.0.join("stryker.config.json"), "{\"concurrency\":0}").unwrap();
+    assert_exit(
+        &project.produce("stryker", &report.to_string(), ("pass", 0)),
+        2,
+    );
+    assert!(!project.receipt("mutation").exists());
+}
+
+#[test]
 fn mutation_scope_and_feature_settings_reach_the_original_workspace_baseline() {
     let project = Project::new();
     if project.nested_mutation_is_rejected("cargo-mutants") {

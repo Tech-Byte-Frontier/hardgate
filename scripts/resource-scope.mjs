@@ -21,7 +21,7 @@ export function launchArguments(scope, command, limits) {
   const properties = {
     CPUQuota: `${limits.quota}%`, CPUWeight: 25,
     MemoryMax: limits.memory, MemoryHigh: limits.high, MemorySwapMax: 0,
-    TasksMax: 256, OOMPolicy: "kill", KillMode: "control-group",
+    TasksMax: limits.tasks, OOMPolicy: "kill", KillMode: "control-group",
     TimeoutStopSec: "1s", RuntimeMaxSec: "1800s",
   };
   return ["--user", "--scope", "--quiet", "--collect", "--expand-environment=no",
@@ -105,10 +105,11 @@ async function supervise(command, runner) {
   try {
     await acquireWorkloadSlot(fd, runner.execute);
     scope = ownedScope();
-    const environment = { ...managerEnvironment(), HARDGATE_RESOURCE_SCRIPT_CHILD: "1", [READY]: scope.ready };
+    const limits = resourceLimits();
+    const environment = { ...managerEnvironment(), HARDGATE_WORKLOAD_JOBS: String(limits.jobs), HARDGATE_RESOURCE_SCRIPT_CHILD: "1", [READY]: scope.ready };
     // The scope leader also holds the shared open-file description, so killing
     // this supervisor cannot release the slot while its workload is still live.
-    const status = await runner.execute("systemd-run", launchArguments(scope, command, resourceLimits()), { env: environment, stdio: ["inherit", "inherit", "inherit", fd] });
+    const status = await runner.execute("systemd-run", launchArguments(scope, command, limits), { env: environment, stdio: ["inherit", "inherit", "inherit", fd] });
     if (!fs.existsSync(scope.ready)) throw new Error("the systemd user manager did not establish the owned workload scope; no workload was acknowledged");
     return status;
   } finally {

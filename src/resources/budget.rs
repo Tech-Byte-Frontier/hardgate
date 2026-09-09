@@ -47,7 +47,7 @@ impl MutationBudget {
         Ok(Self {
             memory_bytes,
             reserve_bytes,
-            jobs: cpus.min(2),
+            jobs: cpus.min(super::runtime::profile::jobs()),
         })
     }
 

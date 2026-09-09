@@ -57,7 +57,7 @@ try {
     assert.throws(() => scopeActive(status, "foreign"), /different owner/);
   }
   assert.throws(() => scopeActive("LoadState=loaded\nDescription=owned\n", "owned"), /missing/);
-  const args = launchArguments({ unit: "hardgate-workload-owned.scope", description: "owned" }, ["printf", "$HOME `literal`"], { quota: 200, memory: 4294967296, high: 3435973836 });
+  const args = launchArguments({ unit: "hardgate-workload-owned.scope", description: "owned" }, ["printf", "$HOME `literal`"], { quota: 200, tasks: 256, memory: 4294967296, high: 3435973836 });
   assert.deepEqual(args.slice(-3), ["--", "printf", "$HOME `literal`"]);
   for (const required of ["--expand-environment=no", "--property=CPUQuota=200%", "--property=MemoryMax=4294967296", "--property=MemoryHigh=3435973836", "--property=MemorySwapMax=0", "--property=TasksMax=256", "--property=KillMode=control-group"]) assert.ok(args.includes(required), required);
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

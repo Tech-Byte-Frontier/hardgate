@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const MAX_MEMORY: u64 = 4 * 1024 * 1024 * 1024;
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
@@ -34,7 +36,7 @@ impl Drop for Fixture {
 #[test]
 fn every_required_kernel_limit_is_checked_without_trusting_environment_hints() {
     let fixture = Fixture::new();
-    assert!(bounded(&fixture.0, MAX_MEMORY).unwrap());
+    assert!(bounded(&fixture.0, MAX_MEMORY, 2).unwrap());
     for (name, value) in [
         ("cpu.max", "max 100000"),
         ("cpu.max", "200001 100000"),
@@ -52,11 +54,14 @@ fn every_required_kernel_limit_is_checked_without_trusting_environment_hints() {
         let path = fixture.0.join(name);
         let old = fs::read(&path).unwrap();
         fs::write(&path, value).unwrap();
-        assert!(!bounded(&fixture.0, MAX_MEMORY).unwrap(), "{name}={value}");
+        assert!(
+            !bounded(&fixture.0, MAX_MEMORY, 2).unwrap(),
+            "{name}={value}"
+        );
         fs::write(path, old).unwrap();
     }
     fs::remove_file(fixture.0.join("cpu.max")).unwrap();
-    assert!(!bounded(&fixture.0, MAX_MEMORY).unwrap());
+    assert!(!bounded(&fixture.0, MAX_MEMORY, 2).unwrap());
 }
 
 #[test]
@@ -65,6 +70,8 @@ fn kernel_limit_and_event_changes_invalidate_completed_work() {
     let path = fixture.0.join("memory.events");
     let boundary = Boundary {
         directory: fixture.0.clone(),
+        memory_limit: MAX_MEMORY,
+        jobs: 2,
         events: vec![(path.clone(), event_snapshot(&path).unwrap())],
     };
     boundary.verify().unwrap();
@@ -100,10 +107,42 @@ fn cpu_quota_parsing_rejects_invalid_zero_and_overflow_values() {
         "-1 100000",
         "200001 100000",
     ] {
-        assert!(!cpu_bounded(value), "{value}");
+        assert!(!cpu_bounded(value, 2), "{value}");
     }
-    assert!(cpu_bounded("50000 100000\n"));
-    assert!(cpu_bounded("18446744073709551615 18446744073709551615"));
+    assert!(cpu_bounded("50000 100000\n", 2));
+    assert!(cpu_bounded("18446744073709551615 18446744073709551615", 2));
+}
+
+#[test]
+fn larger_allowances_still_reject_unbounded_or_excessive_kernel_limits() {
+    let fixture = Fixture::new();
+    fs::write(fixture.0.join("cpu.max"), "800000 100000").unwrap();
+    fs::write(fixture.0.join("pids.max"), "1024").unwrap();
+    assert!(bounded(&fixture.0, MAX_MEMORY, 8).unwrap());
+    assert!(!bounded(&fixture.0, MAX_MEMORY, 2).unwrap());
+    fs::write(fixture.0.join("pids.max"), "1025").unwrap();
+    assert!(!bounded(&fixture.0, MAX_MEMORY, 8).unwrap());
+    fs::write(fixture.0.join("pids.max"), "1024").unwrap();
+    fs::write(fixture.0.join("cpu.max"), "800001 100000").unwrap();
+    assert!(!bounded(&fixture.0, MAX_MEMORY, 8).unwrap());
+}
+
+#[test]
+fn task_failure_reports_the_limit_and_usage_without_claiming_memory_exhaustion() {
+    let fixture = Fixture::new();
+    for (name, value) in [("pids.current", "63"), ("pids.peak", "64")] {
+        fs::write(fixture.0.join(name), value).unwrap();
+    }
+    let message = event_failure(
+        &fixture.0,
+        &fixture.0.join("pids.events"),
+        "max 0\n",
+        "max 7\n",
+    );
+    assert!(message.contains("task limit events"));
+    assert!(message.contains("pids.current=63, pids.peak=64, pids.max=64"));
+    assert!(message.contains("counters [max 0] -> [max 7]"));
+    assert!(!message.contains("memory limit events"));
 }
 
 #[test]
@@ -127,14 +166,14 @@ fn unreadable_and_oversized_kernel_evidence_is_an_error() {
     let path = fixture.0.join("cpu.max");
     fs::write(&path, "0".repeat(8193)).unwrap();
     assert!(
-        bounded(&fixture.0, MAX_MEMORY)
+        bounded(&fixture.0, MAX_MEMORY, 2)
             .unwrap_err()
             .to_string()
             .contains("oversized")
     );
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
-    assert!(bounded(&fixture.0, MAX_MEMORY).is_err());
+    assert!(bounded(&fixture.0, MAX_MEMORY, 2).is_err());
     let limit = fixture.0.join("memory.max");
     fs::write(&limit, "invalid").unwrap();
     assert!(

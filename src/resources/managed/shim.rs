@@ -10,7 +10,8 @@ report=$1
 limit=$2
 high=$3
 identity=$4
-shift 4
+tasks=$5
+shift 5
 [ "$#" -gt 0 ] || fail "mutation executable is missing"
 
 case "$limit" in
@@ -51,7 +52,7 @@ read_setting "$cgroup/memory.max" "$limit"
 read_setting "$cgroup/memory.high" "$high"
 read_setting "$cgroup/memory.swap.max" 0
 read_setting "$cgroup/memory.oom.group" 1
-read_setting "$cgroup/pids.max" 256
+read_setting "$cgroup/pids.max" "$tasks"
 
 start_marker=$report.start
 while :
@@ -91,7 +92,7 @@ read_setting "$cgroup/memory.max" "$limit"
 read_setting "$cgroup/memory.high" "$high"
 read_setting "$cgroup/memory.swap.max" 0
 read_setting "$cgroup/memory.oom.group" 1
-read_setting "$cgroup/pids.max" 256
+read_setting "$cgroup/pids.max" "$tasks"
 
 read_scalar() {
     value=

@@ -10,10 +10,18 @@ function integer(value) {
   return Number(value);
 }
 
-export function memoryLimit(proc = "/proc") {
+export function workloadJobs(value = process.env.HARDGATE_WORKLOAD_JOBS, cpus = affinityCount()) {
+  const jobs = value === undefined ? Math.max(1, Math.min(8, Math.floor(cpus / 2))) : integer(value);
+  if (jobs < 1 || jobs > 64) throw new Error("HARDGATE_WORKLOAD_JOBS must be between 1 and 64");
+  return jobs;
+}
+
+export const taskLimit = (jobs) => Math.max(256, jobs * 128);
+
+export function memoryLimit(proc = "/proc", jobs = workloadJobs()) {
   const value = read(path.join(proc, "meminfo")).match(/^MemTotal:\s+(\d+)\s+kB$/m)?.[1];
   if (!value) throw new Error("missing host memory size");
-  return Math.min(Math.floor(integer(value) * 1024 / 4), 4 * 1024 ** 3);
+  return Math.min(Math.floor(integer(value) * 1024 / 4), Math.max(4, Math.min(16, jobs)) * 1024 ** 3);
 }
 
 export function alignedMemoryLimits(limit) {
@@ -22,18 +30,18 @@ export function alignedMemoryLimits(limit) {
   return { memory, high: Math.floor(Math.floor(memory / 5) * 4 / alignment) * alignment };
 }
 
-export function bounded(directory, limit) {
+export function bounded(directory, limit, jobs = workloadJobs()) {
   try {
     const value = (name) => read(path.join(directory, name));
     const tasks = integer(value("pids.max"));
-    return boundedCpu(value("cpu.max")) && boundedMemory(value, limit)
-      && tasks > 0 && tasks <= 256;
+    return boundedCpu(value("cpu.max"), jobs) && boundedMemory(value, limit)
+      && tasks > 0 && tasks <= taskLimit(jobs);
   } catch { return false; }
 }
 
-function boundedCpu(value) {
+function boundedCpu(value, jobs) {
   const [quota, period, extra] = value.split(/\s+/).map(integer);
-  return extra === undefined && quota > 0 && period > 0 && quota <= 2 * period;
+  return extra === undefined && quota > 0 && period > 0 && quota <= jobs * period;
 }
 
 function boundedMemory(value, limit) {
@@ -42,18 +50,18 @@ function boundedMemory(value, limit) {
     && high <= Math.floor(maximum / 5) * 4 && value("memory.swap.max") === "0";
 }
 
-export function boundary(proc = "/proc", mount = "/sys/fs/cgroup") {
-  const limit = memoryLimit(proc);
+export function boundary(proc = "/proc", mount = "/sys/fs/cgroup", jobs = workloadJobs()) {
+  const limit = memoryLimit(proc, jobs);
   const membership = read(path.join(proc, "self/cgroup")).split("\n").find((line) => line.startsWith("0::"))?.slice(3);
   if (!membership?.startsWith("/") || membership.split("/").includes("..")) throw new Error("invalid cgroup membership");
   let current = path.join(mount, membership);
   const observed = [];
   while (current !== mount) {
-    if (bounded(current, limit)) return current;
+    if (bounded(current, limit, jobs)) return current;
     observed.push(controlSnapshot(current));
     current = path.dirname(current);
   }
-  if (bounded(mount, limit)) return mount;
+  if (bounded(mount, limit, jobs)) return mount;
   observed.push(controlSnapshot(mount));
   throw new Error(`no enforced CPU, memory, swap and task boundary (memory ceiling ${limit}); ${observed.join("; ")}`);
 }
@@ -90,10 +98,12 @@ function affinityCount() {
 
 export function resourceLimits() {
   // Kernel memory controls may round up to PAGE_SIZE on readback.
-  return { quota: Math.min(200, affinityCount() * 50), ...alignedMemoryLimits(memoryLimit()) };
+  const jobs = workloadJobs();
+  return { jobs, tasks: taskLimit(jobs), quota: jobs * 100, ...alignedMemoryLimits(memoryLimit("/proc", jobs)) };
 }
 
 function main(args) {
+  if (args.length === 1 && args[0] === "--jobs") { console.log(workloadJobs()); return; }
   if (args.length === 1 && args[0] === "--limits") {
     const { quota, memory, high } = resourceLimits();
     console.log(`${quota} ${memory} ${high}`);

@@ -41,7 +41,8 @@ else (async () => {
     if (directory) destination = path.join(directory.split('=').slice(1).join('='), 'lcov.info');
     else {
       const config = (await import(require('node:url').pathToFileURL(args[1]).href)).default;
-      if (config.incremental || config.dryRunOnly || config.allowEmpty || config.inPlace || config.concurrency !== 1) throw Error('unsafe Stryker configuration');
+      const expectedConcurrency = Number(process.env.HARDGATE_FIXTURE_CONCURRENCY || process.env.HARDGATE_WORKLOAD_JOBS);
+      if (config.incremental || config.dryRunOnly || config.allowEmpty || config.inPlace || config.concurrency !== expectedConcurrency) throw Error('unsafe Stryker configuration');
       destination = config.jsonReporter.fileName;
     }
   }

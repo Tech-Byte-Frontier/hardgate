@@ -56,11 +56,15 @@ fn launch_keeps_limits_and_literal_arguments_in_the_supervisor_command() {
         "--property=MemoryMax=1073741824",
         "--property=MemoryHigh=858980352",
         "--property=MemorySwapMax=0",
-        "--property=TasksMax=256",
         "--property=RuntimeMaxSec=1800s",
     ] {
         assert!(args.iter().any(|arg| arg == value), "missing {value}");
     }
+    assert!(args.contains(&format!(
+        "--property=TasksMax={}",
+        profile::task_limit(profile::jobs())
+    )));
+    assert!(args.contains(&format!("--property=CPUQuota={}%", profile::jobs() * 100)));
     assert!(args.contains(&format!("--unit={}", ready.1)));
     assert_ne!(ready.1, fixture().1);
     assert_ne!(ready.1, "hardgate-workload.scope");

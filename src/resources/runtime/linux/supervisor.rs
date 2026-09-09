@@ -1,4 +1,5 @@
-use super::{CHILD_MARKER, MAX_TASKS};
+use super::CHILD_MARKER;
+use crate::resources::runtime::profile;
 use crate::resources::runtime::{constrain_command, error};
 use std::fs;
 use std::io;
@@ -94,8 +95,8 @@ fn launch(runtime: &Path, ready: &readiness::Readiness, memory: u64) -> io::Resu
         .env("XDG_RUNTIME_DIR", runtime)
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .env(CHILD_MARKER, &ready.0);
-    let cpus = std::thread::available_parallelism().map_or(1, usize::from);
-    let quota = if cpus <= 2 { 50 * cpus } else { 200 };
+    let jobs = profile::jobs();
+    let quota = jobs * 100;
     for property in [
         format!("CPUQuota={quota}%"),
         "CPUWeight=25".into(),
@@ -105,7 +106,7 @@ fn launch(runtime: &Path, ready: &readiness::Readiness, memory: u64) -> io::Resu
             crate::resources::MutationBudget::high_memory_bytes(memory)
         ),
         "MemorySwapMax=0".into(),
-        format!("TasksMax={MAX_TASKS}"),
+        format!("TasksMax={}", profile::task_limit(jobs)),
         "OOMPolicy=kill".into(),
         "KillMode=control-group".into(),
         "TimeoutStopSec=1s".into(),

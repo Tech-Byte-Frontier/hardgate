@@ -5,7 +5,7 @@ mod cli;
 use cli::{Fixture, assert_status, json, run};
 use std::process::Command;
 
-const CONFIG: &str = "[gate]\npreset = 'custom'\n[orchestration]\ntest_cmd = 'sh probe.sh'\n";
+const CONFIG: &str = "[gate]\npreset = 'custom'\n[orchestration]\nrequire_isolation = true\ntest_cmd = 'sh probe.sh'\n";
 
 #[test]
 fn orchestration_and_detached_descendants_share_enforced_kernel_limits() {
@@ -19,15 +19,17 @@ detached=$(setsid sh -c 'cut -d: -f3 /proc/self/cgroup')
 test "$cg" = "$detached"
 set -- $(cat "/sys/fs/cgroup$cg/cpu.max" "/sys/fs/cgroup$cg/memory.max" "/sys/fs/cgroup$cg/memory.high" "/sys/fs/cgroup$cg/memory.swap.max" "/sys/fs/cgroup$cg/pids.max")
 test "$1" -gt 0
-test "$1" -le "$((2 * $2))"
-test "$3" -le 4294967296
+test "$1" -le "$((HARDGATE_WORKLOAD_JOBS * $2))"
+test "$3" -le 17179869184
 test "$4" -le "$(($3 / 5 * 4))"
 test "$5" -eq 0
-test "$6" -le 256
+task_limit=$((HARDGATE_WORKLOAD_JOBS * 128))
+if [ "$task_limit" -lt 256 ]; then task_limit=256; fi
+test "$6" -le "$task_limit"
 test "$CARGO_BUILD_JOBS" -ge 1
-test "$CARGO_BUILD_JOBS" -le 2
+test "$CARGO_BUILD_JOBS" -le "$HARDGATE_WORKLOAD_JOBS"
 test "$RAYON_NUM_THREADS" -ge 1
-test "$RAYON_NUM_THREADS" -le 2
+test "$RAYON_NUM_THREADS" -le "$HARDGATE_WORKLOAD_JOBS"
 "#,
     );
     let output = Command::new(env!("CARGO_BIN_EXE_hardgate"))
@@ -60,4 +62,75 @@ fn excessive_workers_never_start_the_project_command() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(json(&output)["status"], "error");
     assert!(!fixture.join("started").exists());
+}
+
+#[test]
+fn invalid_workload_allowances_fail_before_starting_tools() {
+    let fixture = Fixture::new("resource-runtime", "reject-workload-jobs", Some(CONFIG));
+    fixture.write("probe.sh", "touch started\n");
+    for count in ["0", "65", "invalid"] {
+        let output = run(
+            &fixture,
+            &[
+                "check",
+                "--checks",
+                "tests",
+                "--json",
+                "--workload-jobs",
+                count,
+            ],
+        );
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(json(&output)["status"], "error");
+        assert!(!fixture.join("started").exists());
+    }
+}
+
+#[test]
+fn explicit_workload_allowance_overrides_invalid_environment() {
+    let fixture = Fixture::new("resource-runtime", "workload-precedence", Some(CONFIG));
+    let output = Command::new(env!("CARGO_BIN_EXE_hardgate"))
+        .current_dir(&fixture.0)
+        .args([
+            "--workload-jobs",
+            "4",
+            "check",
+            "--checks",
+            "policy",
+            "--json",
+        ])
+        .env("HARDGATE_WORKLOAD_JOBS", "invalid")
+        .output()
+        .unwrap();
+    assert_status(&output, true, "explicit workload allowance");
+}
+
+#[test]
+fn workload_diagnostics_preserve_jsonl_progress() {
+    let fixture = Fixture::new("resource-runtime", "progress", Some(CONFIG));
+    fixture.write("probe.sh", "printf 'completed\\n'\n");
+    let output = run(
+        &fixture,
+        &[
+            "check",
+            "--checks",
+            "tests",
+            "--json",
+            "--progress",
+            "jsonl",
+        ],
+    );
+    assert_status(&output, true, "JSONL workload progress");
+    let events = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSONL event"))
+        .collect::<Vec<_>>();
+    assert!(events.iter().any(|event| {
+        event["stage"] == "workload_start"
+            && event["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("pids.max=")
+    }));
 }

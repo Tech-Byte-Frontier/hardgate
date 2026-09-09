@@ -2,6 +2,9 @@
 use std::io;
 use std::process::Command;
 
+pub(crate) mod profile;
+pub use profile::configure as configure_workload_jobs;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -36,6 +39,7 @@ pub(crate) fn error(message: impl std::fmt::Display) -> io::Error {
 
 /// Apply conservative child-tool defaults; OS containment remains authoritative.
 pub(crate) fn constrain_command(command: &mut Command) {
+    let jobs = profile::jobs();
     for key in [
         "CARGO_BUILD_JOBS",
         "RUST_TEST_THREADS",
@@ -50,13 +54,14 @@ pub(crate) fn constrain_command(command: &mut Command) {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|count| *count > 0)
-            .unwrap_or(2)
-            .min(2);
+            .unwrap_or(jobs)
+            .min(jobs);
         command.env(key, count.to_string());
     }
     command
         .env_remove("CARGO_MAKEFLAGS")
-        .env("MAKEFLAGS", "-j2");
+        .env("MAKEFLAGS", format!("-j{jobs}"))
+        .env(profile::JOBS_ENV, jobs.to_string());
 }
 
 /// A supervised exit, or admission of the current process into a verified boundary.

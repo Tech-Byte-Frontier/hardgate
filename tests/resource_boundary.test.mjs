@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { alignedMemoryLimits, boundary, bounded, eventCounters } from "../scripts/check-resource-boundary.mjs";
+import { alignedMemoryLimits, boundary, bounded, eventCounters, workloadJobs, taskLimit } from "../scripts/check-resource-boundary.mjs";
+assert.equal(workloadJobs(undefined, 32), 8);
+assert.equal(workloadJobs("8", 8), 8);
+assert.equal(workloadJobs("2", 32), 2);
+assert.equal(taskLimit(8), 1024);
+for (const invalid of ["0", "65", "-1", "invalid", ""]) assert.throws(() => workloadJobs(invalid, 32));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "hardgate-resource-script-"));
 try {
   const proc = path.join(root, "proc"), mount = path.join(root, "cgroup"), scope = path.join(mount, "parent/workload");
@@ -13,7 +18,7 @@ try {
   const controls = { "cpu.max": "200000 100000", "memory.max": "4294967296", "memory.high": "3435973836", "memory.swap.max": "0", "pids.max": "256" };
   const write = (values) => { for (const [name, value] of Object.entries(values)) fs.writeFileSync(path.join(scope, name), value); };
   write(controls);
-  assert.equal(boundary(proc, mount), scope);
+  assert.equal(boundary(proc, mount, 2), scope);
   // Reproduce kernel round-up with real page sizes and non-page-aligned host
   // memory. Both requested controls must remain below their policy ceilings.
   for (const ceiling of [4294967296, 2087566336, 2087566592]) {
@@ -24,14 +29,14 @@ try {
       assert.ok(actualMax <= ceiling);
       assert.ok(actualHigh <= Math.floor(actualMax / 5) * 4);
       write({ "memory.max": String(actualMax), "memory.high": String(actualHigh) });
-      assert.equal(bounded(scope, ceiling), true);
+      assert.equal(bounded(scope, ceiling, 2), true);
     }
   }
   write(controls);
   for (const [name, value] of [["cpu.max", "max 100000"], ["cpu.max", "300000 100000"], ["memory.max", "8589934592"], ["memory.high", "4294967296"], ["memory.swap.max", "1"], ["pids.max", "max"]]) {
     write({ [name]: value });
-    assert.equal(bounded(scope, 4294967296), false, name);
-    assert.throws(() => boundary(proc, mount), /no enforced/);
+    assert.equal(bounded(scope, 4294967296, 2), false, name);
+    assert.throws(() => boundary(proc, mount, 2), /no enforced/);
     write(controls);
   }
   fs.writeFileSync(path.join(scope, "memory.events"), "low 0\nhigh 12\nmax 0\noom 0\noom_kill 0\n");
@@ -41,6 +46,6 @@ try {
     assert.throws(() => eventCounters(scope, "memory.events"));
   }
   fs.writeFileSync(path.join(proc, "self/cgroup"), "0::/../outside\n");
-  assert.throws(() => boundary(proc, mount), /invalid cgroup/);
+  assert.throws(() => boundary(proc, mount, 2), /invalid cgroup/);
 } finally { fs.rmSync(root, { recursive: true, force: true }); }
 console.log("resource_boundary: enforced controls and complete event evidence verified");

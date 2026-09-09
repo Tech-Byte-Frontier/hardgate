@@ -22,6 +22,11 @@ fn run_parsed(cli: super::Cli) -> ExitCode {
     let json = command_json(&cli.command);
     let timing = cli.timing;
     let start = Instant::now();
+    if let Err(error) =
+        hardgate::runtime_resources::configure_workload_jobs(cli.workload_jobs.map(usize::from))
+    {
+        return finish(Err(error.into()), stage, json);
+    }
     let guard = match admission(&cli) {
         Ok(Some(hardgate::runtime_resources::Admission::Finished(code))) => {
             return ExitCode::from(code);

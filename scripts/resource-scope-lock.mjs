@@ -30,7 +30,9 @@ export async function acquireWorkloadSlot(fd, execute) {
   if (immediate === 0) return;
   if (immediate !== 75) throw new Error("could not acquire the per-user workload slot");
   console.error("hardgate: another workload owns the per-user resource slot; waiting (up to 30 minutes, Ctrl-C to cancel)");
+  const queued = performance.now();
   const waited = await execute("flock", ["--exclusive", "--timeout", "1800", "--conflict-exit-code", "75", "3"], { stdio });
   if (waited === 75) throw new Error("workload contention: the per-user resource slot remained busy for 30 minutes; no evaluation was started");
   if (waited !== 0) throw new Error("could not wait for the per-user workload slot");
+  console.error(`hardgate: workload slot acquired after ${((performance.now() - queued) / 1000).toFixed(1)}s queued; starting execution`);
 }

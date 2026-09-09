@@ -17,6 +17,8 @@ pub(crate) mod phase;
 mod progress;
 pub use progress::configure_jsonl as configure_progress_jsonl;
 #[cfg(target_os = "linux")]
+pub(crate) use progress::workload_status;
+#[cfg(target_os = "linux")]
 #[path = "process/write_guard.rs"]
 mod write_guard;
 

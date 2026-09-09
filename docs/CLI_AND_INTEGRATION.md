@@ -37,6 +37,16 @@ instrumentation is unstable. This producer-only toolchain is separate from the
 Rust 1.90 MSRV and the Rust 1.98.1 pin used for normal build/test gates.
 The helper includes executable `build.rs` in that LCOV report.
 
+## Workload capacity
+
+`--workload-jobs N` controls protected workload CPU capacity and the ceiling for
+child-tool workers, independently of `--threads` (static analysis). It accepts
+1–64 and overrides `HARDGATE_WORKLOAD_JOBS`; the automatic default uses half the
+available CPUs, up to eight. Task and memory caps scale with the allowance.
+See [workload resources](MUTATION_RESOURCES.md) for kernel limits, inherited
+containment, queue timing and mutation concurrency. Quality thresholds and
+required evidence are unchanged.
+
 ## `hardgate init`
 
 Write a commented configuration template without overwriting an existing file:
