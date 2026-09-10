@@ -37,6 +37,11 @@ include = [
   "/docs/VISION_AND_PARADIGM.md",
 ]
 
+# Evidence identity hashes large installed binaries even in debug/test builds.
+# Optimize the hash dependency without changing assertions or evidence scope.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 strip = true
 lto = true
