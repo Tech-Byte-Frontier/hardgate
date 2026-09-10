@@ -49,8 +49,8 @@ else (async () => {
     if (directory) destination = path.join(directory.split('=').slice(1).join('='), 'lcov.info');
     else {
       const config = (await import(require('node:url').pathToFileURL(args[1]).href)).default;
-      const expectedConcurrency = process.env.HARDGATE_FIXTURE_CONCURRENCY;
-      const validConcurrency = Number.isInteger(config.concurrency) && config.concurrency >= 1 && config.concurrency <= Number(process.env.HARDGATE_WORKLOAD_JOBS) && (!expectedConcurrency || config.concurrency === Number(expectedConcurrency));
+      const configuredConcurrency = process.env.HARDGATE_FIXTURE_CONCURRENCY;
+      const validConcurrency = Number.isInteger(config.concurrency) && config.concurrency >= 1 && config.concurrency <= Number(process.env.HARDGATE_WORKLOAD_JOBS) && (!configuredConcurrency || config.concurrency <= Number(configuredConcurrency));
       if (config.incremental || config.dryRunOnly || config.allowEmpty || config.inPlace || !validConcurrency) throw Error('unsafe Stryker configuration');
       destination = config.jsonReporter.fileName;
     }

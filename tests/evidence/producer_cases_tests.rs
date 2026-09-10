@@ -164,13 +164,14 @@ fn stryker_overrides_unsafe_runner_defaults_and_binds_reported_source() {
 }
 
 #[test]
-fn stryker_preserves_smaller_concurrency_and_rejects_invalid_concurrency() {
+fn stryker_respects_configured_concurrency_ceiling_and_rejects_zero() {
     let project = Project::new();
     if project.nested_mutation_is_rejected("stryker") {
         return;
     }
     let source = std::fs::read_to_string(project.0.join("index.js")).unwrap();
     let report = json!({"files":{"index.js":{"source":source,"mutants":[{"status":"Killed"}]}}});
+    // One stays exactly one; two may be capped to one by live memory headroom.
     for concurrency in [1, 2] {
         std::fs::write(
             project.0.join("stryker.config.json"),
