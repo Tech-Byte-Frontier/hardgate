@@ -82,7 +82,13 @@ fn linked_interpreters_bind_bytes_and_special_dependency_inputs_are_rejected() {
     let first = tree_digest(&tree).unwrap();
     fs::write(&interpreter, "second").unwrap();
     assert_ne!(first, tree_digest(&tree).unwrap());
-    rustix::fs::mkfifoat(rustix::fs::CWD, tree.join("fifo"), rustix::fs::Mode::RUSR).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(tree.join("fifo"))
+            .status()
+            .unwrap()
+            .success()
+    );
     assert!(tree_digest(&tree).is_err());
     fs::remove_dir_all(root).unwrap();
 }
