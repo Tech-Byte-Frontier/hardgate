@@ -22,6 +22,15 @@ fn run_parsed(cli: super::Cli) -> ExitCode {
     let json = command_json(&cli.command);
     let timing = cli.timing;
     let start = Instant::now();
+    if let Err(error) = hardgate::evidence::configure_scratch_root(cli.scratch_root.clone()) {
+        return finish(Err(error.into()), stage, json);
+    }
+    if let Err(error) = hardgate::runtime_resources::configure_memory(
+        cli.workload_memory_mib,
+        cli.mutation_worker_memory_mib,
+    ) {
+        return finish(Err(error.into()), stage, json);
+    }
     if let Err(error) =
         hardgate::runtime_resources::configure_workload_jobs(cli.workload_jobs.map(usize::from))
     {
@@ -62,6 +71,13 @@ fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources:
     let context =
         hardgate::config::ConfigContext::load(cli.config.as_deref()).map_err(io::Error::other)?;
     if matches!(cli.command, Commands::Evidence { .. })
+        || matches!(
+            cli.command,
+            Commands::Check {
+                evidence: Some(_),
+                ..
+            }
+        )
         || context.config.orchestration.require_isolation
         || hardgate::runtime_resources::isolated()
     {
@@ -77,7 +93,12 @@ fn admission(cli: &super::Cli) -> io::Result<Option<hardgate::runtime_resources:
 fn executes_tools(cli: &super::Cli) -> io::Result<bool> {
     match &cli.command {
         Commands::Fmt { .. } | Commands::Evidence { .. } => Ok(true),
-        Commands::Check { checks, .. } => {
+        Commands::Check {
+            checks, evidence, ..
+        } => {
+            if evidence.is_some() {
+                return Ok(true);
+            }
             if checks.is_empty()
                 || checks
                     .iter()

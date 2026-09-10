@@ -163,8 +163,8 @@ fn failures_remain_visible_with_no_matches_and_zero_limit() {
 fn unsupported_analysis_names_every_file_without_inventing_lines() {
     let f = Fixture::new("triage", "unsupported", Some("[gate]\npreset='custom'\n"));
     for (path, text) in [
-        ("one.py", "pass\n"),
-        ("nested/two.py", "pass\n"),
+        ("one.go", "pass\n"),
+        ("nested/two.go", "pass\n"),
         ("settings.yaml", "name: app\n"),
         ("styles.css", "body { color: red; }\n"),
     ] {
@@ -189,7 +189,7 @@ fn unsupported_analysis_names_every_file_without_inventing_lines() {
             v["locations"][0]["file"].as_str().unwrap()
         })
         .collect();
-    assert_eq!(paths, ["one.py", "nested/two.py"].into_iter().collect());
+    assert_eq!(paths, ["one.go", "nested/two.go"].into_iter().collect());
     let human = stdout(&run(
         &f,
         &[
@@ -203,7 +203,7 @@ fn unsupported_analysis_names_every_file_without_inventing_lines() {
         ],
     ));
     assert!(
-        human.contains("one.py") && human.contains("nested/two.py"),
+        human.contains("one.go") && human.contains("nested/two.go"),
         "{human}"
     );
 }

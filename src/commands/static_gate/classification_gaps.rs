@@ -41,7 +41,7 @@ fn record_classification_gap(
         record_evidence_failure(report, true, EvidenceFailure {
             step: "unsupported-source",
             target: rel,
-            message: "Unsupported analysis request; only Rust and JavaScript/TypeScript are supported.".to_string(),
+            message: "Unsupported analysis request; Rust, Python and JavaScript/TypeScript are supported.".to_string(),
         });
         return;
     }

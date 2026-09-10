@@ -19,12 +19,21 @@ struct Cli {
     /// Explicit policy file; its directory is the configuration root
     #[arg(long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
-    /// Limit analysis workers (defaults to at most two)
+    /// Limit analysis workers (defaults to the available workload CPU allowance)
     #[arg(long, global = true, value_name = "N")]
     threads: Option<std::num::NonZeroUsize>,
-    /// Workload CPUs and worker ceiling (default: half available CPUs, up to 8; env HARDGATE_WORKLOAD_JOBS)
+    /// Workload CPUs and worker ceiling (default: half available CPUs, up to 64; env HARDGATE_WORKLOAD_JOBS)
     #[arg(long, global = true, value_name = "N")]
     workload_jobs: Option<std::num::NonZeroUsize>,
+    /// Workload memory ceiling in MiB (1024-65536, also capped at one quarter of host RAM)
+    #[arg(long, global = true, value_name = "MIB")]
+    workload_memory_mib: Option<u64>,
+    /// Estimated memory per mutation runner in MiB (1024-16384; default 2048)
+    #[arg(long, global = true, value_name = "MIB")]
+    mutation_worker_memory_mib: Option<u64>,
+    /// Managed workspace parent; defaults to HARDGATE_SCRATCH_ROOT, then TMPDIR
+    #[arg(long, global = true, value_name = "DIRECTORY")]
+    scratch_root: Option<PathBuf>,
     /// Terminal colors; auto respects TTY, NO_COLOR and CLICOLOR conventions
     #[arg(long, global = true, default_value = "auto")]
     color: clap::ColorChoice,
@@ -149,6 +158,9 @@ Saved-report --top ranks files; --max-diagnostics limits findings after filterin
         /// Stream check progress events to stderr
         #[arg(long, value_parser = ["jsonl"])]
         progress: Option<String>,
+        /// Produce configured evidence, reusing authenticated identical inputs or forcing cold runs
+        #[arg(long, value_enum)]
+        evidence: Option<hardgate::evidence::EvidenceMode>,
         /// Check only git-modified or staged files
         #[arg(short, long)]
         diff: bool,
@@ -225,13 +237,16 @@ Saved-report --top ranks files; --max-diagnostics limits findings after filterin
     Evidence {
         #[arg(value_enum)]
         producer: hardgate::evidence::Producer,
+        /// Named configuration from [evidence.producers.NAME]
+        #[arg(long)]
+        producer_config: Option<String>,
         /// Artifact name under .hardgate/evidence (default: coverage or mutation)
         #[arg(long)]
         name: Option<String>,
         /// Installed Rust toolchain; required for LLVM branch/doctest coverage
         #[arg(long)]
         toolchain: Option<String>,
-        /// Maximum wall-clock runtime for the producer
+        /// Execution time shared by the producer's version, baseline and report commands
         #[arg(long, default_value_t = 1200)]
         timeout_secs: u64,
         /// Explicit supported package/target/feature scope options after --
@@ -363,6 +378,7 @@ fn execute_resolved_command(
         Commands::Doctor { json } => commands::doctor::cmd_doctor(context, json),
         Commands::Evidence {
             producer,
+            producer_config,
             name,
             toolchain,
             timeout_secs,
@@ -370,6 +386,7 @@ fn execute_resolved_command(
         } => hardgate::evidence::produce(
             hardgate::evidence::EvidenceOptions {
                 producer,
+                producer_config,
                 name,
                 toolchain,
                 timeout_secs,
@@ -403,6 +420,7 @@ fn execute_check_command(
     let Commands::Check {
         output,
         progress,
+        evidence,
         diff,
         checks,
         engine,
@@ -432,6 +450,7 @@ fn execute_check_command(
             paths,
             output_file: opts.output_file,
             progress,
+            evidence,
         },
         context,
     )

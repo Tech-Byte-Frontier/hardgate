@@ -47,6 +47,11 @@ impl CommandOutcome {
 }
 
 fn incomplete_evidence(report: &GateReport) -> bool {
+    if report.mutation_violations.iter().any(|failure| {
+        crate::diagnostics::execution_observations::incomplete_mutation(&failure.metric)
+    }) {
+        return true;
+    }
     report
         .orchestration_violations
         .iter()

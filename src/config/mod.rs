@@ -1,4 +1,6 @@
 mod context;
+pub(crate) mod evidence;
+pub use evidence::{EvidenceConfig, MutationScope, ProducerConfig};
 mod merge;
 pub use context::ConfigContext;
 pub mod preset;
@@ -20,6 +22,8 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HardgateConfig {
+    #[serde(default)]
+    pub evidence: EvidenceConfig,
     #[serde(default)]
     pub gate: GateConfig,
     #[serde(default)]

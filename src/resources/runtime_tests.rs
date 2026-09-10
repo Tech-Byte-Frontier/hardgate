@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn worker_defaults_preserve_headroom_and_smaller_explicit_limits() {
+    assert_eq!(select_workers(None, None, 16).unwrap(), 16);
+    assert_eq!(select_workers(None, Some(4), 16).unwrap(), 4);
+    assert_eq!(select_workers(Some(8), Some(4), 16).unwrap(), 8);
     assert_eq!(select_workers(None, None, 2).unwrap(), 2);
     assert_eq!(select_workers(None, Some(64), 2).unwrap(), 2);
     assert_eq!(select_workers(None, Some(1), 2).unwrap(), 1);

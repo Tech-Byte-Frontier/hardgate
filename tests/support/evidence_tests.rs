@@ -19,6 +19,13 @@ if (args.includes('--version')) {
   if (mode !== 'version-empty') console.log('fixture-specialist 1.0');
   process.exit(0);
 }
+if (args[0] === '-m' && args[1] === 'coverage') {
+  if (args[2] === 'run') process.exit(mode === 'baseline-fail' ? 1 : 0);
+  const destination = args[args.indexOf('-o') + 1];
+  const report = args[2] === 'json' ? process.env.HARDGATE_FIXTURE_PYTHON_JSON : process.env.HARDGATE_FIXTURE_REPORT;
+  fs.writeFileSync(destination, report.replaceAll('FIXTURE_ROOT', process.cwd()));
+  process.exit(0);
+}
 if (args.includes('clippy')) {
   const prefix = args.slice(0, args.includes('--') ? args.indexOf('--') : undefined);
   if (!prefix.includes('--message-format=json') || prefix.includes('short') || prefix.includes('--message-format=human')) process.exit(9);
@@ -31,6 +38,7 @@ if (args.includes('--no-report') || (args.includes('test') && !args.includes('mu
 if (mode === 'timeout') setTimeout(() => {}, 10000);
 else (async () => {
   if (mode === 'missing') return;
+  if (mode === 'forge-authentication') fs.writeFileSync(process.env.HARDGATE_FIXTURE_AUTHENTICATION_TARGET, 'forged');
   let destination;
   if (args.includes('--output-path')) destination = args[args.indexOf('--output-path') + 1];
   else if (args.includes('--output')) {
@@ -41,8 +49,9 @@ else (async () => {
     if (directory) destination = path.join(directory.split('=').slice(1).join('='), 'lcov.info');
     else {
       const config = (await import(require('node:url').pathToFileURL(args[1]).href)).default;
-      const expectedConcurrency = Number(process.env.HARDGATE_FIXTURE_CONCURRENCY || process.env.HARDGATE_WORKLOAD_JOBS);
-      if (config.incremental || config.dryRunOnly || config.allowEmpty || config.inPlace || config.concurrency !== expectedConcurrency) throw Error('unsafe Stryker configuration');
+      const expectedConcurrency = process.env.HARDGATE_FIXTURE_CONCURRENCY;
+      const validConcurrency = Number.isInteger(config.concurrency) && config.concurrency >= 1 && config.concurrency <= Number(process.env.HARDGATE_WORKLOAD_JOBS) && (!expectedConcurrency || config.concurrency === Number(expectedConcurrency));
+      if (config.incremental || config.dryRunOnly || config.allowEmpty || config.inPlace || !validConcurrency) throw Error('unsafe Stryker configuration');
       destination = config.jsonReporter.fileName;
     }
   }
@@ -164,7 +173,20 @@ impl Project {
             .output()
             .unwrap();
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["summary"]["analysis_blockers"], 0, "{report}");
+        assert_eq!(
+            report["summary"]["analysis_blockers"],
+            u64::from(kind == "mutation"),
+            "{report}"
+        );
+        if kind == "mutation" {
+            assert!(
+                report["orchestration_violations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|v| v["step"] == "mutation-scope")
+            );
+        }
         report
     }
 

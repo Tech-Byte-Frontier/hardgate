@@ -127,3 +127,5 @@ impl CoverageScorer {
         self.evaluate_diff_coverage_strict_impl(coverage_map, changed_lines, root)
     }
 }
+#[path = "coverage/applicability.rs"]
+pub(crate) mod applicability;

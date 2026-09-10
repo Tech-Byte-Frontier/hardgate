@@ -26,14 +26,37 @@ if [ -z "${HARDGATE_MUTATION_REPORT:-}" ]; then
     --timeout 300
   HARDGATE_MUTATION_REPORT=.hardgate/evidence/mutation.json
 fi
-HARDGATE_BINARY="$BINARY" scripts/coverage.sh
+if [ -z "${HARDGATE_COVERAGE_REPORT:-}" ]; then
+  HARDGATE_BINARY="$BINARY" scripts/coverage.sh
+  HARDGATE_COVERAGE_REPORT=.hardgate/evidence/coverage.lcov
+fi
 "$BINARY" check --format agent
 
 # Rust producer evidence covers Rust source/build scripts. The complete check
 # above includes repository policy and configured tools. The offline matrix
 # below verifies CLI policy/partial/failure contracts; npm archive installation
 # and real specialist consumer trials are separate acceptance checks.
+sample_status=0
 "$BINARY" check --checks policy \
   --mutation-report "$HARDGATE_MUTATION_REPORT" \
-  --coverage-report .hardgate/evidence/coverage.lcov --format agent src build.rs
+  --coverage-report "$HARDGATE_COVERAGE_REPORT" --format agent \
+  --report-json .hardgate/evidence/self-gate-sample-check.json src build.rs || sample_status=$?
+# A real native sample is useful release evidence, but cannot certify exhaustive
+# mutation scope. Require that exact incomplete result and no other gate failures.
+test "$sample_status" = 2
+node --input-type=module - <<'JS'
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const report = JSON.parse(fs.readFileSync('.hardgate/evidence/self-gate-sample-check.json', 'utf8'));
+assert.equal(report.status, 'incomplete');
+assert.equal(report.accepted, false);
+assert.equal(report.summary.analysis_blockers, 1);
+assert.equal(report.summary.code_findings, 0);
+assert.equal(report.orchestration_violations.length, 1);
+assert.equal(report.orchestration_violations[0].step, 'mutation-scope');
+assert.match(report.orchestration_violations[0].output, /unnamed mutation evidence is a sample/);
+assert.equal(report.execution.engines.find(engine => engine.id === 'coverage').state, 'completed');
+assert.equal(report.execution.engines.find(engine => engine.id === 'mutation_report').state, 'incomplete');
+console.log('Verified real coverage and native mutation sample; exhaustive mutation acceptance remains incomplete.');
+JS
 HARDGATE_BINARY="$BINARY" node scripts/check-consumer-matrix.mjs

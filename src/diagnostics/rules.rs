@@ -356,6 +356,7 @@ const ORCHESTRATION_IDS: &str = concat!(
     "classify-source\0HG-ORCHESTRATION-CLASSIFY-SOURCE\0",
     "unsupported-source\0HG-ORCHESTRATION-UNSUPPORTED-SOURCE\0",
     "mutation-report\0HG-ORCHESTRATION-MUTATION-REPORT\0",
+    "mutation-scope\0HG-ORCHESTRATION-MUTATION-SCOPE\0",
     "legacy-ratchet\0HG-ORCHESTRATION-LEGACY-RATCHET\0",
 );
 

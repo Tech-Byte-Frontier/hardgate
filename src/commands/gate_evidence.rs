@@ -46,7 +46,7 @@ pub(crate) fn check_scope_advisory(_config: &HardgateConfig, opts: &CheckOptions
     .map(|kind| format!("{kind:?}").to_ascii_lowercase())
     .collect::<Vec<_>>();
     if omitted.is_empty() {
-        "All configured acceptance requirements were requested in the selected path scope; consult engine states for completion. Mutation reports describe the recorded specialist sample.".into()
+        "All configured acceptance requirements were requested in the selected path scope; consult engine states for completion. Mutation acceptance requires complete configured producer scope; samples remain incomplete.".into()
     } else {
         format!(
             "Partial check: omitted {}. This result does not establish complete project acceptance; run `hardgate check` for all requirements.",

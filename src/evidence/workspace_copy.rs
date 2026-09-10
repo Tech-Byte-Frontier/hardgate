@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -16,39 +17,39 @@ pub(super) fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         let mut entries =
             fs::read_dir(source.join(&relative))?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            crate::resources::check_pressure()?;
-            let path = relative.join(entry.file_name());
-            if super::super::snapshot::omitted(&path, false) {
-                continue;
-            }
-            copy_entry(source, destination, &path, &mut directories).with_context(|| {
-                format!(
-                    "failed to snapshot `{}` for isolated evidence",
-                    path.display()
-                )
-            })?;
-        }
+        let children = entries
+            .par_iter()
+            .map(|entry| -> Result<Option<PathBuf>> {
+                crate::resources::check_pressure()?;
+                let path = relative.join(entry.file_name());
+                if super::super::snapshot::omitted(&path, false) {
+                    return Ok(None);
+                }
+                copy_entry(source, destination, &path).with_context(|| {
+                    format!(
+                        "failed to snapshot `{}` for isolated evidence",
+                        path.display()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        directories.extend(children.into_iter().flatten());
     }
     Ok(())
 }
 
-fn copy_entry(
-    source: &Path,
-    destination: &Path,
-    relative: &Path,
-    directories: &mut Vec<PathBuf>,
-) -> Result<()> {
+fn copy_entry(source: &Path, destination: &Path, relative: &Path) -> Result<Option<PathBuf>> {
     crate::cancellation::check()?;
     let origin = source.join(relative);
     let copied = destination.join(relative);
     let metadata = fs::symlink_metadata(&origin)?;
     if metadata.is_symlink() {
-        return copy_link(source, destination, relative);
+        copy_link(source, destination, relative)?;
+        return Ok(None);
     }
     if metadata.is_dir() {
         fs::create_dir(&copied)?;
-        directories.push(relative.to_path_buf());
+        return Ok(Some(relative.to_path_buf()));
     } else if metadata.is_file() {
         copy_file(&origin, &copied, &metadata.permissions())?;
         verify_copy(&origin, &copied, &metadata)?;
@@ -58,7 +59,7 @@ fn copy_entry(
             origin.display()
         );
     }
-    Ok(())
+    Ok(None)
 }
 
 fn copy_file(origin: &Path, copied: &Path, permissions: &fs::Permissions) -> Result<()> {
@@ -69,7 +70,7 @@ fn copy_file(origin: &Path, copied: &Path, permissions: &fs::Permissions) -> Res
             .truncate(true)
             .write(true)
             .open(copied)?;
-        let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+        let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
         loop {
             crate::cancellation::check()?;
             crate::resources::check_pressure()?;
@@ -112,8 +113,8 @@ fn files_match(origin: &Path, copied: &Path, before: &fs::Metadata) -> Result<bo
         return Ok(false);
     }
 
-    let mut origin_buffer = [0_u8; COPY_BUFFER_SIZE];
-    let mut copied_buffer = [0_u8; COPY_BUFFER_SIZE];
+    let mut origin_buffer = vec![0_u8; COPY_BUFFER_SIZE];
+    let mut copied_buffer = vec![0_u8; COPY_BUFFER_SIZE];
     let mut remaining = expected_size;
     while remaining > 0 {
         crate::cancellation::check()?;

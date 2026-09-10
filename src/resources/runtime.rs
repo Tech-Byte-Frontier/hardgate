@@ -4,6 +4,7 @@ use std::process::Command;
 
 pub(crate) mod profile;
 pub use profile::configure as configure_workload_jobs;
+pub use profile::configure_memory;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -12,7 +13,7 @@ mod linux;
 pub fn worker_limit(requested: Option<usize>) -> io::Result<usize> {
     let maximum = std::thread::available_parallelism()
         .map_or(1, usize::from)
-        .min(2);
+        .min(profile::jobs());
     let inherited = std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|value| value.parse().ok());
@@ -62,6 +63,13 @@ pub(crate) fn constrain_command(command: &mut Command) {
         .env_remove("CARGO_MAKEFLAGS")
         .env("MAKEFLAGS", format!("-j{jobs}"))
         .env(profile::JOBS_ENV, jobs.to_string());
+    if let Some(mib) = profile::requested_memory_mib() {
+        command.env(profile::MEMORY_ENV, mib.to_string());
+    }
+    command.env(
+        profile::WORKER_MEMORY_ENV,
+        profile::worker_memory_mib().to_string(),
+    );
 }
 
 /// A supervised exit, or admission of the current process into a verified boundary.

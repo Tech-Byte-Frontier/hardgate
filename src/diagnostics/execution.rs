@@ -163,7 +163,7 @@ pub(crate) fn evidence_engine(step: &str) -> EngineId {
         "coverage-report" | "coverage-diff" | "coverage-source-classification" => {
             EngineId::Coverage
         }
-        "mutation-report" => EngineId::MutationReport,
+        "mutation-report" | "mutation-scope" => EngineId::MutationReport,
         "generated-freshness" => EngineId::GeneratedFreshness,
         "legacy-ratchet" => EngineId::LegacyRatchet,
         _ => command_engine(step),

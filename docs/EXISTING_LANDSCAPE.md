@@ -55,7 +55,7 @@ A project can use all of these tools and still have an ambiguous acceptance rule
 
 ## Current boundaries
 
-Hardgate parses Rust, JavaScript, TypeScript/TSX with
+Hardgate parses Rust, Python, JavaScript, TypeScript/TSX with
 Tree-sitter; inventories additional text/data formats; reads LCOV; evaluates
 recognized mutation JSON reports; and speaks MCP over stdio. It does not claim
 global module resolution, compiler/type analysis, a broader parser matrix,

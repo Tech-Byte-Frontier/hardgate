@@ -16,6 +16,7 @@ mod mutation;
 pub(crate) mod phase;
 mod progress;
 pub use progress::configure_jsonl as configure_progress_jsonl;
+pub(crate) use progress::diagnostic;
 #[cfg(target_os = "linux")]
 pub(crate) use progress::workload_status;
 #[cfg(target_os = "linux")]
@@ -83,6 +84,7 @@ pub(crate) fn run_command_with_roots(
     timeout: Duration,
     operation: &str,
 ) -> ProcessOutcome {
+    let _command = phase::command(tokens);
     if let Err(error) = crate::cancellation::install() {
         return ProcessOutcome::Failed {
             message: error.to_string(),

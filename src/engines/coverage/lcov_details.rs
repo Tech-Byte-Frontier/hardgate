@@ -16,6 +16,11 @@ pub(crate) struct DetailValidation<'a> {
 }
 
 impl RecordDetails {
+    pub(crate) fn has_function_projection(&self, coverage: &super::FileCoverage) -> bool {
+        self.functions.declarations.len() > coverage.functions_found
+            && self.production_functions(coverage).is_ok()
+    }
+
     pub(crate) fn retain_production(
         &self,
         coverage: &mut super::FileCoverage,

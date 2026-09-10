@@ -2,7 +2,16 @@ use super::*;
 
 #[test]
 fn automatic_jobs_leave_cpu_headroom_and_cap_large_hosts() {
-    for (cpus, expected) in [(1, 1), (2, 1), (4, 2), (8, 4), (16, 8), (32, 8), (128, 8)] {
+    for (cpus, expected) in [
+        (1, 1),
+        (2, 1),
+        (4, 2),
+        (8, 4),
+        (16, 8),
+        (32, 16),
+        (128, 64),
+        (256, 64),
+    ] {
         assert_eq!(select(None, None, cpus).unwrap(), expected);
     }
 }

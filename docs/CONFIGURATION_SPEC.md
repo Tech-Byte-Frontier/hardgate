@@ -86,14 +86,14 @@ Built-in role behavior:
 | `vendor` | Pruned dependency/build output |
 | `unknown` | No role-specific engine input; fails when `enforce_classified_sources` is enabled |
 
-Tree-sitter targets are `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
+Tree-sitter targets are `.py`, `.rs`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`. Inventory-only formats are `.css`, `.mdx`, `.sql`, `.json`, `.jsonc`, `.graphql`, `.gql`, `.snap`, `.toml`, `.yaml`, and `.yml`.
 
-Rust and JavaScript/TypeScript are the only supported analysis ecosystems.
-Python/Go parsers and tool adapters are removed. Their source files are retained
-only as unsupported-input failures, so required analysis cannot silently pass.
-Remove obsolete `budgets.files.max_lines.py` and `.go` settings; loading them
-fails explicitly. Configuration, documentation, assets and generated-file
-inventory do not imply additional ecosystem support.
+Rust, Python, and JavaScript/TypeScript have validated AST analysis. Python
+coverage uses pytest with coverage.py; configure Python format/lint commands
+explicitly. Python mutation has no integrated producer, so missing mutation scope
+remains incomplete. Go source remains an unsupported-input failure; obsolete
+`budgets.files.max_lines.go` settings are rejected. Python file budgets may use
+`budgets.files.max_lines.py`. Inventory does not imply execution evidence support.
 
 
 Inventory-only does not mean silently accepted. A file that remains in the
@@ -238,7 +238,7 @@ max_nesting_depth = 4
 File limits use raw bytes and physical lines. Function limits come from Tree-sitter metrics for supported parser targets. `[budgets.files.exclusions].paths` skips only byte/line checks and emits an advisory; it does not suppress anti-gaming, invariants, parsing, clones, role classification, or generated freshness.
 
 The unvalidated cognitive-complexity scorer is removed entirely. A future
-replacement must be validated for Rust and JavaScript/TypeScript.
+replacement must be validated for every supported analysis language.
 
 ## Anti-gaming checks
 
@@ -362,7 +362,7 @@ min_branch_percent = 90.0
 critical_paths = ["src/core.ts"]
 ```
 
-Only LCOV is parsed. Full checks evaluate global line/function/branch floors, critical paths, and missing source records. Source-role Rust files with no parsed executable functions (for example, declaration-only module files) do not require an LCOV source record; every Rust source with a parsed function and every non-Rust Source file remains required. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check` resolves the report as follows: an explicit CLI path takes precedence over `coverage.report`; it does not auto-discover conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
+Only LCOV is parsed. Full checks evaluate global line/function/branch floors, critical paths, and missing source records. Source-role Rust files with no parsed executable functions (for example, declaration-only module files) do not require an LCOV source record; CSS remains subject to static policy but has no execution coverage requirement. Proven erased-only TypeScript declarations also need no execution record; runtime TS/JS, Python, unknown source, unreadable input and parser failures remain required. `check --diff` filters Git changes to actual changed executable lines in AST-supported source-role files and reports uncovered lines or missing file records. `check` resolves the report as follows: an explicit CLI path takes precedence over `coverage.report`; named coverage producers otherwise supply the aggregate report set before `coverage.report`; it does not auto-discover conventional report filenames. A missing path, empty, unreadable, or malformed report is blocking whenever coverage is enabled, regardless of `gate.strict`.
 
 When filtering inline Rust tests, overlapping LLVM line summaries are scored
 conservatively: unassigned summary observations remain in the denominator and
@@ -397,6 +397,45 @@ Native execution and `hardgate mutate` were removed in 0.6.0. The old
 `mutation.test_cmd`, `mutation.timeout_secs` and `mutation.max_mutants` settings
 are rejected. Configure execution in cargo-mutants or Stryker; retain
 `mutation.enabled`, `min_score` and `reports` for required evidence.
+
+## Named evidence producers
+
+```toml
+[evidence.producers.frontend]
+producer = "vitest"
+config = "vitest.config.ts"
+sources = ["src/**/*.ts", "src/**/*.tsx"]
+scope = "exhaustive"
+timeout_secs = 1200
+
+[evidence.producers.backend]
+producer = "stryker"
+config = "stryker.backend.config.json"
+sources = ["gateway/**/*.ts"]
+scope = "exhaustive"
+timeout_secs = 1200
+```
+
+These examples describe partitions, not a complete repository evidence contract.
+Each enabled evidence kind must cover every applicable source with disjoint reports;
+missing producers, missing files, overlaps and changed configuration block acceptance.
+Names use letters, digits, `_` and `-`. `sources` requires positive repository-relative
+globs; negation and traversal are rejected. `config` must be a bound repository input.
+Producer kinds are `vitest`, `stryker`, `pytest`, `cargo-llvm-cov`, and `cargo-mutants`.
+`toolchain` selects an installed Rust toolchain; `args` accepts the same restricted
+producer arguments as the CLI. Pytest arguments are test paths, with options supplied
+through its named config. Source globs must select languages supported by that producer.
+
+Reports use `.hardgate/evidence/NAME.lcov` or `.json`. A kind's named producers replace
+its legacy configured report list; an explicit CLI report still takes precedence and
+must satisfy the configured partition contract. `scope` defaults to `exhaustive`;
+`sample` explicitly records partial evidence and blocks exhaustive acceptance. Unnamed
+mutation evidence is always a sample. An exhaustive Stryker partition requires native
+source and complete mutant-plan evidence from StrykerJS 10. Zero-mutant source files
+cannot simply disappear from the expected inventory.
+
+Run configured producers serially with `check --evidence reuse|cold`; plain `check`
+only verifies existing evidence. These options do not change acceptance thresholds.
 
 ## Orchestration
 

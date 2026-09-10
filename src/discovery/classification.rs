@@ -169,12 +169,14 @@ impl PreparedClassifier {
 }
 
 /// Extensions with a Tree-sitter parser in Hardgate.
-pub const AST_EXTENSIONS: &[&str] = &["rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"];
+pub const AST_EXTENSIONS: &[&str] = &[
+    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py",
+];
 
 /// Text formats intentionally inventoried even when no AST engine supports
 /// them. This prevents Markdown/SQL/data files from disappearing silently.
 pub const INVENTORY_EXTENSIONS: &[&str] = &[
-    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "css", "mdx", "sql", "json",
+    "rs", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "css", "mdx", "sql", "json",
     "jsonc", "graphql", "gql", "snap", "toml", "yaml", "yml", "lock", "lockb",
 ];
 
@@ -198,7 +200,7 @@ pub fn is_retired_source(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .is_some_and(|ext| {
-            ["py", "go"]
+            ["go"]
                 .iter()
                 .any(|removed| ext.eq_ignore_ascii_case(removed))
         })

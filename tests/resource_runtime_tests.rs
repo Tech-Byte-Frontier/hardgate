@@ -8,6 +8,21 @@ use std::process::Command;
 const CONFIG: &str = "[gate]\npreset = 'custom'\n[orchestration]\nrequire_isolation = true\ntest_cmd = 'sh probe.sh'\n";
 
 #[test]
+fn empty_inherited_scratch_root_is_rejected_before_starting_tools() {
+    let fixture = Fixture::new("resource-runtime", "empty-scratch", Some(CONFIG));
+    fixture.write("probe.sh", "touch started\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_hardgate"))
+        .current_dir(&fixture.0)
+        .env("HARDGATE_SCRATCH_ROOT", "")
+        .args(["check", "--checks", "tests", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("scratch root must not be empty"));
+    assert!(!fixture.join("started").exists());
+}
+
+#[test]
 fn orchestration_and_detached_descendants_share_enforced_kernel_limits() {
     let fixture = Fixture::new("resource-runtime", "inherit", Some(CONFIG));
     fixture.write("src/lib.rs", "pub fn answer() -> u32 { 42 }\n");
@@ -57,7 +72,7 @@ fn excessive_workers_never_start_the_project_command() {
     fixture.write("probe.sh", "touch started\n");
     let output = run(
         &fixture,
-        &["check", "--checks", "tests", "--json", "--threads", "64"],
+        &["check", "--checks", "tests", "--json", "--threads", "65"],
     );
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(json(&output)["status"], "error");
@@ -133,4 +148,24 @@ fn workload_diagnostics_preserve_jsonl_progress() {
                 .unwrap_or("")
                 .contains("pids.max=")
     }));
+}
+
+#[test]
+fn invalid_memory_and_worker_estimates_never_start_project_tools() {
+    let fixture = Fixture::new("resource-runtime", "reject-memory", Some(CONFIG));
+    fixture.write("probe.sh", "touch started\n");
+    for (flag, value) in [
+        ("--workload-memory-mib", "0"),
+        ("--workload-memory-mib", "65537"),
+        ("--mutation-worker-memory-mib", "1023"),
+        ("--mutation-worker-memory-mib", "16385"),
+    ] {
+        let output = run(
+            &fixture,
+            &["check", "--checks", "tests", "--json", flag, value],
+        );
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(json(&output)["status"], "error");
+        assert!(!fixture.join("started").exists());
+    }
 }

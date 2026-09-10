@@ -42,7 +42,7 @@ The helper includes executable `build.rs` in that LCOV report.
 `--workload-jobs N` controls protected workload CPU capacity and the ceiling for
 child-tool workers, independently of `--threads` (static analysis). It accepts
 1–64 and overrides `HARDGATE_WORKLOAD_JOBS`; the automatic default uses half the
-available CPUs, up to eight. Task and memory caps scale with the allowance.
+available CPUs, up to 64. Task and memory caps scale with the allowance.
 See [workload resources](MUTATION_RESOURCES.md) for kernel limits, inherited
 containment, queue timing and mutation concurrency. Quality thresholds and
 required evidence are unchanged.
@@ -158,20 +158,20 @@ hardgate check --checks format,lint
 hardgate check --mutation-report .hardgate/evidence/mutation.json
 ```
 
-Missing format/lint commands or executables are setup failures. Hardgate resolves commands using the same conservative project detection as `init`, preserving explicit commands and each formatter/linter choice independently. It does not install tools or generate evidence during `check`.
+Missing format/lint commands or executables are setup failures. Hardgate resolves commands using the same conservative project detection as `init`, preserving explicit commands and each formatter/linter choice independently. It does not install tools. Evidence generation during `check` requires explicit `--evidence reuse` or `--evidence cold` and named producers (below).
 
 Rust defaults cover workspace members with `cargo test --workspace --all-targets --locked`, plus a separate `cargo test --workspace --doc --locked`. Declare incompatible or no-default-feature compile checks in `orchestration.feature_checks`; Cargo feature combinations are not guessed. Clippy runs across workspace targets and receives JSON output flags. Individual rustc/Clippy findings retain rule, source location, package and target, separately from execution failures. Truncated or unfinished diagnostic streams cannot establish acceptance.
 
 ### Read-only execution
 
-Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary and JS cache output stays in the disposable copy. pnpm automatic dependency verification is disabled inside disposable runs: copied install metadata must not trigger an install or block an already installed verifier. Hardgate does not install dependencies. Missing tools and failed checks still fail, and Linux isolation keeps the original dependency tree unwritable when required. For older pnpm versions that mishandle this setting in nested scripts, configure a direct local verifier. Commands are parsed without a shell; use `sh -c 'first && second'` when shell operators are required. Original absolute source paths remain unwritable. Known cache records from Ruff, import-linter, pytest, ESLint and Python bytecode
+Check commands run sequentially in an independent input copy, sharing its disposable Cargo target. Linux Landlock ABI 3 or newer must be enabled; without it, external checks fail with setup guidance. Child writes are restricted to that copy, a disjoint Cargo cache, and `/dev/null`. Temporary output, XDG cache/state, and JS cache output stay in the disposable copy. pnpm automatic dependency verification is disabled inside disposable runs: copied install metadata must not trigger an install or block an already installed verifier. Hardgate does not install dependencies. Missing tools and failed checks still fail, and Linux isolation keeps the original dependency tree unwritable when required. For older pnpm versions that mishandle this setting in nested scripts, configure a direct local verifier. Commands are parsed without a shell; use `sh -c 'first && second'` when shell operators are required. Original absolute source paths remain unwritable. Known cache records from Ruff, import-linter, pytest, ESLint and Python bytecode
 may change in the disposable copy. Other files remain protected even when
 Git ignores them; explicit classification rules can protect cache-named inputs.
 Configured commands receive a disposable `UV_CACHE_DIR`, including when the
 caller has set an external uv cache path.
 Verified virtualenv interpreter links are copied as tool links bound to the
 runtime declared by `pyvenv.cfg`; arbitrary external source/data links still fail.
-Virtualenv contents remain copied and bound, without adding Python analysis.
+Virtualenv contents remain copied and bound. Python source has native AST analysis; its coverage producer is described below.
 
 Changes to copied source/test/config inputs fail the check; intentional fixes require `hardgate fmt` or direct tool invocation. The guard restricts file-content and directory-entry writes; it is not a general sandbox for arbitrary hostile programs or external services. Git administrative data is not copied, so commands requiring checkout metadata must report their unmet requirement. Receipts describe source freshness, not a hermetic environment.
 
@@ -355,7 +355,7 @@ line and 64 KiB of snippet text in total. Summary output omits diagnostic detail
 Stable [rule IDs](DIAGNOSTIC_RULES.md) identify findings independently of wording,
 paths and line movement.
 
-Analysis defaults to at most two workers, preserving a smaller Rayon setting.
+Analysis defaults to the workload CPU allowance, bounded by available CPUs and preserving a smaller Rayon setting.
 `--threads N` selects a smaller positive count within that ceiling; it cannot
 remove the OS resource boundary. Small source captures and AST batches run
 sequentially below eight files. `--timing` adds total elapsed time to stderr.
@@ -441,6 +441,7 @@ report paths before producing evidence; changing policy invalidates its receipt.
 ```sh
 hardgate evidence cargo-llvm-cov --toolchain nightly-2026-09-04
 hardgate evidence vitest
+hardgate evidence pytest -- tests
 hardgate evidence cargo-mutants -- --package my-crate --re 'my_function'
 hardgate evidence stryker
 ```
@@ -458,15 +459,74 @@ select explicit mutation samples. Default LLVM production runs all workspace tar
 steps, merging only those fresh profiles. JS scope comes from the project runner
 configuration. Producers are optional, preinstalled tools; no dependency installation
 occurs during generation. Validated producers: cargo-llvm-cov 0.9.0,
-cargo-mutants 27.1.0, Vitest/V8 5.0.0 and StrykerJS 10.0.0.
+cargo-mutants 27.1.0, Vitest/V8 5.0.0, StrykerJS 10.0.0, and pytest 9.0.2 with coverage.py 7.13.5. Python coverage requires native function regions in coverage JSON and normalizes only explicitly reported zero counters. No Python mutation producer is integrated; missing mutation coverage remains incomplete.
 
 Each producer runs in an independent input copy. Source/test/config bytes and
 inventory must match before and after execution; Stryker's reported original
 source must also match. Mutants must belong to configured source roles. Mutation
 samples remain samples: a score does not prove all project code was mutated.
-Receipts are local freshness records, not signatures or hermetic-build attestations;
-installed dependency caches are represented by manifests/lockfiles. Low-level
-report-scoring APIs remain separate from source-bound CLI acceptance.
+Version 2 receipts authenticate exact execution bytes against a private local registry
+under `$XDG_STATE_HOME/hardgate/executions-v2` (default `$HOME/.local/state`). The
+protected producer cannot write this registry. Old receipts, edited sidecars, moved
+report paths, and receipts revoked by a failed rerun cannot authenticate evidence.
+This is local execution authentication, not portable signing or a hermetic build.
+Low-level report-scoring APIs remain separate from source-bound CLI acceptance.
+
+### Named producers and conservative reuse
+
+Declare disjoint source partitions in `[evidence.producers.NAME]` (see the
+configuration specification), including a repository-local `config` when needed.
+
+```sh
+hardgate evidence stryker --producer-config backend
+hardgate check --evidence reuse --format agent
+hardgate check --evidence cold --format agent
+```
+
+`reuse` serially generates absent, stale or unauthenticated evidence, then evaluates
+the selected gate. `cold` reruns every enabled configured producer. Warm reuse binds
+source, tests, configuration, lockfiles, installed dependency bytes, runtime/toolchain,
+Hardgate binary, and hashed environment inputs. Environment values are not stored.
+A global Python environment has no reusable dependency binding and always runs cold.
+External tool overrides (for example `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`,
+`RUSTC_WRAPPER`, or `RUSTFLAGS`) also force cold execution because they can load
+inputs outside the bound installation.
+This reuses a completed report, not Stryker's incremental cache: native incremental
+mode stays disabled. An orchestration test is skipped only when its exact argument
+vector matches a successful authenticated prerequisite with identical runtime inputs.
+
+`evidence_runs` in full gate JSON records each configuration, status, duration, path,
+and failure or cold-execution reason. Named reports are aggregated only with complete,
+disjoint expected inventories. Unnamed mutation reports and `scope = "sample"` retain
+score diagnostics but block exhaustive verification. Exhaustive StrykerJS 10 evidence
+binds the native complete mutant plan and selected source inventory, including sources
+with zero eligible mutants.
+
+### Resource planning, progress, and retained jobs
+
+`--workload-memory-mib` (1024–65536) selects a ceiling independent of CPU jobs,
+subject to the host allowance. `--mutation-worker-memory-mib` (1024–16384; default
+2048) sets the per-runner estimate. Their environment equivalents are
+`HARDGATE_WORKLOAD_MEMORY_MIB` and `HARDGATE_MUTATION_WORKER_MEMORY_MIB`.
+Stryker workers fit measured headroom after the existing reserve and a 512 MiB
+coordinator allowance, and cannot exceed CPU jobs or a smaller project concurrency.
+The estimate is planning input; live pressure monitoring remains authoritative.
+
+Progress records identify the command and stage, elapsed and remaining budget,
+sampled workload RSS/peak, and host/cgroup memory. Stryker's tested/total counters are the native progress reporter's values, including
+producer-classified outcomes; they do not prove those mutants executed. The final
+report retains and blocks unexecuted outcomes.
+Unavailable memory samples remain null. Display limits group repetitive advisories
+while full JSON retains them.
+
+`--scratch-root` / `HARDGATE_SCRATCH_ROOT` selects a managed job parent; otherwise
+Hardgate honors `$TMPDIR`. Each private `job-hardgate-*` contains a held `.lock`,
+`lifecycle.json`, diagnostics, and `work/`. Successful runs publish and verify reports
+or check logs outside the copy, then promptly remove the job including copied
+dependencies and build caches. Failed, interrupted, publication-failed, or cleanup-failed
+jobs retain their exact paths and status without a usable successful receipt. Hardgate
+only removes its owned job after verifying directory and lock identity; it never
+sweeps other jobs. Cancellation during cleanup may retain only the remaining artifacts.
 
 The optional real ripgrep acceptance harness is
 `scripts/check-ripgrep-mutation.mjs --repo RIPGREP --binary HARDGATE --output FRESH_DIRECTORY`.

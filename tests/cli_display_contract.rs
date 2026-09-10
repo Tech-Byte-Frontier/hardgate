@@ -116,7 +116,7 @@ fn freshness_fixes_are_blocked_and_excerpts_retain_analyzed_bytes() {
             .iter()
             .any(|finding| finding["step"] == "generated-freshness")
     );
-    assert!(cli::stderr(&output).is_empty());
+    assert!(cli::stderr(&output).contains("workspace lifecycle=failed"));
 }
 
 #[test]

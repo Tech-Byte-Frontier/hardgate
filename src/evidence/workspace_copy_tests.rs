@@ -137,17 +137,21 @@ fn special_files_and_links_into_omitted_data_are_refused() {
     let fixture = CopyFixture::new(b"original");
     let destination = fixture.root.join("destination");
     fs::create_dir(&destination).unwrap();
-    let _socket = std::os::unix::net::UnixListener::bind(fixture.root.join("socket")).unwrap();
+    #[cfg(target_os = "linux")]
+    let directory = fs::File::open(&fixture.root).unwrap();
+    #[cfg(target_os = "linux")]
+    let address = PathBuf::from(format!(
+        "/proc/self/fd/{}/socket",
+        std::os::fd::AsRawFd::as_raw_fd(&directory)
+    ));
+    #[cfg(not(target_os = "linux"))]
+    let address = fixture.root.join("socket");
+    let _socket = std::os::unix::net::UnixListener::bind(address).unwrap();
     assert!(
-        copy_entry(
-            &fixture.root,
-            &destination,
-            Path::new("socket"),
-            &mut Vec::new()
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("special file")
+        copy_entry(&fixture.root, &destination, Path::new("socket"),)
+            .unwrap_err()
+            .to_string()
+            .contains("special file")
     );
     fs::create_dir(fixture.root.join("target")).unwrap();
     fs::write(fixture.root.join("target/artifact"), b"build output").unwrap();
@@ -162,4 +166,40 @@ fn special_files_and_links_into_omitted_data_are_refused() {
             .to_string()
             .contains("omitted")
     );
+}
+
+#[test]
+fn parallel_copy_preserves_all_bytes_and_keeps_writes_independent() {
+    let fixture = CopyFixture::new(b"original");
+    let source = fixture.root.join("source");
+    let copied = fixture.root.join("snapshot");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&copied).unwrap();
+    for index in 0..128 {
+        fs::write(
+            source.join(index.to_string()),
+            vec![index as u8; COPY_BUFFER_SIZE + 1],
+        )
+        .unwrap();
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .stack_size(256 * 1024)
+        .build()
+        .unwrap()
+        .install(|| copy_tree(&source, &copied))
+        .unwrap();
+    assert_eq!(fs::read_dir(&copied).unwrap().count(), 128);
+    for index in 0..128 {
+        let name = index.to_string();
+        assert_eq!(
+            fs::read(copied.join(&name)).unwrap(),
+            fs::read(source.join(&name)).unwrap()
+        );
+        fs::write(copied.join(&name), b"mutated").unwrap();
+        assert_eq!(
+            fs::metadata(source.join(name)).unwrap().len(),
+            (COPY_BUFFER_SIZE + 1) as u64
+        );
+    }
 }

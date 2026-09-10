@@ -64,78 +64,42 @@ fn evaluate_coverage_report(
     request: &mut CoverageVerification<'_>,
     scope: Option<CoverageScope<'_>>,
 ) {
-    let cov_path = request
+    let paths = request
         .cli_report
-        .as_deref()
-        .or(request.config.coverage.report.as_deref());
-    let Some(ref path_str) = cov_path else {
-        record_evidence_failure(
-            request.report,
-            true,
-            EvidenceFailure {
-                step: "coverage-report",
-                target: Path::new("<not-configured>"),
-                message: "Coverage is enabled, but no report path was provided.".to_string(),
-            },
-        );
-        return;
-    };
-    let resolved = scope.as_ref().map_or_else(
-        || PathBuf::from(path_str),
-        |scope| scope.root.join(path_str),
+        .as_ref()
+        .map(|path| vec![path.clone()])
+        .unwrap_or_else(|| {
+            crate::evidence::reports(request.config, crate::evidence::EvidenceKind::Coverage)
+        });
+    let target = paths.first().map_or_else(
+        || PathBuf::from("<not-configured>"),
+        |path| {
+            scope
+                .as_ref()
+                .map_or_else(|| PathBuf::from(path), |scope| scope.root.join(path))
+        },
     );
-    let p = resolved.as_path();
-    if !p.exists() {
-        record_evidence_failure(
-            request.report,
-            true,
-            EvidenceFailure {
-                step: "coverage-report",
-                target: Path::new(path_str),
-                message: "Required coverage report was not found.".to_string(),
-            },
-        );
-        return;
-    }
     let scorer = CoverageScorer::new(&request.config.coverage);
-    if let Some(ref scope) = scope
-        && let Err(error) = crate::evidence::verify(
-            scope.root,
-            p,
-            crate::evidence::EvidenceKind::Coverage,
-            request.config,
-        )
-    {
-        record_evidence_failure(
+    match coverage_reports::collect(
+        request.config,
+        &paths,
+        scope.as_ref().map(|scope| scope.root),
+    ) {
+        Ok(map) => append_coverage_violations(request, &scorer, &map, scope),
+        Err(error) => record_evidence_failure(
             request.report,
             true,
             EvidenceFailure {
                 step: "coverage-report",
-                target: p,
-                message: format!("Required coverage source identity is invalid: {error:#}"),
+                target: &target,
+                message: format!("Required coverage evidence is incomplete: {error:#}"),
             },
-        );
-        return;
-    }
-    let parsed = match scope.as_ref() {
-        Some(scope) => scorer.parse_lcov_for_project(p, scope.root, request.config),
-        None => scorer.parse_lcov(p),
-    };
-    match parsed {
-        Ok(cov_map) => append_coverage_violations(request, &scorer, &cov_map, scope),
-        Err(e) => {
-            record_evidence_failure(
-                request.report,
-                true,
-                EvidenceFailure {
-                    step: "coverage-report",
-                    target: Path::new(path_str),
-                    message: format!("Failed to parse required coverage report: {e:#}"),
-                },
-            );
-        }
+        ),
     }
 }
+
+#[path = "coverage_reports.rs"]
+mod coverage_reports;
 
 fn append_coverage_violations(
     request: &mut CoverageVerification<'_>,
@@ -207,9 +171,8 @@ pub(crate) struct SourceCoverageRequest<'a> {
 }
 
 pub(crate) fn source_files_for_coverage(request: SourceCoverageRequest<'_>) -> Vec<PathBuf> {
-    // Rust module/re-export files may be valid inventory sources without any
-    // executable mapping. Every non-Rust source remains required because its
-    // provider can expose executable lines without Hardgate function metrics.
+    // Rust module/re-export files may lack executable mappings. Other source
+    // stays required unless its language proves execution is not applicable.
     let executable_rust_files: BTreeSet<String> = request
         .functions
         .iter()
@@ -252,6 +215,10 @@ fn source_file_for_coverage(
 ) -> Option<PathBuf> {
     let path = classified.path.as_path();
     if classified.role != FileRole::Source {
+        return None;
+    }
+    let absolute = rust_scope.root.join(path);
+    if crate::engines::coverage::applicability::execution_not_applicable(&absolute) {
         return None;
     }
     if is_rust_source(path) {
@@ -323,9 +290,14 @@ fn evaluate_mutation_reports(
     if !config.mutation.enabled {
         return;
     }
-    let mut_reports = cli_report
-        .map(|r| vec![r])
-        .or_else(|| config.mutation.reports.clone());
+    let mut_reports = cli_report.map(|r| vec![r]).or_else(|| {
+        let named = crate::evidence::reports(config, crate::evidence::EvidenceKind::Mutation);
+        if named.is_empty() {
+            config.mutation.reports.clone()
+        } else {
+            Some(named)
+        }
+    });
 
     let Some(reports) = mut_reports else {
         record_evidence_failure(
@@ -352,8 +324,29 @@ fn evaluate_mutation_reports(
         );
         return;
     }
-    for path in reports {
-        evaluate_mutation_report(config, &path, report, &scope);
+    let mut individually_valid = true;
+    for path in &reports {
+        individually_valid =
+            evaluate_mutation_report(config, path, report, &scope) && individually_valid;
+    }
+    if scope.bind_source
+        && individually_valid
+        && let Err(error) = crate::evidence::verify_set(
+            scope.root,
+            &reports,
+            crate::evidence::EvidenceKind::Mutation,
+            config,
+        )
+    {
+        record_evidence_failure(
+            report,
+            true,
+            EvidenceFailure {
+                step: "mutation-scope",
+                target: scope.root,
+                message: format!("Required mutation evidence is incomplete: {error:#}"),
+            },
+        );
     }
 }
 
@@ -362,7 +355,7 @@ fn evaluate_mutation_report(
     path: &str,
     report: &mut GateReport,
     scope: &MutationScope<'_>,
-) {
+) -> bool {
     let resolved = scope.root.join(path);
     let result = validate_mutation_report(config, &resolved, scope);
     match result {
@@ -372,16 +365,20 @@ fn evaluate_mutation_report(
                 crate::diagnostics::execution::EngineState::Completed,
             );
             report.mutation_violations.extend(violations);
+            true
         }
-        Err(message) => record_evidence_failure(
-            report,
-            true,
-            EvidenceFailure {
-                step: "mutation-report",
-                target: &resolved,
-                message,
-            },
-        ),
+        Err(message) => {
+            record_evidence_failure(
+                report,
+                true,
+                EvidenceFailure {
+                    step: "mutation-report",
+                    target: &resolved,
+                    message,
+                },
+            );
+            false
+        }
     }
 }
 

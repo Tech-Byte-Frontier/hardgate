@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.0] - 2026-09-10
+
+- Add named coverage/mutation partitions and explicit `check --evidence reuse|cold` orchestration. Bind local reuse to authenticated execution, source/test/config inputs, installed dependencies, runtime, and hashed environment identity.
+- Require version 2 authenticated receipts; regenerate older evidence. Mutation samples now report incomplete exhaustive scope while retaining score findings. StrykerJS 10 exhaustive evidence binds native selected sources and the complete mutant plan, including zero-mutant files.
+- Keep CSS and proven erased-only TypeScript in static policy while marking execution coverage inapplicable. Add Python AST analysis and protected pytest/coverage.py production; Python mutation remains unsupported and incomplete.
+- Plan Stryker workers from measured memory headroom, bounded configurable memory ceilings, and per-runner estimates. Retain static mutants, reserves, pressure guards, and cold native execution.
+- Scale automatic CPU capacity to half the available CPUs (1–64) and analysis workers to that allowance. Copy independent snapshot files concurrently with bounded heap buffers and full byte/restoration verification.
+- Report command/stage timing, remaining budgets, tested mutant plans, sampled RSS/peak, and host/cgroup pressure. Group display advisories and retain full JSON diagnostics.
+- Manage locked jobs under the configured scratch root or TMPDIR. Publish and verify evidence/check logs before promptly removing successful copies and caches; preserve failed/interrupted jobs with exact lifecycle status and no successful receipt.
+
 ## [0.6.5] - 2026-09-08
 
 - Honor explicitly ignored inventory migrations without making AST completion unreachable; retain safety checks and an inventory advisory.

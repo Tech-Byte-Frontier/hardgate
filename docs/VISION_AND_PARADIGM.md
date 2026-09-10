@@ -32,7 +32,7 @@ Generated artifacts illustrate the boundary: they can be inventoried and exclude
 
 ### Structural budgets
 
-Physical byte/line ceilings make growth visible at the file boundary. Tree-sitter metrics provide cyclomatic complexity, parameter count, statement count, function lines, and nesting depth for Rust, JavaScript, TypeScript/TSX. Presets scale those values; explicit TOML keys override one value without requiring a copied preset.
+Physical byte/line ceilings make growth visible at the file boundary. Tree-sitter metrics provide cyclomatic complexity, parameter count, statement count, function lines, and nesting depth for Rust, Python, JavaScript, TypeScript/TSX. Presets scale those values; explicit TOML keys override one value without requiring a copied preset.
 
 ### Anti-gaming and architecture
 

@@ -22,6 +22,7 @@ proof that the source bytes are unchanged. Neither command rescans sources.
 | `status` | `passed`, `violations`, `incomplete`, `noop`, or `error` |
 | `exit_code` | 0 for pass/no-op, 1 for policy violations, 2 for inability to evaluate required evidence |
 | `execution` | Command, scope, effective config identity and engine records; null when no validated plan exists |
+| `evidence_runs` | Named producer attempts: kind, name, produced/reused/failed status, duration, report path and detail; empty without explicit evidence orchestration |
 | `summary` | Complete finding and scan counts, independent of display limits (gate reports) |
 | `diagnostics` | Stable rule IDs, messages, locations, remediation, and optional captured source excerpts (full gate reports) |
 
@@ -150,3 +151,25 @@ score does not satisfy execution completeness. Messages preserve the score
 verdict; remediation lists the mutant source locations and statuses.
 Agent output groups repeated advisories with counts and up to three example
 locations after blockers. Complete advisory arrays remain available in JSON.
+
+## Authenticated evidence and progress (0.7)
+
+Gate output remains schema version 1. Producer sidecars are a separate schema:
+version 2 binds the source root, producer commands/version, input snapshot, report
+hash, verified restoration, named partition, and reusable runtime identity when
+available. Sidecars require an exact matching protected local execution record;
+older or edited receipts cannot authenticate evidence.
+
+`summary.analysis_blockers` includes missing required coverage records and
+unexecuted/incomplete mutation outcomes, as well as orchestration/evidence failures.
+These entries are not counted as code findings. A passing sampled mutation score
+can coexist with `status: "incomplete"` and a `mutation-scope` blocker. Consumers
+must inspect both score findings and completeness.
+
+With `--progress jsonl`, stderr remains a JSON-lines stream, including lifecycle
+and producer diagnostics. Progress events include command, stage, elapsed/timeout/
+remaining milliseconds, optional workload RSS and sampled peak, host/cgroup memory,
+and optional native Stryker counters. Unavailable observations are null. The
+`mutation_counts_scope` identifies the native reporter; counters do not certify
+that all mutants executed. Full gate JSON retains producer failures and paths to
+preserved diagnostic workspaces.

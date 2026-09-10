@@ -120,6 +120,22 @@ fn lcov_parser_accepts_llvm22_projected_function_details() {
 }
 
 #[test]
+fn instantiated_line_summaries_keep_native_lower_hits_without_accepting_inflation() {
+    let config = detail_config(Some(1.0), None);
+    let body = "SF:src/lib.rs\nFN:1,first_u8\nFN:1,first_u16\nFNDA:1,first_u8\nFNDA:1,first_u16\nFNF:1\nFNH:1\nDA:1,1\nDA:2,1\nDA:3,1\nLF:3\nLH:2\nend_of_record\n";
+    let parsed = parse_valid_lcov(&config, body, "lcov-instantiated-lines");
+    let coverage = &parsed[&std::path::PathBuf::from("src/lib.rs")];
+    assert_eq!((coverage.lines_found, coverage.lines_hit), (3, 2));
+    for invalid in [
+        body.replace("DA:3,1", "DA:3,0").replace("LH:2", "LH:3"),
+        body.replace("FNF:1", "FNF:2"),
+        body.replace("FNH:1", "FNH:0"),
+    ] {
+        assert_invalid_lcov(&config, &invalid);
+    }
+}
+
+#[test]
 fn verify_coverage_reports_inner_lcov_error_chain() {
     let config = detail_config(None, None);
     let tmp = fs::tempdir("lcov-error-chain");

@@ -100,38 +100,38 @@ fn tool_checks(context: &ConfigContext) -> Vec<Check> {
 }
 
 fn evidence_checks(context: &ConfigContext, checks: &mut Vec<Check>) {
-    if context.config.coverage.enabled {
-        checks.push(evidence_check(
-            context,
+    for (enabled, name, kind) in [
+        (
+            context.config.coverage.enabled,
             "coverage",
-            context.config.coverage.report.as_deref(),
             EvidenceKind::Coverage,
-        ));
-    }
-    if context.config.mutation.enabled {
-        match context
-            .config
-            .mutation
-            .reports
-            .as_deref()
-            .filter(|reports| !reports.is_empty())
-        {
-            Some(reports) => {
-                for report in reports {
-                    checks.push(evidence_check(
-                        context,
-                        "mutation",
-                        Some(report),
-                        EvidenceKind::Mutation,
-                    ));
-                }
+        ),
+        (
+            context.config.mutation.enabled,
+            "mutation",
+            EvidenceKind::Mutation,
+        ),
+    ] {
+        if !enabled {
+            continue;
+        }
+        let reports = crate::evidence::reports(&context.config, kind);
+        if reports.is_empty() {
+            checks.push(evidence_check(context, name, None, kind));
+        } else {
+            for report in &reports {
+                checks.push(evidence_check(context, name, Some(report), kind));
             }
-            None => checks.push(evidence_check(
-                context,
-                "mutation",
-                None,
-                EvidenceKind::Mutation,
-            )),
+            let result =
+                crate::evidence::verify_set(&context.root, &reports, kind, &context.config);
+            checks.push(Check {
+                name: format!("{name} partition scope"),
+                ready: result.is_ok(),
+                detail: result.map_or_else(
+                    |error| format!("{error:#}"),
+                    |()| "complete source-bound partition set".into(),
+                ),
+            });
         }
     }
 }

@@ -66,7 +66,7 @@ not executable source.
 
 ### Safety and budgets
 
-File budgets measure raw bytes and physical lines. Function budgets use Tree-sitter metrics for Rust, JavaScript, TypeScript and TSX: cyclomatic complexity, parameters, statements, function lines, and nesting. Parse and read failures stay evidence failures; they are not converted to zero functions.
+File budgets measure raw bytes and physical lines. Function budgets use Tree-sitter metrics for Rust, Python, JavaScript, TypeScript and TSX: cyclomatic complexity, parameters, statements, function lines, and nesting. Parse and read failures stay evidence failures; they are not converted to zero functions.
 
 The anti-gaming scanner recognizes common suppression directives and configured forbidden tokens in safety-checked roles. There is no inline approval path.
 

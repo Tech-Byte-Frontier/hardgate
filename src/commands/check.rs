@@ -12,9 +12,10 @@ use super::verify::{
 };
 use crate::config::{ConfigContext, HardgateConfig};
 use crate::diagnostics::GateReport;
-use crate::engines::OrchestrationEngine;
+mod orchestration;
 use crate::git_evidence::{ReferenceEvidence, load_reference};
 use anyhow::Result;
+use orchestration::run_orchestration;
 pub(crate) use output::format_report_with_opts;
 pub use output::{
     Emission, emit_gate_report, output_report, output_report_with_opts, print_empty_discovery,
@@ -26,6 +27,7 @@ use std::time::Instant;
 /// CLI options for `hardgate check`, including output modes and path scoping.
 #[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
+    pub evidence: Option<crate::evidence::EvidenceMode>,
     pub format: Option<String>,
     pub diff: bool,
     pub checks: Vec<CheckKind>,
@@ -105,6 +107,12 @@ pub fn cmd_check_in(mut opts: CheckOptions, context: &ConfigContext) -> CommandR
     opts.mutation_report = context.input_report(opts.mutation_report);
     let resolved = super::check_selection::resolved_context(context, &opts)?;
     let context = &resolved;
+    anyhow::ensure!(
+        opts.evidence.is_none()
+            || context.config.coverage.enabled
+            || context.config.mutation.enabled,
+        "--evidence requires an enabled coverage or mutation engine"
+    );
     let plan = super::execution_plan::gate_plan(
         context,
         super::execution_plan::GateSelection {
@@ -127,6 +135,9 @@ fn execute_check(
 ) -> CommandResult {
     let ratchet_enabled = opts.selects(CheckKind::Policy) && context.config.legacy.ratchet;
     let start_time = Instant::now();
+    let evidence_runs = opts.evidence.map_or_else(Vec::new, |mode| {
+        crate::evidence::run_configured(context, mode)
+    });
     let root = context.root.as_path();
     let config = &context.config;
     let GateRun {
@@ -139,6 +150,7 @@ fn execute_check(
     } = run_static_phase(&opts, context, ratchet_enabled)?;
     super::gate_evidence::describe_execution(&plan, &mut report);
     report.execution = Some(plan);
+    record_producers(&mut report, evidence_runs, context);
     if empty && opts.selects(CheckKind::Policy) {
         report
             .advisories
@@ -195,6 +207,41 @@ fn execute_check(
     )
 }
 
+fn record_producers(
+    report: &mut GateReport,
+    evidence_runs: Vec<crate::evidence::EvidenceRun>,
+    context: &ConfigContext,
+) {
+    use crate::evidence::EvidenceKind;
+    for run in evidence_runs.iter().filter(|run| run.status == "failed") {
+        for (kind, enabled) in [
+            (EvidenceKind::Coverage, context.config.coverage.enabled),
+            (EvidenceKind::Mutation, context.config.mutation.enabled),
+        ] {
+            if !enabled || run.kind.is_some_and(|selected| selected != kind) {
+                continue;
+            }
+            super::evidence::record_evidence_failure(
+                report,
+                true,
+                super::evidence::EvidenceFailure {
+                    step: match kind {
+                        EvidenceKind::Coverage => "coverage-report",
+                        EvidenceKind::Mutation => "mutation-report",
+                    },
+                    target: &run.report,
+                    message: format!(
+                        "producer configuration `{}` failed: {}",
+                        run.name,
+                        run.detail.as_deref().unwrap_or("unknown execution failure")
+                    ),
+                },
+            );
+        }
+    }
+    report.evidence_runs = evidence_runs;
+}
+
 fn run_static_phase(
     opts: &CheckOptions,
     context: &ConfigContext,
@@ -241,7 +288,7 @@ fn run_verification_phase(
         "orchestration",
         phase.start_time.elapsed().as_millis(),
     );
-    run_orchestration(config, root, report, opts);
+    run_orchestration(phase.context, report, opts);
     if opts.selects(CheckKind::Policy) {
         emit_progress(progress, "coverage", phase.start_time.elapsed().as_millis());
         run_check_coverage(&phase.coverage, report)?;
@@ -263,79 +310,6 @@ fn emit_progress(progress: Option<&str>, stage: &str, elapsed_ms: u128) {
             std::io::stderr().lock(),
             "{{\"stage\":\"{stage}\",\"elapsed_ms\":{elapsed_ms}}}"
         );
-    }
-}
-
-fn run_orchestration(
-    config: &HardgateConfig,
-    root: &Path,
-    report: &mut GateReport,
-    options: &CheckOptions,
-) {
-    let engine = OrchestrationEngine::new(&config.orchestration);
-    let policy = &config.orchestration;
-    let groups = [
-        (
-            CheckKind::Format,
-            "format_check",
-            policy.format_check.iter().collect::<Vec<_>>(),
-            true,
-        ),
-        (CheckKind::Lint, "lint", policy.lint.iter().collect(), true),
-        (
-            CheckKind::Tests,
-            "test",
-            policy
-                .test_cmd
-                .iter()
-                .chain(&policy.additional_tests)
-                .collect(),
-            false,
-        ),
-        (
-            CheckKind::Typecheck,
-            "typecheck",
-            policy
-                .typecheck
-                .iter()
-                .chain(&policy.feature_checks)
-                .collect(),
-            false,
-        ),
-    ];
-    let mut steps = Vec::new();
-    for (kind, step, commands, required) in groups {
-        if !options.selects(kind) {
-            continue;
-        }
-        if required && commands.is_empty() {
-            super::evidence::record_evidence_failure(
-                report,
-                true,
-                super::evidence::EvidenceFailure {
-                    step,
-                    target: root,
-                    message: format!(
-                        "{} Required {step} command could not be resolved. Run `hardgate init --preview` for tool-specific setup, or configure [orchestration].",
-                        if step == "format_check" {
-                            "No formatter configured or detected; formatting was not evaluated."
-                        } else {
-                            "No linter configured or detected; lint was not evaluated."
-                        }
-                    ),
-                },
-            );
-        }
-        for command in commands {
-            steps.push(crate::engines::orchestration::OrchestrationStep {
-                step,
-                command,
-                recommendation: "Resolve the reported project check before acceptance.",
-            });
-        }
-    }
-    for result in engine.run_sequence(&steps, root, config) {
-        super::specialist::record(report, result, root);
     }
 }
 

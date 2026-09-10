@@ -12,5 +12,11 @@ mod boundary_cases_tests;
 mod diagnostic_cases_tests;
 #[path = "evidence/lifecycle_cases_tests.rs"]
 mod lifecycle_cases_tests;
+#[path = "evidence/partition_cases_tests.rs"]
+mod partition_cases_tests;
 #[path = "evidence/producer_cases_tests.rs"]
 mod producer_cases_tests;
+#[path = "evidence/reuse_cases_tests.rs"]
+mod reuse_cases_tests;
+#[path = "evidence/workspace_lifecycle_tests.rs"]
+mod workspace_lifecycle_tests;

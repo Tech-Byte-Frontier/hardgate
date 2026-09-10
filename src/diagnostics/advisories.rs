@@ -6,8 +6,9 @@ impl GateReport {
     pub(super) fn render_grouped_advisories(&self, out: &mut String) {
         let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for advisory in &self.advisories {
-            let (key, location) =
-                inventory_advisory(advisory).unwrap_or((advisory.clone(), String::new()));
+            let (key, location) = inventory_advisory(advisory)
+                .or_else(|| clone_advisory(advisory))
+                .unwrap_or((advisory.clone(), String::new()));
             groups.entry(key).or_default().push(location);
         }
         for finding in self
@@ -25,7 +26,9 @@ impl GateReport {
                     finding.column
                 ));
         }
-        for (message, locations) in groups {
+        let total = groups.len();
+        let limit = self.display.max_diagnostics.unwrap_or(usize::MAX);
+        for (message, locations) in groups.into_iter().take(limit) {
             let examples = locations
                 .iter()
                 .filter(|location| !location.is_empty())
@@ -57,7 +60,23 @@ impl GateReport {
                 }
             );
         }
+        if total > limit {
+            let _ = writeln!(
+                out,
+                "Advisories: {} groups omitted by --max-diagnostics; complete advisories remain in JSON.",
+                total - limit
+            );
+        }
     }
+}
+
+fn clone_advisory(advisory: &str) -> Option<(String, String)> {
+    let (role, rest) = advisory.split_once(" advisory: clone for `")?;
+    let (path, detail) = rest.split_once("`: ")?;
+    Some((
+        format!("{role} clone advisories under the configured clone policy"),
+        format!("{path}: {detail}"),
+    ))
 }
 
 fn inventory_advisory(advisory: &str) -> Option<(String, String)> {

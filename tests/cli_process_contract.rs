@@ -120,6 +120,8 @@ fn worker_limits_preserve_findings_and_timing_is_opt_in_stderr() {
             "--json",
             "--threads",
             "2",
+            "--workload-jobs",
+            "2",
             "--timing",
         ],
     );

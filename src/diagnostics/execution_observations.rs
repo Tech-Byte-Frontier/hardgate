@@ -39,11 +39,27 @@ impl GateReport {
             (EngineId::Complexity, self.complexity_violations.len()),
             (EngineId::Invariants, self.invariant_violations.len()),
             (EngineId::Clones, self.clone_violations.len()),
-            (EngineId::MutationReport, self.mutation_violations.len()),
         ] {
             if count > 0 {
                 self.observe_engine(id, EngineState::Failed);
             }
+        }
+        self.observe_execution_results();
+        if let Some(plan) = &mut self.execution {
+            plan.reconcile(&self.engine_observations, &self.engine_reasons);
+        }
+    }
+    fn observe_execution_results(&mut self) {
+        for violation in &self.mutation_violations {
+            observe(
+                &mut self.engine_observations,
+                EngineId::MutationReport,
+                if incomplete_mutation(&violation.metric) {
+                    EngineState::Incomplete
+                } else {
+                    EngineState::Failed
+                },
+            );
         }
         for violation in &self.orchestration_violations {
             let state = if violation.exit_code.is_none()
@@ -67,9 +83,6 @@ impl GateReport {
             };
             observe(&mut self.engine_observations, EngineId::Coverage, state);
         }
-        if let Some(plan) = &mut self.execution {
-            plan.reconcile(&self.engine_observations, &self.engine_reasons);
-        }
     }
 }
 
@@ -80,5 +93,16 @@ pub(crate) fn missing_coverage(metric: &str) -> bool {
             | "Missing Diff Coverage"
             | "Missing Critical Path"
             | "Coverage Count Overflow"
+    )
+}
+
+pub(crate) fn incomplete_mutation(metric: &str) -> bool {
+    matches!(
+        metric,
+        "Mutation Unexecuted Mutants"
+            | "Mutation Timeouts"
+            | "Mutation Compile Errors"
+            | "Mutation Runner Errors"
+            | "Mutation Unviable Mutants"
     )
 }

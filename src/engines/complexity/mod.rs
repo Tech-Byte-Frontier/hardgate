@@ -312,7 +312,8 @@ fn check_statement_limit(
 }
 
 fn collect_functions(node: Node, ctx: &ParseContext, results: &mut Vec<FunctionMetrics>) {
-    if ctx.lang.is_function_node(node.kind())
+    if node.is_named()
+        && ctx.lang.is_function_node(node.kind())
         && let Some(metrics) = analyze_function_node(node, ctx)
     {
         results.push(metrics);
@@ -358,10 +359,18 @@ fn analyze_function_node(node: Node, ctx: &ParseContext) -> Option<FunctionMetri
 }
 
 fn extract_function_name(node: Node, source: &[u8], lang: SupportedLanguage) -> Option<String> {
-    if (lang == SupportedLanguage::TypeScript
-        || lang == SupportedLanguage::Tsx
-        || lang == SupportedLanguage::JavaScript)
-        && node.kind() == "arrow_function"
+    if lang == SupportedLanguage::Python {
+        return Some(
+            node.child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .unwrap_or("lambda")
+                .to_string(),
+        );
+    }
+    if matches!(
+        lang,
+        SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript
+    ) && node.kind() == "arrow_function"
     {
         return Some(
             extract_declarator_name(node, source).unwrap_or_else(|| "anonymous".to_string()),
@@ -375,10 +384,10 @@ fn extract_function_name(node: Node, source: &[u8], lang: SupportedLanguage) -> 
         }
     }
 
-    if (lang == SupportedLanguage::TypeScript
-        || lang == SupportedLanguage::Tsx
-        || lang == SupportedLanguage::JavaScript)
-        && let Some(arrow_name) = extract_declarator_name(node, source)
+    if matches!(
+        lang,
+        SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript
+    ) && let Some(arrow_name) = extract_declarator_name(node, source)
     {
         return Some(arrow_name);
     }
@@ -402,6 +411,13 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
 fn count_parameters(node: Node, lang: SupportedLanguage, source: &[u8]) -> usize {
     let param_kind = match lang {
         SupportedLanguage::Rust => "parameters",
+        SupportedLanguage::Python => {
+            if node.kind() == "lambda" {
+                "lambda_parameters"
+            } else {
+                "parameters"
+            }
+        }
         SupportedLanguage::TypeScript | SupportedLanguage::Tsx | SupportedLanguage::JavaScript => {
             "formal_parameters"
         }
@@ -425,7 +441,17 @@ fn count_parameters(node: Node, lang: SupportedLanguage, source: &[u8]) -> usize
             !source[param.start_byte()].is_ascii_whitespace()
                 && !matches!(
                     kind,
-                    "(" | ")" | "," | "{" | "}" | "[" | "]" | "*" | "/" | ":"
+                    "(" | ")"
+                        | ","
+                        | "{"
+                        | "}"
+                        | "["
+                        | "]"
+                        | "*"
+                        | "/"
+                        | ":"
+                        | "keyword_separator"
+                        | "positional_separator"
                 )
                 && !kind.contains("comment")
         })

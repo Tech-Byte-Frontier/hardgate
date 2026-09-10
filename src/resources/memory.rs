@@ -125,6 +125,11 @@ pub(super) fn host_total_bytes() -> io::Result<u64> {
 }
 
 #[cfg(target_os = "linux")]
+pub(super) fn host_available_bytes() -> io::Result<u64> {
+    procfs::parse_meminfo(&procfs::read_required(Path::new("/proc/meminfo"))?).map(|value| value.1)
+}
+
+#[cfg(target_os = "linux")]
 pub(super) fn runtime_directories() -> io::Result<Vec<std::path::PathBuf>> {
     let membership = procfs::read_required(Path::new("/proc/self/cgroup"))?;
     let path = paths::parse_cgroup_path(&membership)?

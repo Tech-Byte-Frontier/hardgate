@@ -402,7 +402,19 @@ fn validate_lines(builder: &RecordBuilder) -> Result<()> {
             builder.coverage.lines_found
         );
     }
-    if builder.coverage.lines_found == detailed_lines && builder.coverage.lines_hit != hit_lines {
+    validate_hit_projection(builder, hit_lines)
+}
+
+fn validate_hit_projection(builder: &RecordBuilder, hit_lines: usize) -> Result<()> {
+    // LLVM merges instantiation summaries by maximum, whereas DA records union
+    // their executed lines. Keep the lower native LH only when the complete
+    // FN/FNDA grouping explains that projection; never grant extra hit credit.
+    let projected_hits = builder.coverage.lines_hit < hit_lines
+        && builder.details.has_function_projection(&builder.coverage);
+    if builder.coverage.lines_found == builder.coverage.line_hits.len()
+        && builder.coverage.lines_hit != hit_lines
+        && !projected_hits
+    {
         bail!(
             "LCOV LH:{} does not match {} DA lines with hits",
             builder.coverage.lines_hit,

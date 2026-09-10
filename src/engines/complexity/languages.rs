@@ -12,12 +12,14 @@ pub enum SupportedLanguage {
     TypeScript,
     Tsx,
     JavaScript,
+    Python,
 }
 
 impl SupportedLanguage {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
             "rs" => Some(SupportedLanguage::Rust),
+            "py" => Some(SupportedLanguage::Python),
             "ts" | "mts" | "cts" => Some(SupportedLanguage::TypeScript),
             "tsx" => Some(SupportedLanguage::Tsx),
             "js" | "jsx" | "mjs" | "cjs" => Some(SupportedLanguage::JavaScript),
@@ -28,6 +30,7 @@ impl SupportedLanguage {
     pub fn tree_sitter_language(&self) -> Language {
         match self {
             SupportedLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
+            SupportedLanguage::Python => tree_sitter_python::LANGUAGE.into(),
             SupportedLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             SupportedLanguage::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
             SupportedLanguage::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
@@ -37,6 +40,7 @@ impl SupportedLanguage {
     pub fn is_function_node(&self, kind: &str) -> bool {
         match self {
             SupportedLanguage::Rust => kind == "function_item",
+            SupportedLanguage::Python => matches!(kind, "function_definition" | "lambda"),
             SupportedLanguage::TypeScript
             | SupportedLanguage::Tsx
             | SupportedLanguage::JavaScript => {
@@ -81,7 +85,7 @@ impl SupportedLanguage {
     ) -> anyhow::Result<Option<(Self, tree_sitter::Tree)>> {
         if crate::discovery::classification::is_retired_source(path) {
             anyhow::bail!(
-                "unsupported analysis request for `{}`; only Rust and JavaScript/TypeScript are supported",
+                "unsupported analysis request for `{}`; Rust, Python and JavaScript/TypeScript analysis are supported",
                 path.display()
             );
         }
@@ -101,10 +105,10 @@ impl SupportedLanguage {
                     line.get(..point.column)
                         .map_or(point.column + 1, |prefix| prefix.chars().count() + 1)
                 });
-            let compiler = if lang == Self::Rust {
-                "cargo check"
-            } else {
-                "the project TypeScript/JavaScript compiler"
+            let compiler = match lang {
+                Self::Rust => "cargo check",
+                Self::Python => "the project Python compiler",
+                _ => "the project TypeScript/JavaScript compiler",
             };
             anyhow::bail!(
                 "Hardgate parser could not analyze {}:{}:{} (syntax errors reported by Tree-sitter; source validity unconfirmed). Invalid source and unsupported parser syntax are distinct: verify with {compiler}. If the compiler accepts this file, this is a Hardgate parser limitation; report the syntax or use an equivalent imported type alias. No complete AST evidence was produced.",

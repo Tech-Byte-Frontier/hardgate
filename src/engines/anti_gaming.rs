@@ -47,6 +47,10 @@ impl AntiGamingScanner {
             r"istanbul\s+ignore\s+(next|if|else)",
             r"sonarlint-disable",
             r"nosonar",
+            r"(?i)\bnoqa\b",
+            r"(?i)pragma:\s*no\s*(cover|branch)",
+            r"type:\s*ignore",
+            r"(pylint|ruff):\s*(disable|noqa)",
         ];
 
         let patterns = standard_patterns

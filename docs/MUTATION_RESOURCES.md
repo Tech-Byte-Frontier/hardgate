@@ -18,24 +18,31 @@ environment. The kernel settings are checked; an environment marker alone cannot
 bypass admission. A missing manager or failed containment refuses work with exit 2.
 
 The default workload allowance is half the available CPUs, rounded down with a
-minimum of one and a maximum of eight. Set `--workload-jobs N` or
+minimum of one and a maximum of 64. Set `--workload-jobs N` or
 `HARDGATE_WORKLOAD_JOBS=N` (1–64) for an explicit allowance; the CLI option takes
 precedence. This changes execution capacity, not quality requirements. A selected
 allowance is inherited unchanged when Hardgate reexecutes inside its scope.
 
 For `N` jobs, the scope has an `N`-CPU quota and a task ceiling of
 `max(256, 128*N)`, counting both processes and threads. Memory is capped at the
-smaller of one quarter of host RAM and `clamp(N, 4, 16)` GiB; `memory.high` is
-80% of that cap. Swap remains disabled and CPU scheduling weight remains low.
+smaller of one quarter of host RAM and `clamp(N, 4, 16)` GiB by default.
+`--workload-memory-mib` / `HARDGATE_WORKLOAD_MEMORY_MIB` (1024–65536)
+can select an independent ceiling, still capped at one quarter of host RAM.
+`memory.high` is 80% of that cap. Swap remains disabled and CPU scheduling weight remains low.
 The entire process tree shares these limits, including detached subprocesses.
 Hardgate prints the actual admitted kernel limits before running tools; tighter
 inherited limits remain enforced. Resource failures identify memory versus task
 events and include current, peak and maximum usage when available.
 
 Common build/test worker settings are capped at the selected allowance; smaller
-settings are retained. Stryker evidence uses the smaller of the project's explicit
-concurrency and this allowance, defaulting to the allowance when unspecified.
-Analysis remains separate: `--threads` still selects at most two Rayon workers.
+settings are retained. Stryker evidence also sizes runners from current memory
+headroom, subtracting the live reserve and a 512 MiB coordinator allowance.
+`--mutation-worker-memory-mib` / `HARDGATE_MUTATION_WORKER_MEMORY_MIB`
+sets the per-runner estimate (1024–16384, default 2048 MiB). Concurrency cannot
+exceed the resulting memory capacity, CPU allowance, or a smaller explicit project
+setting. No fitting runner is a setup failure; the live pressure guard remains
+mandatory because a planning estimate is not a guaranteed bound on each runner.
+Analysis uses the available workload CPU allowance; `--threads` can select fewer Rayon workers.
 
 ```sh
 hardgate --workload-jobs 8 check --format agent
@@ -64,7 +71,7 @@ Full workload containment currently requires Linux cgroup v2 and, when no suitab
 boundary is inherited, systemd 254 or later with an accessible user manager.
 Platforms without an enforced backend refuse evidence production and explicitly
 isolated project-tool execution with setup guidance. Native checks remain
-available. Static analysis uses at most two Rayon workers;
+available. Static analysis bounds Rayon workers by the available workload CPU allowance;
 this worker limit does not claim OS containment.
 
 Mutation execution now belongs to specialist tools. The removed native mutant

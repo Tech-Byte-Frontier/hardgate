@@ -1,7 +1,7 @@
 //! Project checks execute in a private copy; input writes cannot become fixes.
 use super::{snapshot::Snapshot, workspace::EvidenceWorkspace};
 use crate::engines::process::{ProcessOutcome, run_command_in_copy};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -41,6 +41,7 @@ pub(crate) struct Session {
     workspace: EvidenceWorkspace,
     input_policy: super::inputs::InputPolicy,
     isolated: bool,
+    failed: std::cell::Cell<bool>,
 }
 
 impl Session {
@@ -63,10 +64,39 @@ impl Session {
             input_policy,
             isolated: config.orchestration.require_isolation
                 || crate::resources::runtime::isolated(),
+            failed: std::cell::Cell::new(false),
         })
     }
 
     pub(crate) fn run(&self, tokens: &[String], timeout: Duration) -> Result<ProcessOutcome> {
+        let already_failed = self.failed.replace(true);
+        let result = self.run_verified(tokens, timeout);
+        if !matches!(&result, Ok(ProcessOutcome::Completed { status, .. }) if status.success()) {
+            self.failed.set(true);
+            self.workspace
+                .failed("project check failed or restoration was incomplete")?;
+        }
+        self.workspace
+            .diagnostics(&serde_json::to_string(tokens)?, &format!("{result:?}"))?;
+        if matches!(&result, Ok(ProcessOutcome::Completed { status, .. }) if status.success()) {
+            self.failed.set(already_failed);
+        }
+        let description = format!(
+            "workspace lifecycle={} job={} workspace={} (preserved)",
+            if crate::cancellation::signal().is_some() {
+                "interrupted"
+            } else {
+                "failed"
+            },
+            self.workspace.job_path().display(),
+            self.workspace.root().display()
+        );
+        result
+            .map(|outcome| retained_outcome(outcome, &description))
+            .with_context(|| description)
+    }
+
+    fn run_verified(&self, tokens: &[String], timeout: Duration) -> Result<ProcessOutcome> {
         self.before.require_same(
             &Snapshot::capture_with(self.workspace.root(), &self.input_policy)?,
             "check inputs before command",
@@ -98,7 +128,34 @@ impl Session {
     }
 
     pub(crate) fn close(self) -> Result<()> {
-        self.workspace.close()
+        if self.failed.get() {
+            self.workspace.preserve()
+        } else {
+            self.before.require_same(
+                &Snapshot::capture_with(&self.root, &self.input_policy)?,
+                "checkout before check publication",
+            )?;
+            super::read_only_publication::publish(&self.workspace, &self.root)?;
+            self.workspace.close()
+        }
+    }
+}
+
+fn retained_outcome(outcome: ProcessOutcome, description: &str) -> ProcessOutcome {
+    match outcome {
+        ProcessOutcome::Completed { status, mut output } if !status.success() => {
+            output.push_str(&format!("\n{description}\n"));
+            ProcessOutcome::Completed { status, output }
+        }
+        ProcessOutcome::TimedOut { mut output } => {
+            output.push_str(&format!("\n{description}\n"));
+            ProcessOutcome::TimedOut { output }
+        }
+        ProcessOutcome::Failed { message, output } => ProcessOutcome::Failed {
+            message: format!("{message}; {description}"),
+            output,
+        },
+        other => other,
     }
 }
 

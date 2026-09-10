@@ -1,11 +1,31 @@
 //! Fresh producer execution and source identity, separate from report scoring.
+mod aggregation;
+mod authentication;
+mod orchestration;
+mod runtime_inputs;
+mod rust_scope;
+pub use orchestration::{EvidenceMode, EvidenceRun};
+pub(crate) use orchestration::{baseline_for, run_configured};
 mod environment;
+mod execution;
+pub use execution::produce;
+mod publication;
+use publication::publish;
 mod inputs;
 mod mutation_scope;
+mod partitions;
+mod producer_rust;
+pub use aggregation::verify_set;
+pub use partitions::reports;
 mod producer;
+mod python;
+mod python_report;
 pub(crate) mod read_only;
+mod read_only_publication;
 mod snapshot;
+mod stryker_scope;
 pub(crate) mod temporary;
+pub use temporary::configure_root as configure_scratch_root;
 mod workspace;
 
 use crate::commands::{CommandOutcome, CommandResult};
@@ -25,6 +45,7 @@ pub enum Producer {
     Vitest,
     CargoMutants,
     Stryker,
+    Pytest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,9 +56,18 @@ pub enum EvidenceKind {
 }
 
 impl Producer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CargoLlvmCov => "cargo-llvm-cov",
+            Self::Vitest => "vitest",
+            Self::CargoMutants => "cargo-mutants",
+            Self::Stryker => "stryker",
+            Self::Pytest => "pytest",
+        }
+    }
     pub fn kind(self) -> EvidenceKind {
         match self {
-            Self::CargoLlvmCov | Self::Vitest => EvidenceKind::Coverage,
+            Self::CargoLlvmCov | Self::Vitest | Self::Pytest => EvidenceKind::Coverage,
             Self::CargoMutants | Self::Stryker => EvidenceKind::Mutation,
         }
     }
@@ -50,12 +80,14 @@ pub struct EvidenceOptions {
     pub toolchain: Option<String>,
     pub timeout_secs: u64,
     pub args: Vec<String>,
+    pub producer_config: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
     schema_version: u32,
+    root: PathBuf,
     producer: Producer,
     producer_version: String,
     command: Vec<Vec<String>>,
@@ -65,88 +97,13 @@ struct Receipt {
     restoration_verified: bool,
     #[serde(default)]
     prerequisite_passed: bool,
-}
-
-/// Produce fresh evidence from an independent input copy. This operation never
-/// attaches a receipt to a pre-existing report supplied by the caller.
-pub fn produce(options: EvidenceOptions, context: &ConfigContext) -> CommandResult {
-    crate::resources::runtime::require()?;
-    ensure!(
-        options.timeout_secs > 0,
-        "evidence timeout must be positive"
-    );
-    let root = context.root.canonicalize()?;
-    let destination = output_path(&root, &options)?;
-    remove_receipt(&destination)?;
-    let input_policy = inputs::InputPolicy::new(&root, &context.config)?;
-    let before = Snapshot::capture_with(&root, &input_policy)?;
-    ensure!(
-        !before.0.is_empty(),
-        "evidence requires non-empty project inputs"
-    );
-    let workspace = workspace::EvidenceWorkspace::create_verified(&root, &input_policy, &before)?;
-    let spec = producer::prepare(&options, workspace.root())?;
-    ensure!(!spec.report.exists(), "producer report must start absent");
-    let version = execute_version(&spec.version, workspace.root(), &root)?;
-    let operation = if options.producer.kind() == EvidenceKind::Mutation {
-        "mutation"
-    } else {
-        "evidence"
-    };
-    if let Some(tokens) = &spec.prerequisite {
-        let _phase = crate::engines::process::phase::set("evidence prerequisite");
-        let outcome = run_command_in_copy(
-            tokens,
-            (workspace.root(), &root),
-            Duration::from_secs(options.timeout_secs),
-            "evidence",
-        );
-        before.require_same(
-            &Snapshot::capture_with(workspace.root(), &input_policy)?,
-            "producer prerequisite restoration",
-        )?;
-        before.require_same(
-            &Snapshot::capture_with(&root, &input_policy)?,
-            "checkout during producer prerequisite",
-        )?;
-        let (exit, output) = completed_outcome(outcome, options.producer)?;
-        ensure!(exit == 0, "producer prerequisite did not pass: {output}");
-        eprintln!("{output}");
-    }
-    let outcome = run_command_in_copy(
-        &spec.tokens,
-        (workspace.root(), &root),
-        Duration::from_secs(options.timeout_secs),
-        operation,
-    );
-    // Compare both trees even when the producer failed. A failed or interrupted
-    // run cannot leave a usable receipt from an earlier invocation.
-    before.require_same(
-        &Snapshot::capture_with(workspace.root(), &input_policy)?,
-        "producer restoration",
-    )?;
-    before.require_same(
-        &Snapshot::capture_with(&root, &input_policy)?,
-        "checkout during producer execution",
-    )?;
-    let (exit, output) = completed_outcome(outcome, options.producer)?;
-    eprintln!("{output}");
-    publish(
-        ProductionOutput {
-            producer: options.producer,
-            spec,
-            version,
-            exit,
-        },
-        Publication {
-            root: &root,
-            destination: &destination,
-            before,
-            workspace,
-            config: &context.config,
-            input_policy,
-        },
-    )
+    /// Until this owned job is removed, publication/cleanup is incomplete.
+    #[serde(default)]
+    workspace: Option<PathBuf>,
+    #[serde(default)]
+    partition: Option<partitions::Partition>,
+    #[serde(default)]
+    runtime_inputs: Option<runtime_inputs::RuntimeInputs>,
 }
 
 struct ProductionOutput {
@@ -154,6 +111,8 @@ struct ProductionOutput {
     spec: producer::CommandSpec,
     version: String,
     exit: i32,
+    partition: Option<partitions::Partition>,
+    runtime_inputs: Option<runtime_inputs::RuntimeInputs>,
 }
 
 struct Publication<'a> {
@@ -165,88 +124,38 @@ struct Publication<'a> {
     config: &'a crate::config::HardgateConfig,
 }
 
-fn publish(produced: ProductionOutput, publication: Publication<'_>) -> CommandResult {
-    let ProductionOutput {
-        producer,
-        spec,
-        version,
-        exit,
-    } = produced;
-    let Publication {
-        root,
-        destination,
-        before,
-        workspace,
-        config,
-        input_policy,
-    } = publication;
-    let bytes = normalized_report(&spec.report, workspace.root(), producer)?;
-    let temporary = destination.with_extension("pending");
-    fs::write(&temporary, &bytes)?;
-    let validation = validate_producer_report(
-        producer,
-        &temporary,
-        &EvidenceInputs {
-            snapshot: &before,
-            config,
-            root,
-        },
-    );
-    if let Err(error) = validation {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    let prerequisite_passed = spec.prerequisite.is_some();
-    let receipt = Receipt {
-        schema_version: 1,
-        producer,
-        producer_version: version,
-        command: spec
-            .prerequisite
-            .into_iter()
-            .chain(std::iter::once(spec.tokens))
-            .collect(),
-        runner_exit: exit,
-        inputs: before,
-        report_sha256: file_hash(&temporary)?,
-        restoration_verified: true,
-        prerequisite_passed,
-    };
-    workspace.close()?;
-    receipt.inputs.require_same(
-        &Snapshot::capture_with(root, &input_policy)?,
-        "checkout before evidence publication",
-    )?;
-    fs::rename(&temporary, destination)?;
-    crate::commands::outcome::write_atomic_file(
-        &receipt_path(destination),
-        &serde_json::to_string_pretty(&receipt)?,
-    )?;
-    eprintln!("source-bound evidence: {}", destination.display());
-    Ok(if exit == 0 {
-        CommandOutcome::Passed
-    } else {
-        CommandOutcome::Violations
-    })
-}
-
 /// Verify freshness and producer identity before accepting report evidence.
-/// This is a local execution receipt, not a signature or a claim of hermeticity.
+/// Authentication comes from the protected local registry, not the editable
+/// report sidecar. This is not portable signing or a claim of hermeticity.
 pub fn verify(
     root: &Path,
     report: &Path,
     kind: EvidenceKind,
     config: &crate::config::HardgateConfig,
 ) -> Result<()> {
-    let receipt: Receipt =
-        serde_json::from_slice(&fs::read(receipt_path(report)).with_context(|| {
-            format!(
-                "missing source-bound receipt for {}; regenerate with `hardgate evidence`",
-                report.display()
-            )
-        })?)?;
+    let receipt_bytes = fs::read(receipt_path(report)).with_context(|| {
+        format!(
+            "missing source-bound receipt for {}; regenerate with `hardgate evidence`",
+            report.display()
+        )
+    })?;
+    authentication::verify(&receipt_bytes, root, report)?;
+    let receipt: Receipt = serde_json::from_slice(&receipt_bytes)?;
     ensure!(
-        receipt.schema_version == 1 && receipt.restoration_verified,
+        receipt.root == root.canonicalize()?,
+        "receipt belongs to a different source checkout"
+    );
+    ensure!(
+        receipt.workspace.as_ref().is_none_or(|path| !path.exists()),
+        "evidence publication or workspace cleanup is incomplete; inspect {}",
+        receipt
+            .workspace
+            .as_deref()
+            .unwrap_or(Path::new("<unknown>"))
+            .display()
+    );
+    ensure!(
+        receipt.schema_version == 2 && receipt.restoration_verified,
         "unsupported or unrestored evidence receipt"
     );
     ensure!(
@@ -279,6 +188,14 @@ pub fn verify(
         &Snapshot::capture_with(root, &input_policy)?,
         "stale evidence",
     )?;
+    if let Some(partition) = &receipt.partition {
+        aggregation::validate_partition_report(
+            receipt.producer,
+            report,
+            (root, config),
+            partition,
+        )?;
+    }
     validate_producer_report(
         receipt.producer,
         report,
@@ -360,13 +277,13 @@ fn remove_receipt(report: &Path) -> Result<()> {
     }
 }
 
-fn execute_version(tokens: &[String], root: &Path, original: &Path) -> Result<String> {
-    match run_command_in_copy(
-        tokens,
-        (root, original),
-        Duration::from_secs(30),
-        "evidence",
-    ) {
+fn execute_version(
+    tokens: &[String],
+    root: &Path,
+    original: &Path,
+    timeout: Duration,
+) -> Result<String> {
+    match run_command_in_copy(tokens, (root, original), timeout, "evidence") {
         ProcessOutcome::Completed { status, output }
             if status.success() && !output.trim().is_empty() =>
         {
@@ -405,6 +322,11 @@ fn normalized_report(path: &Path, root: &Path, producer: Producer) -> Result<Vec
         "producer created an empty report"
     );
     if producer.kind() == EvidenceKind::Coverage {
+        let content = if producer == Producer::Pytest {
+            python_report::normalize(&content, &path.with_extension("native.json"))?
+        } else {
+            content
+        };
         let mut output = String::new();
         for line in content.lines() {
             if let Some(path) = line.strip_prefix("SF:") {
@@ -418,7 +340,11 @@ fn normalized_report(path: &Path, root: &Path, producer: Producer) -> Result<Vec
         }
         Ok(output.into_bytes())
     } else {
-        Ok(content.into_bytes())
+        if producer == Producer::Stryker {
+            stryker_scope::merge(&content, path)
+        } else {
+            Ok(content.into_bytes())
+        }
     }
 }
 
@@ -469,6 +395,7 @@ fn validate_producer_report(
 
 fn validate_stryker_sources(value: &serde_json::Value, inputs: &Snapshot) -> Result<()> {
     use sha2::{Digest, Sha256};
+    stryker_scope::sources(value, inputs)?;
     let files = value
         .get("files")
         .and_then(serde_json::Value::as_object)
@@ -489,3 +416,7 @@ fn validate_stryker_sources(value: &serde_json::Value, inputs: &Snapshot) -> Res
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "publication_tests.rs"]
+mod publication_tests;

@@ -59,9 +59,10 @@ fn published_receipt_identity_and_report_bytes_are_verified_independently() {
         0,
     );
     let path = project.receipt("mutation");
-    let original: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Value = serde_json::from_slice(&original_bytes).unwrap();
     for (key, value) in [
-        ("schema_version", json!(2)),
+        ("schema_version", json!(1)),
         ("restoration_verified", json!(false)),
         ("producer", json!("vitest")),
         ("producer_version", json!("")),
@@ -81,7 +82,7 @@ fn published_receipt_identity_and_report_bytes_are_verified_independently() {
         std::fs::write(&path, changed.to_string()).unwrap();
         assert!(project.verify(Mutation).is_err(), "accepted tampered {key}");
     }
-    std::fs::write(&path, original.to_string()).unwrap();
+    std::fs::write(&path, original_bytes).unwrap();
     std::fs::write(project.report("mutation"), mutation(false).to_string()).unwrap();
     assert!(format!("{:#}", project.verify(Mutation).unwrap_err()).contains("report bytes"));
 }
@@ -153,6 +154,7 @@ fn producer_temp_location_and_artifact_symlinks_cannot_redirect_evidence() {
     let project = Project::new();
     let output = project
         .producer_command("vitest", lcov(), ("pass", 0))
+        .env_remove("HARDGATE_SCRATCH_ROOT")
         .env("TMPDIR", &project.0)
         .output()
         .unwrap();
@@ -184,4 +186,52 @@ fn invalid_stryker_setup_and_unremovable_receipts_fail_before_execution() {
     std::fs::create_dir(project.receipt("coverage")).unwrap();
     assert_exit(&project.produce("vitest", lcov(), ("pass", 0)), 2);
     assert!(!project.report("coverage").exists());
+}
+
+#[test]
+fn copied_report_and_receipt_cannot_authenticate_another_artifact_path() {
+    let project = Project::new();
+    assert_exit(&project.produce("vitest", lcov(), ("pass", 0)), 0);
+    let moved = project.0.join("moved.lcov");
+    std::fs::copy(project.report("coverage"), &moved).unwrap();
+    std::fs::copy(
+        project.receipt("coverage"),
+        project.0.join("moved.lcov.hardgate.json"),
+    )
+    .unwrap();
+    let error = hardgate::evidence::verify(
+        &project.0,
+        &moved,
+        hardgate::evidence::EvidenceKind::Coverage,
+        &Default::default(),
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("protected execution authentication"));
+}
+
+#[test]
+fn protected_producer_cannot_write_parent_execution_authentication() {
+    use sha2::{Digest, Sha256};
+    let project = Project::new();
+    assert_exit(&project.produce("vitest", lcov(), ("pass", 0)), 0);
+    let receipt = std::fs::read(project.receipt("coverage")).unwrap();
+    let digest: String = Sha256::digest(&receipt)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/state")
+        });
+    let record = state.join("hardgate/executions-v2").join(digest);
+    assert_eq!(std::fs::read(&record).unwrap(), receipt);
+    let output = project
+        .producer_command("vitest", lcov(), ("forge-authentication", 0))
+        .env("HARDGATE_FIXTURE_AUTHENTICATION_TARGET", &record)
+        .output()
+        .unwrap();
+    assert_exit(&output, 2);
+    assert_eq!(std::fs::read(record).unwrap(), receipt);
+    assert!(!project.receipt("coverage").exists());
 }

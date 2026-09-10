@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { alignedMemoryLimits, boundary, bounded, eventCounters, workloadJobs, taskLimit } from "../scripts/check-resource-boundary.mjs";
-assert.equal(workloadJobs(undefined, 32), 8);
+for (const [cpus, expected] of [[1, 1], [2, 1], [4, 2], [8, 4], [16, 8], [32, 16], [128, 64], [256, 64]]) {
+  assert.equal(workloadJobs(undefined, cpus), expected);
+}
 assert.equal(workloadJobs("8", 8), 8);
 assert.equal(workloadJobs("2", 32), 2);
 assert.equal(taskLimit(8), 1024);

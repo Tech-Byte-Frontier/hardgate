@@ -6,6 +6,8 @@ mod lease;
 pub(crate) mod managed;
 mod memory;
 pub mod runtime;
+pub(crate) mod telemetry;
+pub(crate) mod worker_plan;
 
 use std::cell::RefCell;
 use std::io;
@@ -54,7 +56,9 @@ pub(crate) fn check_pressure() -> io::Result<()> {
         return Ok(());
     }
     if let Some(sample) = memory::sample()? {
-        sample.check(budget::reserve_bytes(sample.total_bytes))?;
+        sample
+            .check(budget::reserve_bytes(sample.total_bytes))
+            .map_err(telemetry::pressure_error)?;
     }
     LAST_SAMPLE.with(|last| *last.borrow_mut() = Some(Instant::now()));
     Ok(())

@@ -13,6 +13,9 @@ macro_rules! set {
 }
 
 pub(super) fn merge_overrides(base: &mut HardgateConfig, user: HardgateConfig, raw: &toml::Table) {
+    if raw.contains_key("evidence") {
+        base.evidence = user.evidence.clone();
+    }
     merge_static_overrides(base, &user, raw);
     merge_dynamic_overrides(base, &user, raw);
     merge_role_overrides(base, &user, raw);

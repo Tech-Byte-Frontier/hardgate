@@ -81,20 +81,27 @@ fn add_evidence_engines(
 ) {
     let config = &context.config;
     let selected = selection.command == "check" && selection.selects(super::CheckKind::Policy);
-    let coverage = selection
+    let mut coverage = selection
         .coverage_report
-        .or(config.coverage.report.as_deref());
+        .map(|path| vec![path.to_string()])
+        .unwrap_or_else(|| {
+            crate::evidence::reports(config, crate::evidence::EvidenceKind::Coverage)
+        });
+    if coverage.is_empty() {
+        coverage.push("coverage report path is not configured".into());
+    }
     engines.push(engine(
         EngineId::Coverage,
         config.coverage.enabled,
         selected,
-        requirement(coverage, "coverage report path is not configured"),
+        coverage,
     ));
     let mut mutation = selection
         .mutation_report
         .map(|value| vec![value.to_string()])
-        .or_else(|| config.mutation.reports.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            crate::evidence::reports(config, crate::evidence::EvidenceKind::Mutation)
+        });
     if mutation.is_empty() {
         mutation.push("mutation report paths are not configured".into());
     }

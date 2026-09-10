@@ -11,7 +11,7 @@ function integer(value) {
 }
 
 export function workloadJobs(value = process.env.HARDGATE_WORKLOAD_JOBS, cpus = affinityCount()) {
-  const jobs = value === undefined ? Math.max(1, Math.min(8, Math.floor(cpus / 2))) : integer(value);
+  const jobs = value === undefined ? Math.max(1, Math.min(64, Math.floor(cpus / 2))) : integer(value);
   if (jobs < 1 || jobs > 64) throw new Error("HARDGATE_WORKLOAD_JOBS must be between 1 and 64");
   return jobs;
 }

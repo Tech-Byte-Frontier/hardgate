@@ -10,7 +10,7 @@
 //!
 //! ## Engines
 //!
-//! * **[`engines::complexity`]** parses Rust, JavaScript, TypeScript/TSX,
+//! * **[`engines::complexity`]** parses Rust, Python, JavaScript, TypeScript/TSX,
 //!   with Tree-sitter and reports function metrics.
 //! * **[`engines::anti_gaming`]** finds configured suppression directives and
 //!   forbidden tokens in safety-checked roles.

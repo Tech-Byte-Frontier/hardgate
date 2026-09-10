@@ -29,6 +29,8 @@ pub use summary::{GateSummary, TopFileEntry};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GateReport {
     #[serde(default)]
+    pub evidence_runs: Vec<crate::evidence::EvidenceRun>,
+    #[serde(default)]
     pub execution: Option<execution::ExecutionPlan>,
     #[serde(skip)]
     pub(crate) engine_observations:
@@ -109,14 +111,7 @@ impl GateReport {
 
     /// Count of genuine code findings (complexity, budgets, suppressions, invariants, clones, coverage, mutation).
     pub fn code_findings_count(&self) -> usize {
-        self.budget_violations.len()
-            + self.suppression_violations.len()
-            + self.complexity_violations.len()
-            + self.invariant_violations.len()
-            + self.clone_violations.len()
-            + self.coverage_violations.len()
-            + self.mutation_violations.len()
-            + self.tool_findings_count()
+        self.total_violations() - self.analysis_blockers_count()
     }
 
     pub fn tool_findings_count(&self) -> usize {
@@ -146,6 +141,14 @@ impl GateReport {
             .filter(|finding| {
                 finding.category == "orchestration"
                     || finding.rule_id.starts_with("HG-COVERAGE-MISSING-")
+                    || matches!(
+                        finding.rule_id.as_str(),
+                        "HG-MUTATION-TIMEOUTS"
+                            | "HG-MUTATION-COMPILE-ERRORS"
+                            | "HG-MUTATION-RUNNER-ERRORS"
+                            | "HG-MUTATION-UNVIABLE"
+                            | "HG-MUTATION-UNEXECUTED"
+                    )
             })
             .collect::<Vec<_>>();
         for failure in &self.saved_failures {
@@ -159,6 +162,16 @@ impl GateReport {
     /// Count of analysis blockers and tool/evidence failures (orchestration / report failures).
     pub fn analysis_blockers_count(&self) -> usize {
         self.orchestration_violations.len()
+            + self
+                .coverage_violations
+                .iter()
+                .filter(|violation| execution_observations::missing_coverage(&violation.metric))
+                .count()
+            + self
+                .mutation_violations
+                .iter()
+                .filter(|violation| execution_observations::incomplete_mutation(&violation.metric))
+                .count()
     }
 
     /// Freeze scan counts and derive `passed` (true only with zero violations).

@@ -150,7 +150,12 @@ fn tool_discovery_refuses_untrusted_runtime_and_missing_or_old_managers() {
     fs::write(&socket, "not a socket").unwrap();
     assert!(probe(uid).unwrap().is_none());
     fs::remove_file(&socket).unwrap();
-    let _listener = UnixListener::bind(&socket).unwrap();
+    let directory = fs::File::open(root.join("systemd")).unwrap();
+    let address = format!(
+        "/proc/self/fd/{}/private",
+        std::os::fd::AsRawFd::as_raw_fd(&directory)
+    );
+    let _listener = UnixListener::bind(address).unwrap();
     assert!(probe(uid.wrapping_add(1)).unwrap().is_none());
     fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(probe(uid).unwrap().is_none());

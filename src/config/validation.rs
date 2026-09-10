@@ -7,6 +7,7 @@ use super::{
 };
 
 pub(super) fn validate(config: &HardgateConfig) -> Result<()> {
+    config.evidence.validate()?;
     validate_gate(&config.gate)?;
     validate_file_budgets(&config.budgets.files)?;
     validate_function_budgets(&config.budgets.functions)?;
@@ -41,12 +42,12 @@ fn validate_file_budgets(files: &FileBudgets) -> Result<()> {
         ensure_positive(value, "budgets.files.max_bytes")?;
     }
     for (extension, value) in &files.max_lines {
-        if ["py", "go"]
+        if ["go"]
             .iter()
             .any(|removed| extension.eq_ignore_ascii_case(removed))
         {
             bail!(
-                "budgets.files.max_lines.{extension} is obsolete; analysis supports only Rust and JavaScript/TypeScript"
+                "budgets.files.max_lines.{extension} is obsolete; analysis supports Rust, Python and JavaScript/TypeScript"
             );
         }
         ensure_positive(*value, &format!("budgets.files.max_lines.{extension}"))?;

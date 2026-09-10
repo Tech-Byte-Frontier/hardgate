@@ -49,14 +49,14 @@ source version as an npm or registry install target before a release.
   migration, configuration, documentation, vendor, or unknown roles before
   engines choose their inputs.
 - **Structural budgets:** configurable file and function budgets use Tree-sitter
-  metrics for Rust, JavaScript, TypeScript/TSX.
+  metrics for Rust, Python, JavaScript, TypeScript/TSX.
 - **Anti-gaming and architecture:** suppression, forbidden-token, and
   declarative path-scoped import, call, and token rules can block a change.
 - **Clone debt:** bounded normalized-token comparisons produce stable,
   path-independent clone fingerprints.
 - **Evidence:** enabled LCOV, mutation-report, and generated-freshness checks
   fail closed when required inputs are missing, empty, unreadable, or malformed.
-- **Specialist evidence:** optional cargo-mutants, Stryker, LLVM and Vitest
+- **Specialist evidence:** optional cargo-mutants, Stryker, LLVM, Vitest and pytest
   producers bind fresh reports to source/test/config inputs and verify restoration.
 - **Acceptance:** `check` verifies formatting and linting by default, together
   with configured tests, type checks and required evidence.

@@ -1,3 +1,5 @@
+#[path = "invariant_python.rs"]
+mod python;
 use crate::config::InvariantRule;
 use crate::engines::util::{is_offset_inside_string, strip_line_comment};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -81,6 +83,7 @@ impl InvariantsChecker {
         rule: &CompiledInvariantRule,
         violations: &mut Vec<InvariantViolation>,
     ) {
+        python::check(file, rule, violations);
         for (idx, line) in file.1.lines().enumerate() {
             let line_number = idx + 1;
             // Strip inline `//` comments (outside strings) so `// use evil`

@@ -57,7 +57,19 @@ fn mutation_receipts_preserve_survivors_and_require_workspace_baseline_identity(
         );
         project.verify(Mutation).unwrap();
         let checked = project.check_report("mutation");
-        assert_eq!(checked["passed"], caught, "{checked}");
+        assert_eq!(
+            checked["passed"], false,
+            "sample cannot establish full mutation scope: {checked}"
+        );
+        assert_eq!(checked["status"], "incomplete");
+        assert_eq!(
+            checked["mutation_violations"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            caught,
+            "sample score diagnostics remain available: {checked}"
+        );
         assert_eq!(checked["partial"], true);
         let receipt_path = project.receipt("mutation");
         let mut receipt: Value =
@@ -73,7 +85,7 @@ fn mutation_receipts_preserve_survivors_and_require_workspace_baseline_identity(
         std::fs::write(&receipt_path, receipt.to_string()).unwrap();
         assert!(
             format!("{:#}", project.verify(Mutation).unwrap_err())
-                .contains("full-workspace baseline")
+                .contains("protected execution authentication")
         );
         assert_eq!(
             std::fs::read_to_string(project.0.join("src/lib.rs")).unwrap(),
@@ -346,4 +358,39 @@ fn explicit_mutation_feature_flags_are_not_duplicated_by_project_configuration()
         }
         assert!(!baseline.contains(&json!("--build-timeout")));
     }
+}
+
+#[test]
+fn pytest_protocol_requires_passing_tests_and_native_explicit_function_regions() {
+    let project = Project::new();
+    std::fs::create_dir_all(project.0.join(".venv/bin")).unwrap();
+    std::fs::copy(
+        project.0.join("tools/cargo"),
+        project.0.join(".venv/bin/python"),
+    )
+    .unwrap();
+    std::fs::write(
+        project.0.join("src/calculation.py"),
+        "def answer():\n    return 42\n",
+    )
+    .unwrap();
+    let report = lcov().replace("FIXTURE_ROOT/src/lib.rs", "src/calculation.py");
+    let native = json!({"meta":{"branch_coverage":true}, "files":{"src/calculation.py":{"summary":{"num_statements":1,"covered_lines":1,"num_branches":0,"covered_branches":0},"functions":{"answer":{"summary":{"num_statements":1,"covered_lines":1}}}}}});
+    let run = |mode| {
+        project
+            .producer_command("pytest", &report, (mode, 0))
+            .env("HARDGATE_FIXTURE_PYTHON_JSON", native.to_string())
+            .output()
+            .unwrap()
+    };
+    assert_exit(&run("pass"), 0);
+    project
+        .verify(hardgate::evidence::EvidenceKind::Coverage)
+        .unwrap();
+    let receipt: Value =
+        serde_json::from_slice(&std::fs::read(project.receipt("coverage")).unwrap()).unwrap();
+    assert_eq!(receipt["prerequisite_passed"], true);
+    assert_eq!(receipt["command"].as_array().unwrap().len(), 3);
+    assert_exit(&run("baseline-fail"), 2);
+    assert!(!project.receipt("coverage").exists());
 }

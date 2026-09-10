@@ -79,7 +79,7 @@ pub(crate) fn detect_project(root: &Path) -> Detection {
             detection.add_missing("multiple supported ecosystems were detected; configure [orchestration] commands explicitly");
         }
         Ecosystem::Unknown => detection.add_missing(
-            "no supported manifest or configured formatter was detected; Hardgate supports only Rust and JavaScript/TypeScript",
+            "no supported manifest or configured formatter was detected; automatic setup recognizes Rust and JavaScript/TypeScript; configure Python tools explicitly",
         ),
     }
     add_unconfigured_commands(&mut detection);

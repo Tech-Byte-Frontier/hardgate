@@ -46,6 +46,7 @@ impl Preset {
 
     pub fn to_default_config(self) -> HardgateConfig {
         let mut config = HardgateConfig {
+            evidence: Default::default(),
             gate: GateConfig {
                 name: "hardgate-project".to_string(),
                 preset: self,

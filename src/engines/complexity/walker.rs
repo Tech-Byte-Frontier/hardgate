@@ -102,12 +102,7 @@ fn walk_projected_node(
         }
         // `else if` is another arm at the same nesting level. An `if`
         // inside an explicit else block remains a genuinely nested branch.
-        let depth =
-            if kind == "else_clause" && matches!(child.kind(), "if_expression" | "if_statement") {
-                next_nesting.saturating_sub(1)
-            } else {
-                next_nesting
-            };
+        let depth = child_nesting(ctx.lang, kind, child.kind(), next_nesting);
         walk_projected_node(child, context, depth, state);
     }
 }
@@ -129,6 +124,12 @@ fn check_branch(kind: &str) -> bool {
             | "switch_case"
             | "catch_clause"
             | "ternary_expression"
+            | "elif_clause"
+            | "except_clause"
+            | "case_clause"
+            | "conditional_expression"
+            | "for_in_clause"
+            | "if_clause"
     )
 }
 
@@ -161,7 +162,7 @@ fn human_readable_branch(kind: &str) -> &'static str {
 }
 
 fn check_boolean_operator(node: Node, kind: &str, state: &mut AnalysisState) {
-    if kind != "binary_expression" {
+    if !matches!(kind, "binary_expression" | "boolean_operator") {
         return;
     }
     // Only the grammar's direct operator token counts. Nested operands,
@@ -193,7 +194,7 @@ fn direct_boolean_operator(node: Node) -> Option<&'static str> {
 
 fn classify_operator_token(token: &str) -> Option<&'static str> {
     // Single table keeps branch count low.
-    const OPS: &[(&str, &str)] = &[("&&", "&&"), ("||", "||")];
+    const OPS: &[(&str, &str)] = &[("&&", "&&"), ("||", "||"), ("and", "and"), ("or", "or")];
     for (k, v) in OPS {
         if *k == token {
             return Some(v);
@@ -211,5 +212,15 @@ fn check_statement(kind: &str, state: &mut AnalysisState) {
         || kind.ends_with("_definition")
     {
         state.statements += 1;
+    }
+}
+
+fn child_nesting(lang: SupportedLanguage, parent: &str, child: &str, depth: usize) -> usize {
+    if (parent == "else_clause" && matches!(child, "if_expression" | "if_statement"))
+        || (lang == SupportedLanguage::Python && child == "elif_clause")
+    {
+        depth.saturating_sub(1)
+    } else {
+        depth
     }
 }
