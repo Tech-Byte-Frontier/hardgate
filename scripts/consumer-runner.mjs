@@ -80,7 +80,9 @@ function checkCountEvidence(report, expectation) {
 
 function checkOrchestrationEvidence(report, expectation) {
   return (expectation.expectedOrchestration ?? []).flatMap((expected) => {
-    const found = report.orchestration_violations.some((item) => item.step === expected.step && item.command === expected.command.replace("<project-root>", report.execution.config.root) && item.output === expected.output);
+    const command = expected.command.replace("<project-root>", report.execution.config.root);
+    const output = expected.output.replace("<project-root>", report.execution.config.root);
+    const found = report.orchestration_violations.some((item) => item.step === expected.step && item.command === command && item.output === output);
     return found ? [] : [`missing exact orchestration evidence ${expected.step} ${expected.command}`];
   });
 }
