@@ -53,7 +53,7 @@ fn regions(node: Node<'_>) -> Vec<Range<usize>> {
 }
 
 fn collect_boundaries(node: Node<'_>, boundaries: &mut Vec<Boundary>) {
-    if is_data_container(node) && literal_data(node) {
+    if (is_data_container(node) && literal_data(node)) || typed_class_field(node) {
         boundaries.push(Boundary {
             range: node.byte_range(),
             expressions: vec![],
@@ -74,6 +74,55 @@ fn collect_boundaries(node: Node<'_>, boundaries: &mut Vec<Boundary>) {
             collect_boundaries(child, boundaries);
         }
     }
+}
+
+// DTO/schema field declarations repeat a data contract, not executable logic.
+// Keep computed defaults and annotations in the clone candidate stream.
+fn typed_class_field(node: Node<'_>) -> bool {
+    if node.kind() != "assignment" {
+        return false;
+    }
+    let Some(annotation) = node.child_by_field_name("type") else {
+        return false;
+    };
+    let in_class = node
+        .parent()
+        .filter(|parent| parent.kind() == "expression_statement")
+        .and_then(|parent| parent.parent())
+        .filter(|parent| parent.kind() == "block")
+        .and_then(|parent| parent.parent())
+        .is_some_and(|parent| parent.kind() == "class_definition");
+    in_class
+        && type_reference(annotation)
+        && node.child_by_field_name("right").is_none_or(literal_data)
+}
+
+fn type_reference(node: Node<'_>) -> bool {
+    if node.kind() == "binary_operator" {
+        let union = node
+            .child_by_field_name("operator")
+            .is_some_and(|op| op.kind() == "|");
+        let mut cursor = node.walk();
+        return union && node.named_children(&mut cursor).all(type_reference);
+    }
+    if !matches!(
+        node.kind(),
+        "type"
+            | "identifier"
+            | "none"
+            | "union_type"
+            | "generic_type"
+            | "type_parameter"
+            | "attribute"
+            | "string"
+    ) {
+        return false;
+    }
+    if node.kind() == "string" {
+        return literal_data(node);
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).all(type_reference)
 }
 
 fn jsx_expressions(node: Node<'_>, expressions: &mut Vec<Range<usize>>) {
@@ -106,21 +155,37 @@ fn declarative_reference(node: Node<'_>) -> bool {
 }
 
 fn is_data_container(node: Node<'_>) -> bool {
-    matches!(node.kind(), "array" | "array_expression")
-        || (matches!(
-            node.kind(),
-            "object" | "tuple_expression" | "struct_expression"
-        ) && node
-            .parent()
-            .is_some_and(|parent| matches!(parent.kind(), "array" | "array_expression")))
+    matches!(
+        node.kind(),
+        "array" | "array_expression" | "list" | "set" | "tuple" | "dictionary"
+    ) || (matches!(
+        node.kind(),
+        "object" | "tuple_expression" | "struct_expression"
+    ) && node
+        .parent()
+        .is_some_and(|parent| matches!(parent.kind(), "array" | "array_expression")))
 }
 
 fn literal_data(node: Node<'_>) -> bool {
     match node.kind() {
-        "string" | "number" | "true" | "false" | "null" | "string_literal"
+        "string" => {
+            let mut cursor = node.walk();
+            !node
+                .named_children(&mut cursor)
+                .any(|child| child.kind() == "interpolation")
+        }
+        "number" | "integer" | "float" | "none" | "true" | "false" | "null" | "string_literal"
         | "raw_string_literal" | "integer_literal" | "float_literal" | "boolean_literal"
         | "char_literal" | "comment" | "line_comment" | "block_comment" => true,
-        "array" | "array_expression" | "object" | "tuple_expression" | "field_initializer_list" => {
+        "array"
+        | "array_expression"
+        | "object"
+        | "tuple_expression"
+        | "field_initializer_list"
+        | "list"
+        | "set"
+        | "tuple"
+        | "dictionary" => {
             let mut cursor = node.walk();
             node.named_children(&mut cursor).all(literal_data)
         }
@@ -129,13 +194,15 @@ fn literal_data(node: Node<'_>) -> bool {
                 .child_by_field_name("key")
                 .or_else(|| node.child_by_field_name("field"));
             key.is_some_and(|key| {
-                matches!(
-                    key.kind(),
-                    "property_identifier" | "field_identifier" | "string" | "number"
-                )
+                matches!(key.kind(), "property_identifier" | "field_identifier")
+                    || literal_data(key)
             }) && node.child_by_field_name("value").is_some_and(literal_data)
         }
         "struct_expression" => node.child_by_field_name("body").is_some_and(literal_data),
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "syntax_tests.rs"]
+mod tests;
