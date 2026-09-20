@@ -60,7 +60,7 @@ jobs:
           fi
           echo "distribution=$distribution" >> "$GITHUB_OUTPUT"
       - name: Install pinned prebuilt cargo-audit
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
           fallback: none
@@ -276,7 +276,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, llvm-tools-preview
       - name: Install pinned prebuilt cargo-llvm-cov
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
           fallback: none
@@ -292,7 +292,7 @@ jobs:
           sudo systemctl start "user@$(id -u).service"
       - run: chmod 755 target/release/hardgate
       - name: Install pinned cargo-mutants specialist
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
           fallback: none
