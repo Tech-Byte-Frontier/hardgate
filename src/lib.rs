@@ -1,5 +1,9 @@
 //! # Hardgate
 //!
+//! **Deprecated:** Hardgate is deprecated. Use [Jevgate](https://crates.io/crates/jevgate) instead.
+//! Install it with `cargo install jevgate --locked`; see its crate page for setup and usage.
+//! The API documentation below is retained for existing Hardgate users.
+//!
 //! **Deterministic, policy-driven quality checks for structural budgets,
 //! anti-gaming rules, and local verification evidence.**
 //!

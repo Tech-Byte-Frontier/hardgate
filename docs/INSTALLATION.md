@@ -1,5 +1,10 @@
 # Installation
 
+> **Deprecated:** Hardgate is deprecated. Use [Jevgate](https://crates.io/crates/jevgate) instead.
+
+Install Jevgate with `cargo install jevgate --locked` and follow the setup
+instructions on its crate page. The instructions below are retained for existing Hardgate users.
+
 Local analysis supports **macOS and Linux**. Cargo, direct release
 downloads, npm, and pnpm provide the same CLI. This guide describes the current
 source contract; use a published version from the

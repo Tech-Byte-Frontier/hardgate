@@ -1,9 +1,10 @@
 [package]
 name = "hardgate"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.90"
-description = "Deterministic quality gates, hard budgets, and anti-gaming verification harness for the AI agent era"
+description = "Deprecated: use jevgate instead (https://crates.io/crates/jevgate)."
+readme = "README.md"
 authors = ["Tauan BF <contact@techbytefrontier.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Tech-Byte-Frontier/hardgate"
@@ -36,6 +37,9 @@ include = [
   "/docs/EXISTING_LANDSCAPE.md",
   "/docs/VISION_AND_PARADIGM.md",
 ]
+
+[badges]
+maintenance = { status = "deprecated" }
 
 # Evidence identity hashes large installed binaries even in debug/test builds.
 # Optimize the hash dependency without changing assertions or evidence scope.

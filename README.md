@@ -1,5 +1,11 @@
 # Hardgate
 
+> **Deprecated:** Hardgate is deprecated. Use [Jevgate](https://crates.io/crates/jevgate) instead.
+
+Install Jevgate with `cargo install jevgate --locked`. See its
+[crate page](https://crates.io/crates/jevgate) for setup and usage.
+The documentation below is retained for existing Hardgate users.
+
 [![Crates.io](https://img.shields.io/crates/v/hardgate.svg)](https://crates.io/crates/hardgate)
 [![Documentation](https://docs.rs/hardgate/badge.svg)](https://docs.rs/hardgate)
 [![CI](https://github.com/Tech-Byte-Frontier/hardgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Tech-Byte-Frontier/hardgate/actions/workflows/ci.yml)
@@ -18,7 +24,7 @@ packages include the CLI, so users do not need Rust. Evidence producers and
 policies with `orchestration.require_isolation = true` require Linux containment.
 See [installation and feature requirements](docs/INSTALLATION.md).
 
-## Quick start
+## Legacy Hardgate quick start
 
 Install the latest released Cargo CLI, then initialize a structural policy in
 the project you want to check:

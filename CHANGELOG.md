@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1] - 2026-09-23
+
+- Deprecate Hardgate in favor of [Jevgate](https://crates.io/crates/jevgate).
+  Update the crate description, maintenance status, and documentation with the replacement notice.
+
+- Distinguish Python declarations from executable copies in clone detection.
+
 ## [0.7.0] - 2026-09-10
 
 - Add named coverage/mutation partitions and explicit `check --evidence reuse|cold` orchestration. Bind local reuse to authenticated execution, source/test/config inputs, installed dependencies, runtime, and hashed environment identity.

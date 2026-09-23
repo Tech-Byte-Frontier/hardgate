@@ -1,5 +1,10 @@
 # @tech-byte-frontier/hardgate
 
+> **Deprecated:** Hardgate is deprecated. Use [Jevgate](https://crates.io/crates/jevgate) instead.
+
+See the Jevgate crate page for installation and setup. The documentation below
+is retained for existing Hardgate users.
+
 A thin npm launcher for the Hardgate Rust CLI. Hardgate checks Rust and
 JavaScript/TypeScript structural policy, formatting, linting, configured tests,
 type checks, and required source-bound coverage or mutation evidence.
