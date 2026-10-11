@@ -68,7 +68,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - id: version
@@ -309,7 +309,7 @@ jobs:
           path: release-tooling
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm install --global "npm@${NPM_VERSION}"
@@ -327,7 +327,7 @@ jobs:
           sudo systemctl start "user@$(id -u).service"
       - if: needs.version-check.outputs.resume != 'true'
         name: Download the native binary verified by main CI
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.version-check.outputs.ci_native_artifact_id }}
           github-token: ${{ github.token }}
@@ -340,7 +340,7 @@ jobs:
       # successful CI run and are rechecked for target/source identity below.
       - if: needs.version-check.outputs.resume != 'true'
         name: Download native local-analysis binaries verified by main CI
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binary-*
           github-token: ${{ github.token }}
@@ -353,7 +353,7 @@ jobs:
         run: chmod 755 build-binaries/binary-x86_64-unknown-linux-gnu/hardgate
       - if: needs.version-check.outputs.resume == 'true'
         name: Download the previously verified release bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.version-check.outputs.resume_artifact_id }}
           github-token: ${{ github.token }}
@@ -412,7 +412,7 @@ jobs:
             --packages-dir "$packed_root/packages" --binary "$binary" --version "$RELEASE_VERSION"
       - id: upload_bundle
         name: Upload verified release bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-bundle
           path: dist/*
@@ -445,7 +445,7 @@ jobs:
           path: release-tooling
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
@@ -458,7 +458,7 @@ jobs:
         run: |
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
@@ -782,7 +782,7 @@ jobs:
       - id: upload_receipt
         name: Retain the publication receipt
         if: always() && hashFiles('receipt/release.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-receipt-publication-attempt-${{ github.run_attempt }}
           path: receipt/release.json
@@ -809,10 +809,10 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
@@ -828,7 +828,7 @@ jobs:
             --source-sha "$RELEASE_COMMIT" --archive 'dist/${{ matrix.package }}.tar.gz' \
             --mode exact --output '${{ matrix.package }}.json' \
             --wrapper-source "$RUNNER_TEMP/release-launcher.js"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: portable-exact-${{ matrix.package }}-attempt-${{ github.run_attempt }}
           path: ${{ matrix.package }}.json
@@ -861,7 +861,7 @@ jobs:
           path: release-tooling
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm install --global "npm@${NPM_VERSION}"
@@ -877,12 +877,12 @@ jobs:
         run: |
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
           digest-mismatch: error
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.publish.outputs.receipt_artifact_id }}
           path: receipt
@@ -923,7 +923,7 @@ jobs:
       - name: Apply native proof to the release receipt
         run: node release-tooling/scripts/apply-native-receipt.mjs --receipt receipt/release.json --proof native-proof.json
       - name: Download successful native platform proofs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: portable-exact-*-attempt-*
           path: portable-proofs
@@ -945,7 +945,7 @@ jobs:
       - id: upload_receipt
         name: Retain the exact receipt
         if: always() && hashFiles('receipt/release.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-receipt-exact-attempt-${{ github.run_attempt }}
           path: receipt/release.json
@@ -980,19 +980,19 @@ jobs:
           path: release-tooling
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm install --global "npm@${NPM_VERSION}"
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, Rust 1.98.1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
           digest-mismatch: error
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.verify-exact.outputs.receipt_artifact_id }}
           path: receipt
@@ -1038,7 +1038,7 @@ jobs:
       - id: upload_receipt
         name: Retain the promotion receipt
         if: always() && hashFiles('receipt/release.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-receipt-promoted-attempt-${{ github.run_attempt }}
           path: receipt/release.json
@@ -1065,10 +1065,10 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
@@ -1084,7 +1084,7 @@ jobs:
             --source-sha "$RELEASE_COMMIT" --archive 'dist/${{ matrix.package }}.tar.gz' \
             --mode default --output '${{ matrix.package }}.json' \
             --wrapper-source "$RUNNER_TEMP/release-launcher.js"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: portable-default-${{ matrix.package }}-attempt-${{ github.run_attempt }}
           path: ${{ matrix.package }}.json
@@ -1117,7 +1117,7 @@ jobs:
           path: release-tooling
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm install --global "npm@${NPM_VERSION}"
@@ -1133,12 +1133,12 @@ jobs:
         run: |
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.package.outputs.bundle_artifact_id }}
           path: dist
           digest-mismatch: error
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.promote-channels.outputs.receipt_artifact_id }}
           path: receipt
@@ -1218,7 +1218,7 @@ jobs:
       - name: Apply native proof to the release receipt
         run: node release-tooling/scripts/apply-native-receipt.mjs --receipt receipt/release.json --proof native-proof.json
       - name: Download successful native platform proofs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: portable-default-*-attempt-*
           path: portable-proofs
@@ -1283,7 +1283,7 @@ jobs:
       - id: upload_receipt
         name: Retain the final receipt
         if: always() && hashFiles('receipt/release.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-receipt-final-attempt-${{ github.run_attempt }}
           path: receipt/release.json
